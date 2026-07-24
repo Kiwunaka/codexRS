@@ -3,7 +3,7 @@
 All notable changes to codexRS are documented here. The project follows
 [Semantic Versioning](https://semver.org/) once release tags are published.
 
-## [0.1.0-rc.1] - Unreleased
+## [0.1.0-rc.1] - 2026-07-24
 
 ### Added
 
