@@ -2,31 +2,82 @@ name: CI
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  verify:
-    name: Rust checks (Windows)
-    runs-on: windows-latest
+  native:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v5
 
-      - name: Check formatting
-        run: cargo.exe fmt --all --check
+      - name: Add Windows shader compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $fxc = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" `
+            -Filter fxc.exe -Recurse |
+            Where-Object FullName -Match '\\x64\\fxc\.exe$' |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if ($null -eq $fxc) {
+            throw "Windows SDK fxc.exe was not found"
+          }
+          "GPUI_FXC_PATH=$($fxc.FullName)" |
+            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Run Clippy
-        run: cargo.exe clippy --workspace --all-targets -- -D warnings
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            clang \
+            libclang-dev \
+            libdrm-dev \
+            libegl1-mesa-dev \
+            libfontconfig1-dev \
+            libfreetype6-dev \
+            libgbm-dev \
+            libgl1-mesa-dev \
+            libpipewire-0.3-dev \
+            libwayland-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxcb1-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            pkg-config
 
-      - name: Run tests
-        run: cargo.exe test --workspace
+      - name: Toolchain
+        run: rustup show active-toolchain
+
+      - name: Dependency policy
+        run: python scripts/check_dependency_policy.py
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Release build
+        run: cargo build --release -p codex-app

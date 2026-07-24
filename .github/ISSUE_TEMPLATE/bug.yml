@@ -1,0 +1,74 @@
+name: Bug report
+description: Report a reproducible codexRS problem
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include credentials, live `.codex` files, private source code,
+        screenshots with sensitive data, or raw provider payloads. Report
+        security issues through the private advisory link instead.
+  - type: input
+    id: version
+    attributes:
+      label: codexRS version
+      description: Release tag or commit hash
+      placeholder: v0.1.0-rc.1
+    validations:
+      required: true
+  - type: input
+    id: codex
+    attributes:
+      label: Official Codex CLI version
+      description: Redacted output of `codex --version`
+      placeholder: codex-cli 0.x.y
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Windows 11
+        - Windows 10
+        - Ubuntu 24.04
+        - Other Linux
+    validations:
+      required: true
+  - type: input
+    id: session
+    attributes:
+      label: Desktop session
+      description: On Linux, include desktop and X11, XWayland, or Wayland
+      placeholder: GNOME 48 / XWayland
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction
+      description: Minimal numbered steps using an isolated fixture when possible
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Redacted evidence
+      description: Bounded logs or screenshots with secrets and private data removed
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials, private data, live `.codex` files, and raw provider payloads.
+          required: true

@@ -1,0 +1,178 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  licenses:
+    name: Third-party licenses
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install cargo-about
+        run: cargo install --locked --features cli --version 0.9.1 cargo-about
+
+      - name: Generate license inventory
+        run: cargo about generate about.hbs --output-file THIRD_PARTY_LICENSES.html
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: third-party-licenses
+          path: THIRD_PARTY_LICENSES.html
+          if-no-files-found: error
+
+  build:
+    name: Package ${{ matrix.label }}
+    needs: licenses
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: windows-x86_64
+          - os: ubuntu-24.04
+            label: linux-x86_64
+    env:
+      PACKAGE_LABEL: ${{ github.ref_type == 'tag' && github.ref_name || format('snapshot-{0}', github.run_number) }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Add Windows shader compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $fxc = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" `
+            -Filter fxc.exe -Recurse |
+            Where-Object FullName -Match '\\x64\\fxc\.exe$' |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if ($null -eq $fxc) {
+            throw "Windows SDK fxc.exe was not found"
+          }
+          "GPUI_FXC_PATH=$($fxc.FullName)" |
+            Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            clang \
+            libclang-dev \
+            libdrm-dev \
+            libegl1-mesa-dev \
+            libfontconfig1-dev \
+            libfreetype6-dev \
+            libgbm-dev \
+            libgl1-mesa-dev \
+            libpipewire-0.3-dev \
+            libwayland-dev \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxcb1-dev \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            pkg-config
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: third-party-licenses
+
+      - name: Dependency policy
+        run: python scripts/check_dependency_policy.py
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Release build
+        run: cargo build --release -p codex-app
+
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "codexrs-$env:PACKAGE_LABEL-windows-x86_64"
+          $root = Join-Path dist $name
+          New-Item -ItemType Directory -Path $root -Force | Out-Null
+          Copy-Item target/release/codexrs.exe $root
+          Copy-Item README.md,README.ru.md,README.zh-CN.md,LICENSE,CHANGELOG.md,THIRD_PARTY_LICENSES.html $root
+          Compress-Archive -Path $root -DestinationPath "dist/$name.zip"
+
+      - name: Package Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="codexrs-${PACKAGE_LABEL}-linux-x86_64"
+          root="dist/${name}"
+          mkdir -p "${root}"
+          install -m 0755 target/release/codexrs "${root}/codexrs"
+          cp README.md README.ru.md README.zh-CN.md LICENSE CHANGELOG.md THIRD_PARTY_LICENSES.html "${root}/"
+          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codexrs-${{ matrix.label }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: codexrs-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum ./*.zip ./*.tar.gz > SHA256SUMS.txt
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          options=()
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            options+=(--prerelease)
+          fi
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "codexRS ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            "${options[@]}"
