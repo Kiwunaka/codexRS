@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Rust checks (Windows)
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Check formatting
+        run: cargo.exe fmt --all --check
+
+      - name: Run Clippy
+        run: cargo.exe clippy --workspace --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cargo.exe test --workspace

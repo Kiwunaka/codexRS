@@ -1,0 +1,15 @@
+[package]
+name = "codex-app"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.1"
+publish = false
+
+[dependencies]
+codex-core = { path = "../codex-core" }
+codex-platform = { path = "../codex-platform" }
+codex-protocol = { path = "../codex-protocol" }
+codex-storage = { path = "../codex-storage" }
+
+[lints]
+workspace = true

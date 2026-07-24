@@ -1,0 +1,24 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/codex-app",
+    "crates/codex-core",
+    "crates/codex-platform",
+    "crates/codex-protocol",
+    "crates/codex-storage",
+]
+default-members = ["crates/codex-app"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.97.1"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+expect_used = "warn"
+todo = "deny"
+unimplemented = "deny"
+unwrap_used = "warn"

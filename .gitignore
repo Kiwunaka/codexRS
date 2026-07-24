@@ -1,0 +1,15 @@
+/target/
+/.idea/
+/.vscode/
+
+*.jsonl
+*.log
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+/reference/**/extracted/
+/reference/**/payload/
+/reference/**/*.asar
+/reference/**/*.dll
+/reference/**/*.exe

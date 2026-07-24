@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "captured_at_utc": "2026-07-24T09:17:40Z",
+  "package": {
+    "identity": "OpenAI.Codex",
+    "full_name": "OpenAI.Codex_26.721.3996.0_x64__2p2nqsd0c76g0",
+    "version": "26.721.3996.0",
+    "architecture": "x64"
+  },
+  "runtime": {
+    "name": "owl",
+    "chromium_version": "150.0.7871.128",
+    "archive_sha256": "09538b0988cf0695058ba32d31795799b51222d8d9626af0f83ba85d443fa592"
+  },
+  "files": [
+    {
+      "path": "ChatGPT.exe",
+      "bytes": 4139008,
+      "sha256": "1aa14124b6586eae0f589e624c37854697789c4b57ab1103e04dc3920612291e"
+    },
+    {
+      "path": "chrome.dll",
+      "bytes": 312191488,
+      "sha256": "cf4369e829f98197fe61e25dea9e38fcc0bdd3d2bee0036c12d4f9b6f64d3531"
+    },
+    {
+      "path": "owl-shell-runtime.json",
+      "bytes": 104,
+      "sha256": "19ecc36c928abe789c1dec4c788c719eb583017e1cc7e2a293b280e0b32fedb5"
+    },
+    {
+      "path": "resources/app.asar",
+      "bytes": 209720582,
+      "sha256": "886ecd4906e918de164ac8eb1a6c4f1a77e051130b67b8a401c021b7f1cd6e50"
+    },
+    {
+      "path": "resources/codex.exe",
+      "bytes": 353628464,
+      "sha256": "39e9e041ea33ac34aad9578adfe660c5c7a6dc8f82620b77623960f9352a6ef3"
+    },
+    {
+      "path": "resources/owl-electron-app.json",
+      "bytes": 215,
+      "sha256": "86fb206cace7f7ed0b06d56a55008bad77f5ad22f98d67a007a5481bde1b8fcd"
+    }
+  ]
+}
