@@ -2496,12 +2496,11 @@ fn settings_card(
         .into_any_element()
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use super::display_path;
     use std::path::Path;
 
-    #[cfg(windows)]
     #[test]
     fn extended_windows_paths_are_displayed_normally() {
         assert_eq!(
