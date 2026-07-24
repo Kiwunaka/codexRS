@@ -4,15 +4,19 @@
   Wry, WebView, Node.js, or browser-runtime dependencies.
 - Treat stable `26.721.3996.0` as a behavioral reference, not a runtime
   dependency.
-- Never modify the installed MSIX or the live `C:\Users\kiwun\.codex` data
-  without an explicit request.
+- Never modify the installed MSIX. Never open the live `CODEX_HOME` SQLite,
+  JSONL, auth, or log files directly. Runtime access to the default
+  `~/.codex` goes through a supervised official `codex app-server` process;
+  development and tests use an isolated `CODEX_HOME`.
 - Bound every external frame, event, log, queue, and history query. No
   unbounded `read_to_string`, JSONL line reads, or startup scans.
 - Keep platform process management behind `codex-platform`. On Windows, prefer
   Job Objects and graceful cancellation; never implement polling `taskkill`
   loops.
-- Keep storage single-writer and paginated. Import existing Codex data from a
-  snapshot, never by sharing live write access.
+- Keep codexRS-owned storage single-writer and paginated. Existing Codex data
+  remains app-server-owned and is queried through bounded, paginated protocol
+  methods (`thread/list` must set `useStateDbOnly`). Use snapshots for direct
+  import, recovery, and fixtures; never share direct file access.
 - Run `cargo fmt --all --check`, `cargo clippy --workspace --all-targets`, and
   `cargo test --workspace` before handing off changes.
 

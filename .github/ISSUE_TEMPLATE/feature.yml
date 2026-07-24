@@ -1,0 +1,35 @@
+name: Feature proposal
+description: Propose a scoped user-visible capability
+title: "[Feature]: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What concrete workflow or failure needs to be addressed?
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Proposed behavior
+      description: Describe the user-visible result, not an implementation wish list.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: List the smallest observable checks that would prove completion.
+    validations:
+      required: true
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Platform and safety impact
+      description: Note Windows/Linux, app-server, storage, process, Git, terminal, or Computer Use impact.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Existing solutions reviewed
+      description: Link related issues or projects and explain the remaining gap.

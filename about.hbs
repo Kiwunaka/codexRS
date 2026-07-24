@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>codexRS third-party licenses</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+    h1, h2 { line-height: 1.2; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 1rem; background: #f4f4f4; border-radius: 8px; }
+    @media (prefers-color-scheme: dark) {
+      body { color: #eee; background: #171717; }
+      a { color: #7db7ff; }
+      pre { background: #242424; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>codexRS third-party licenses</h1>
+    <p>This file lists the licenses selected for Rust dependencies included in codexRS release builds.</p>
+    <ul>
+      {{#each overview}}
+      <li><a href="#{{id}}">{{name}}</a> ({{count}})</li>
+      {{/each}}
+    </ul>
+    {{#each licenses}}
+      {{#if first_of_kind}}<h2 id="{{id}}">{{name}}</h2>{{/if}}
+      <p>Used by:
+        {{#each used_by}}
+          <a href="{{#if crate.repository}}{{crate.repository}}{{else}}https://crates.io/crates/{{crate.name}}{{/if}}">{{crate.name}} {{crate.version}}</a>{{#unless @last}}, {{/unless}}
+        {{/each}}
+      </p>
+      <pre>{{text}}</pre>
+    {{/each}}
+  </main>
+</body>
+</html>
