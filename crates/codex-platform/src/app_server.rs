@@ -1319,7 +1319,9 @@ impl ManagedChild {
             Job::create_with_limit_info(&limits)?
         };
 
-        let mut child = command.spawn().map_err(AppServerError::Spawn)?;
+        let child = command.spawn().map_err(AppServerError::Spawn)?;
+        #[cfg(windows)]
+        let mut child = child;
 
         #[cfg(windows)]
         {
