@@ -22,7 +22,7 @@ jobs:
         os: [windows-latest, ubuntu-24.04]
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Add Windows shader compiler
         if: runner.os == 'Windows'
