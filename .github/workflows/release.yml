@@ -18,7 +18,7 @@ jobs:
     name: Third-party licenses
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install cargo-about
         run: cargo install --locked --features cli --version 0.9.1 cargo-about
@@ -48,7 +48,7 @@ jobs:
       PACKAGE_LABEL: ${{ github.ref_type == 'tag' && github.ref_name || format('snapshot-{0}', github.run_number) }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Add Windows shader compiler
         if: runner.os == 'Windows'
