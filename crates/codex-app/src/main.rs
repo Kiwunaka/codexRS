@@ -7,7 +7,8 @@ use std::process::ExitCode;
 
 use codex_platform::{
     AppServerClient, AppServerConfig, AppServerError, CodexHome, CodexHomeKind,
-    DEFAULT_THREAD_PAGE_LIMIT, MAX_THREAD_PAGE_LIMIT, resolve_codex_binary,
+    ComputerAccessibilityError, DEFAULT_THREAD_PAGE_LIMIT, MAX_THREAD_PAGE_LIMIT,
+    resolve_codex_binary, run_computer_use_helper,
 };
 use codex_protocol::ClientInfo;
 
@@ -37,6 +38,9 @@ fn run() -> Result<(), CliError> {
             Ok(())
         }
         Some(command) if command == "probe" => run_probe(args),
+        Some(command) if command == "--computer-use-helper" => {
+            run_computer_use_helper().map_err(CliError::ComputerUse)
+        }
         Some(command) if command == "--help" || command == "-h" => {
             print_help();
             Ok(())
@@ -119,6 +123,7 @@ fn print_bootstrap() {
         "reference: {} {} {}",
         reference.package_name, reference.package_version, reference.architecture
     );
+    println!("codex-cli reference: {}", reference.cli_version);
     println!("runtime: {}", reference.runtime);
     println!(
         "limits: protocol={} MiB, inline-event={} MiB, git-processes={}",
@@ -155,6 +160,7 @@ enum CliError {
     MissingValue(&'static str),
     InvalidLimit,
     AppServer(AppServerError),
+    ComputerUse(ComputerAccessibilityError),
 }
 
 impl fmt::Display for CliError {
@@ -167,6 +173,7 @@ impl fmt::Display for CliError {
                 formatter.write_str("limit must be an integer from 1 through 100")
             }
             Self::AppServer(error) => error.fmt(formatter),
+            Self::ComputerUse(error) => error.fmt(formatter),
         }
     }
 }
@@ -175,6 +182,7 @@ impl Error for CliError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::AppServer(error) => Some(error),
+            Self::ComputerUse(error) => Some(error),
             Self::UnknownCommand
             | Self::UnknownOption
             | Self::MissingValue(_)
@@ -186,5 +194,17 @@ impl Error for CliError {
 impl From<AppServerError> for CliError {
     fn from(error: AppServerError) -> Self {
         Self::AppServer(error)
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    #[test]
+    #[ignore = "requires an interactive Windows desktop"]
+    fn computer_use_overlay_starts_from_gpui_manifested_process()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let overlay = codex_platform::ComputerUseSystemOverlay::new()?;
+        drop(overlay);
+        Ok(())
     }
 }
