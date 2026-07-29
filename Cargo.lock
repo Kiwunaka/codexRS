@@ -1008,7 +1008,7 @@ dependencies = [
 name = "codex-app"
 version = "0.1.0-rc.1"
 dependencies = [
- "base64",
+ "base64 0.23.0",
  "chrono",
  "codex-core",
  "codex-platform",
