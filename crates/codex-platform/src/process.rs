@@ -6,6 +6,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+use rustix::process::{Pid, Signal, kill_process_group};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
 #[cfg(windows)]
@@ -122,6 +126,8 @@ fn run_bounded_inner(
         .stderr(Stdio::piped());
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
+    #[cfg(unix)]
+    command.process_group(0);
 
     #[cfg(windows)]
     let job = {
@@ -158,9 +164,7 @@ fn run_bounded_inner(
             #[cfg(windows)]
             drop(job);
             #[cfg(not(windows))]
-            {
-                let _ = child.kill();
-            }
+            terminate_process_tree(&mut child);
             let _ = child.wait();
             let _ = stdout_reader.join();
             let _ = stderr_reader.join();
@@ -170,9 +174,7 @@ fn run_bounded_inner(
             #[cfg(windows)]
             drop(job);
             #[cfg(not(windows))]
-            {
-                let _ = child.kill();
-            }
+            terminate_process_tree(&mut child);
             let _ = child.wait();
             let _ = stdout_reader.join();
             let _ = stderr_reader.join();
@@ -199,6 +201,22 @@ fn run_bounded_inner(
         stdout,
         stdout_truncated,
     })
+}
+
+#[cfg(unix)]
+fn terminate_process_tree(child: &mut std::process::Child) {
+    let killed_group = i32::try_from(child.id())
+        .ok()
+        .and_then(Pid::from_raw)
+        .is_some_and(|pid| kill_process_group(pid, Signal::KILL).is_ok());
+    if !killed_group {
+        let _ = child.kill();
+    }
+}
+
+#[cfg(not(any(windows, unix)))]
+fn terminate_process_tree(child: &mut std::process::Child) {
+    let _ = child.kill();
 }
 
 fn read_bounded(mut reader: impl Read, limit: usize) -> Result<(Vec<u8>, bool), ProcessError> {

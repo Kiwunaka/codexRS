@@ -32,6 +32,9 @@ win32job = "2.0.3"
 winsafe = { version = "0.0.19", default-features = false, features = ["gui"] }
 xcap = "0.9.7"
 
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.4", features = ["process"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 enigo = { version = "0.6.1", default-features = false, features = ["wayland", "x11rb"] }
 xcap = "0.9.7"
