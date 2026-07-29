@@ -90,7 +90,7 @@ jobs:
             libxkbcommon-x11-dev \
             pkg-config
 
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           name: third-party-licenses
 
@@ -148,7 +148,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           pattern: codexrs-*
           path: dist
