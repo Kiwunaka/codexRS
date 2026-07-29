@@ -23,6 +23,12 @@ All notable changes to codexRS are documented here. The project follows
 - Single-writer codexRS SQLite state separate from live Codex data.
 - Windows and Ubuntu CI, dependency policy, and release packaging workflows.
 
+### Fixed
+
+- Unexpected app-server exits now recover through one bounded exponential
+  reconnect timer (`1/2/4/8/16/20` seconds), reset after a successful
+  initialization, with native attempt and failure diagnostics.
+
 ### Security
 
 - Live `~/.codex` data remains app-server-owned and is never opened directly.
