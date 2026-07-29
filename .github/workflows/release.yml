@@ -18,7 +18,7 @@ jobs:
     name: Third-party licenses
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install cargo-about
         run: cargo install --locked --features cli --version 0.9.1 cargo-about
@@ -26,7 +26,7 @@ jobs:
       - name: Generate license inventory
         run: cargo about generate about.hbs --output-file THIRD_PARTY_LICENSES.html
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: third-party-licenses
           path: THIRD_PARTY_LICENSES.html
@@ -48,7 +48,7 @@ jobs:
       PACKAGE_LABEL: ${{ github.ref_type == 'tag' && github.ref_name || format('snapshot-{0}', github.run_number) }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Add Windows shader compiler
         if: runner.os == 'Windows'
@@ -90,7 +90,7 @@ jobs:
             libxkbcommon-x11-dev \
             pkg-config
 
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           name: third-party-licenses
 
@@ -132,7 +132,7 @@ jobs:
           cp README.md README.ru.md README.zh-CN.md LICENSE CHANGELOG.md THIRD_PARTY_LICENSES.html "${root}/"
           tar -C dist -czf "dist/${name}.tar.gz" "${name}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: codexrs-${{ matrix.label }}
           path: |
@@ -148,7 +148,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           pattern: codexrs-*
           path: dist
