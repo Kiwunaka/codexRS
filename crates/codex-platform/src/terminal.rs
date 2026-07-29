@@ -1,7 +1,11 @@
 use std::collections::VecDeque;
 use std::error::Error;
+#[cfg(windows)]
+use std::ffi::OsString;
 use std::fmt;
 use std::io::{self, Read, Write};
+#[cfg(windows)]
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{
     Arc,
@@ -10,6 +14,7 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use codex_core::IntegratedTerminalShell;
 use crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
@@ -29,6 +34,7 @@ pub struct TerminalConfig {
     pub cwd: PathBuf,
     pub rows: u16,
     pub cols: u16,
+    pub shell: Option<IntegratedTerminalShell>,
 }
 
 impl TerminalConfig {
@@ -38,7 +44,36 @@ impl TerminalConfig {
             cwd,
             rows: 24,
             cols: 80,
+            shell: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_shell(mut self, shell: Option<IntegratedTerminalShell>) -> Self {
+        self.shell = shell;
+        self
+    }
+}
+
+#[must_use]
+pub fn available_terminal_shells() -> Vec<IntegratedTerminalShell> {
+    #[cfg(windows)]
+    {
+        let mut shells = vec![
+            IntegratedTerminalShell::PowerShell,
+            IntegratedTerminalShell::CommandPrompt,
+        ];
+        if windows_git_bash().is_some() {
+            shells.push(IntegratedTerminalShell::GitBash);
+        }
+        if find_windows_executable("wsl.exe").is_some() {
+            shells.push(IntegratedTerminalShell::Wsl);
+        }
+        shells
+    }
+    #[cfg(not(windows))]
+    {
+        Vec::new()
     }
 }
 
@@ -145,7 +180,7 @@ impl TerminalSession {
             .master
             .take_writer()
             .map_err(|_| TerminalError::Stream("writer"))?;
-        let mut command = CommandBuilder::new_default_prog();
+        let mut command = terminal_command(config.shell);
         command.cwd(&config.cwd);
         command.env("TERM", "xterm-256color");
         let mut child = pair
@@ -231,6 +266,103 @@ impl TerminalSession {
             let _ = thread.join();
         }
     }
+}
+
+#[cfg(not(windows))]
+fn terminal_command(_shell: Option<IntegratedTerminalShell>) -> CommandBuilder {
+    CommandBuilder::new_default_prog()
+}
+
+#[cfg(windows)]
+fn terminal_command(shell: Option<IntegratedTerminalShell>) -> CommandBuilder {
+    CommandBuilder::from_argv(windows_shell_argv(shell))
+}
+
+#[cfg(windows)]
+fn windows_shell_argv(shell: Option<IntegratedTerminalShell>) -> Vec<OsString> {
+    let fallback = || {
+        windows_powershell()
+            .map(|program| vec![program.into_os_string()])
+            .unwrap_or_else(|| vec![windows_command_prompt().into_os_string()])
+    };
+    match shell {
+        Some(IntegratedTerminalShell::PowerShell) => fallback(),
+        Some(IntegratedTerminalShell::CommandPrompt) => {
+            vec![windows_command_prompt().into_os_string()]
+        }
+        Some(IntegratedTerminalShell::GitBash) => {
+            windows_git_bash().map_or_else(fallback, |program| {
+                vec![
+                    program.into_os_string(),
+                    OsString::from("--login"),
+                    OsString::from("-i"),
+                ]
+            })
+        }
+        Some(IntegratedTerminalShell::Wsl) => find_windows_executable("wsl.exe")
+            .map(|program| vec![program.into_os_string()])
+            .unwrap_or_else(fallback),
+        None => fallback(),
+    }
+}
+
+#[cfg(windows)]
+fn windows_powershell() -> Option<PathBuf> {
+    ["pwsh.exe", "powershell.exe"]
+        .into_iter()
+        .find_map(find_windows_executable)
+}
+
+#[cfg(windows)]
+fn windows_command_prompt() -> PathBuf {
+    std::env::var_os("COMSPEC")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("cmd.exe"))
+}
+
+#[cfg(windows)]
+fn windows_git_bash() -> Option<PathBuf> {
+    if let Some(program) = find_windows_executable("git-bash.exe") {
+        return Some(program);
+    }
+    if let Some(git) = find_windows_executable("git.exe") {
+        let directory = git.parent()?;
+        let mut candidates = vec![directory.join("bash.exe")];
+        if let Some(parent) = directory.parent() {
+            candidates.push(parent.join("bin").join("bash.exe"));
+        }
+        for candidate in candidates {
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    windows_install_candidate(Path::new("Git").join("bin").join("bash.exe"))
+}
+
+#[cfg(windows)]
+fn find_windows_executable(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|directory| directory.join(name))
+        .find(|candidate| candidate.is_file())
+}
+
+#[cfg(windows)]
+fn windows_install_candidate(relative: PathBuf) -> Option<PathBuf> {
+    let local_programs = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .map(|path| path.join("Programs"));
+    [
+        local_programs,
+        std::env::var_os("ProgramFiles").map(PathBuf::from),
+        std::env::var_os("ProgramFiles(x86)").map(PathBuf::from),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|root| root.join(&relative))
+    .find(|candidate| candidate.is_file())
 }
 
 impl Drop for TerminalSession {
@@ -431,6 +563,11 @@ mod tests {
     };
     use std::time::{Duration, Instant};
 
+    #[cfg(windows)]
+    use super::available_terminal_shells;
+    #[cfg(windows)]
+    use codex_core::IntegratedTerminalShell;
+
     use super::{
         MAX_TERMINAL_INPUT_BYTES, TerminalConfig, TerminalEvent, TerminalSession, read_terminal,
     };
@@ -456,9 +593,21 @@ mod tests {
         assert_eq!(MAX_TERMINAL_INPUT_BYTES, 64 * 1024);
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn windows_shell_catalog_keeps_the_stable_default_order() {
+        assert!(available_terminal_shells().starts_with(&[
+            IntegratedTerminalShell::PowerShell,
+            IntegratedTerminalShell::CommandPrompt,
+        ]));
+    }
+
     #[test]
     fn native_terminal_runs_a_bounded_shell_round_trip() -> Result<(), Box<dyn Error>> {
-        let mut session = TerminalSession::spawn(TerminalConfig::new(std::env::current_dir()?))?;
+        let config = TerminalConfig::new(std::env::current_dir()?);
+        #[cfg(windows)]
+        let config = config.with_shell(Some(IntegratedTerminalShell::CommandPrompt));
+        let mut session = TerminalSession::spawn(config)?;
         session.write(b"echo codexrs-terminal-smoke\rexit\r")?;
 
         let deadline = Instant::now() + Duration::from_secs(5);

@@ -13,18 +13,38 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use codex_protocol::{
-    AppsListParams, AppsListResponse, ClientInfo, ClientNotification, ClientRequest,
-    DEFAULT_COMMAND_CHANNEL_CAPACITY, DEFAULT_EVENT_CHANNEL_CAPACITY, DEFAULT_MAX_FRAME_BYTES,
-    DEFAULT_MESSAGE_CHANNEL_CAPACITY, IncomingMessage, InitializeCapabilities, InitializeParams,
-    InitializeResponse, MAX_INTERLEAVED_MESSAGES_PER_REQUEST, MAX_PENDING_REQUESTS,
-    PluginInstallParams, PluginInstallResponse, PluginListParams, PluginListResponse,
-    PluginUninstallParams, ProtocolError, ThreadForkParams, ThreadForkResponse,
-    ThreadItemsListParams, ThreadItemsListResponse, ThreadListParams, ThreadListResponse,
+    AppsListParams, AppsListResponse, AppsReadParams, AppsReadResponse, CancelLoginAccountParams,
+    CancelLoginAccountResponse, ClientInfo, ClientNotification, ClientRequest,
+    ConfigBatchWriteParams, ConfigReadParams, ConfigReadResponse, ConfigRequirementsReadResponse,
+    ConfigWriteResponse, DEFAULT_COMMAND_CHANNEL_CAPACITY, DEFAULT_EVENT_CHANNEL_CAPACITY,
+    DEFAULT_MAX_FRAME_BYTES, DEFAULT_MESSAGE_CHANNEL_CAPACITY, FeedbackUploadParams,
+    FeedbackUploadResponse, GetAccountParams, GetAccountRateLimitsResponse, GetAccountResponse,
+    GetAuthStatusParams, GetAuthStatusResponse, HooksListParams, HooksListResponse,
+    IncomingMessage, InitializeCapabilities, InitializeParams, InitializeResponse,
+    ListMcpServerStatusParams, ListMcpServerStatusResponse, LoginAccountParams,
+    LoginAccountResponse, LogoutAccountResponse, MAX_INTERLEAVED_MESSAGES_PER_REQUEST,
+    MAX_PENDING_REQUESTS, MarketplaceAddParams, MarketplaceAddResponse, MarketplaceRemoveParams,
+    MarketplaceRemoveResponse, MarketplaceUpgradeParams, MarketplaceUpgradeResponse,
+    McpResourceReadParams, McpResourceReadResponse, McpServerOauthLoginParams,
+    McpServerOauthLoginResponse, ModelListParams, ModelListResponse, PermissionProfileListParams,
+    PermissionProfileListResponse, PluginInstallParams, PluginInstallResponse, PluginListParams,
+    PluginListResponse, PluginReadParams, PluginReadResponse, PluginUninstallParams, ProtocolError,
+    SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams, SkillsListResponse,
+    ThreadArchiveParams, ThreadBackgroundTerminalsCleanParams,
+    ThreadBackgroundTerminalsCleanResponse, ThreadBackgroundTerminalsListParams,
+    ThreadBackgroundTerminalsListResponse, ThreadBackgroundTerminalsTerminateParams,
+    ThreadBackgroundTerminalsTerminateResponse, ThreadCompactStartParams,
+    ThreadCompactStartResponse, ThreadDeleteParams, ThreadForkParams, ThreadForkResponse,
+    ThreadGoalClearParams, ThreadGoalClearResponse, ThreadGoalGetParams, ThreadGoalGetResponse,
+    ThreadGoalSetParams, ThreadGoalSetResponse, ThreadItemsListParams, ThreadItemsListResponse,
+    ThreadListParams, ThreadListResponse, ThreadLoadedListParams, ThreadLoadedListResponse,
     ThreadReadParams, ThreadReadResponse, ThreadResumeParams, ThreadResumeResponse,
+    ThreadRollbackParams, ThreadRollbackResponse, ThreadSearchParams, ThreadSearchResponse,
+    ThreadSetNameParams, ThreadSettingsUpdateParams, ThreadSettingsUpdateResponse,
     ThreadStartParams, ThreadStartResponse, ThreadTurnsListParams, ThreadTurnsListResponse,
-    TurnInterruptParams, TurnStartParams, TurnStartResponse, TurnSteerParams, decode_incoming,
-    decode_result, encode_error_response, encode_json_line, encode_success_response,
-    encode_unsupported_request, read_bounded_frame,
+    ThreadUnarchiveParams, ThreadUnarchiveResponse, TurnInterruptParams, TurnStartParams,
+    TurnStartResponse, TurnSteerParams, decode_incoming, decode_result, encode_error_response,
+    encode_json_line, encode_success_response, encode_unsupported_request, read_bounded_frame,
 };
 use crossbeam_channel::{Receiver as CrossbeamReceiver, Sender as CrossbeamSender, TrySendError};
 use serde::Serialize;
@@ -40,6 +60,7 @@ use win32job::{ExtendedLimitInfo, Job, JobError};
 
 pub const DEFAULT_THREAD_PAGE_LIMIT: u32 = 20;
 pub const MAX_THREAD_PAGE_LIMIT: u32 = 100;
+pub const MAX_APP_READ_ITEMS: usize = 100;
 
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
@@ -446,7 +467,11 @@ impl AppServerClient {
             .next_request_id
             .checked_add(1)
             .ok_or(AppServerError::RequestIdExhausted)?;
-        self.write_message(&ClientRequest { method, id, params })?;
+        self.write_message(&ClientRequest {
+            method,
+            id,
+            params: Some(params),
+        })?;
 
         let deadline = Instant::now() + self.config.request_timeout;
         let mut interleaved = 0_usize;
@@ -712,6 +737,25 @@ impl AppServerConnection {
         P: Serialize,
         R: DeserializeOwned,
     {
+        self.request_optional(method, Some(params))
+    }
+
+    fn request_without_params<R>(&self, method: &'static str) -> Result<R, AppServerError>
+    where
+        R: DeserializeOwned,
+    {
+        self.request_optional::<(), R>(method, None)
+    }
+
+    fn request_optional<P, R>(
+        &self,
+        method: &'static str,
+        params: Option<P>,
+    ) -> Result<R, AppServerError>
+    where
+        P: Serialize,
+        R: DeserializeOwned,
+    {
         if self.closed.load(Ordering::Acquire) {
             return Err(AppServerError::TransportClosed);
         }
@@ -827,6 +871,26 @@ impl AppServerConnection {
         self.request("thread/list", params)
     }
 
+    pub fn list_loaded_threads(
+        &self,
+        params: ThreadLoadedListParams,
+    ) -> Result<ThreadLoadedListResponse, AppServerError> {
+        self.require_initialized()?;
+        validate_page_limit(params.limit)?;
+        self.request("thread/loaded/list", params)
+    }
+
+    pub fn search_threads(
+        &self,
+        params: ThreadSearchParams,
+    ) -> Result<ThreadSearchResponse, AppServerError> {
+        self.require_initialized()?;
+        if let Some(limit) = params.limit {
+            validate_page_limit(limit)?;
+        }
+        self.request("thread/search", params)
+    }
+
     pub fn read_thread(
         &self,
         params: ThreadReadParams,
@@ -853,6 +917,33 @@ impl AppServerConnection {
         self.request("thread/items/list", params)
     }
 
+    pub fn list_background_terminals(
+        &self,
+        params: ThreadBackgroundTerminalsListParams,
+    ) -> Result<ThreadBackgroundTerminalsListResponse, AppServerError> {
+        self.require_initialized()?;
+        if let Some(limit) = params.limit {
+            validate_page_limit(limit)?;
+        }
+        self.request("thread/backgroundTerminals/list", params)
+    }
+
+    pub fn terminate_background_terminal(
+        &self,
+        params: ThreadBackgroundTerminalsTerminateParams,
+    ) -> Result<ThreadBackgroundTerminalsTerminateResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("thread/backgroundTerminals/terminate", params)
+    }
+
+    pub fn clean_background_terminals(
+        &self,
+        params: ThreadBackgroundTerminalsCleanParams,
+    ) -> Result<ThreadBackgroundTerminalsCleanResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("thread/backgroundTerminals/clean", params)
+    }
+
     pub fn start_thread(
         &self,
         params: ThreadStartParams,
@@ -867,6 +958,69 @@ impl AppServerConnection {
     ) -> Result<ThreadForkResponse, AppServerError> {
         self.require_initialized()?;
         self.request("thread/fork", params)
+    }
+
+    pub fn rollback_thread(
+        &self,
+        params: ThreadRollbackParams,
+    ) -> Result<ThreadRollbackResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("thread/rollback", params)
+    }
+
+    pub fn compact_thread(
+        &self,
+        params: ThreadCompactStartParams,
+    ) -> Result<ThreadCompactStartResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("thread/compact/start", params)
+    }
+
+    pub fn archive_thread(&self, params: ThreadArchiveParams) -> Result<Value, AppServerError> {
+        self.require_initialized()?;
+        self.request("thread/archive", params)
+    }
+
+    pub fn unarchive_thread(
+        &self,
+        params: ThreadUnarchiveParams,
+    ) -> Result<ThreadUnarchiveResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("thread/unarchive", params)
+    }
+
+    pub fn delete_thread(&self, params: ThreadDeleteParams) -> Result<Value, AppServerError> {
+        self.require_initialized()?;
+        self.request("thread/delete", params)
+    }
+
+    pub fn set_thread_name(&self, params: ThreadSetNameParams) -> Result<Value, AppServerError> {
+        self.require_initialized()?;
+        self.request("thread/name/set", params)
+    }
+
+    pub fn set_thread_goal(
+        &self,
+        params: ThreadGoalSetParams,
+    ) -> Result<ThreadGoalSetResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("thread/goal/set", params)
+    }
+
+    pub fn get_thread_goal(
+        &self,
+        params: ThreadGoalGetParams,
+    ) -> Result<ThreadGoalGetResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("thread/goal/get", params)
+    }
+
+    pub fn clear_thread_goal(
+        &self,
+        params: ThreadGoalClearParams,
+    ) -> Result<ThreadGoalClearResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("thread/goal/clear", params)
     }
 
     pub fn resume_thread(
@@ -890,6 +1044,14 @@ impl AppServerConnection {
         self.request("thread/resume", params)
     }
 
+    pub fn update_thread_settings(
+        &self,
+        params: ThreadSettingsUpdateParams,
+    ) -> Result<ThreadSettingsUpdateResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("thread/settings/update", params)
+    }
+
     pub fn start_turn(&self, params: TurnStartParams) -> Result<TurnStartResponse, AppServerError> {
         self.require_initialized()?;
         self.request("turn/start", params)
@@ -905,12 +1067,160 @@ impl AppServerConnection {
         self.request("turn/interrupt", params)
     }
 
+    pub fn list_models(
+        &self,
+        params: ModelListParams,
+    ) -> Result<ModelListResponse, AppServerError> {
+        self.require_initialized()?;
+        if let Some(limit) = params.limit {
+            validate_page_limit(limit)?;
+        }
+        self.request("model/list", params)
+    }
+
+    pub fn list_permission_profiles(
+        &self,
+        params: PermissionProfileListParams,
+    ) -> Result<PermissionProfileListResponse, AppServerError> {
+        self.require_initialized()?;
+        if let Some(limit) = params.limit {
+            validate_page_limit(limit)?;
+        }
+        self.request("permissionProfile/list", params)
+    }
+
+    pub fn read_config_requirements(
+        &self,
+    ) -> Result<ConfigRequirementsReadResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request_without_params("configRequirements/read")
+    }
+
+    pub fn read_account(
+        &self,
+        params: GetAccountParams,
+    ) -> Result<GetAccountResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("account/read", params)
+    }
+
+    pub fn read_account_rate_limits(&self) -> Result<GetAccountRateLimitsResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request_without_params("account/rateLimits/read")
+    }
+
+    pub fn get_auth_status(
+        &self,
+        params: GetAuthStatusParams,
+    ) -> Result<GetAuthStatusResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("getAuthStatus", params)
+    }
+
+    pub fn start_account_login(
+        &self,
+        params: LoginAccountParams,
+    ) -> Result<LoginAccountResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("account/login/start", params)
+    }
+
+    pub fn cancel_account_login(
+        &self,
+        params: CancelLoginAccountParams,
+    ) -> Result<CancelLoginAccountResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("account/login/cancel", params)
+    }
+
+    pub fn logout_account(&self) -> Result<LogoutAccountResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request_without_params("account/logout")
+    }
+
+    pub fn upload_feedback(
+        &self,
+        params: FeedbackUploadParams,
+    ) -> Result<FeedbackUploadResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("feedback/upload", params)
+    }
+
+    pub fn read_config(
+        &self,
+        params: ConfigReadParams,
+    ) -> Result<ConfigReadResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("config/read", params)
+    }
+
+    pub fn batch_write_config(
+        &self,
+        params: ConfigBatchWriteParams,
+    ) -> Result<ConfigWriteResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("config/batchWrite", params)
+    }
+
     pub fn list_plugins(
         &self,
         params: PluginListParams,
     ) -> Result<PluginListResponse, AppServerError> {
         self.require_initialized()?;
         self.request("plugin/list", params)
+    }
+
+    pub fn add_marketplace(
+        &self,
+        params: MarketplaceAddParams,
+    ) -> Result<MarketplaceAddResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("marketplace/add", params)
+    }
+
+    pub fn remove_marketplace(
+        &self,
+        params: MarketplaceRemoveParams,
+    ) -> Result<MarketplaceRemoveResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("marketplace/remove", params)
+    }
+
+    pub fn upgrade_marketplaces(
+        &self,
+        params: MarketplaceUpgradeParams,
+    ) -> Result<MarketplaceUpgradeResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("marketplace/upgrade", params)
+    }
+
+    pub fn read_plugin(
+        &self,
+        params: PluginReadParams,
+    ) -> Result<PluginReadResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("plugin/read", params)
+    }
+
+    pub fn list_skills(
+        &self,
+        params: SkillsListParams,
+    ) -> Result<SkillsListResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("skills/list", params)
+    }
+
+    pub fn write_skill_config(
+        &self,
+        params: SkillsConfigWriteParams,
+    ) -> Result<SkillsConfigWriteResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("skills/config/write", params)
+    }
+
+    pub fn list_hooks(&self, params: HooksListParams) -> Result<HooksListResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("hooks/list", params)
     }
 
     pub fn install_plugin(
@@ -935,6 +1245,53 @@ impl AppServerConnection {
             });
         }
         self.request("app/list", params)
+    }
+
+    pub fn read_apps(&self, params: AppsReadParams) -> Result<AppsReadResponse, AppServerError> {
+        self.require_initialized()?;
+        if params.app_ids.len() > MAX_APP_READ_ITEMS {
+            return Err(AppServerError::InvalidPageLimit {
+                requested: u32::try_from(params.app_ids.len()).unwrap_or(u32::MAX),
+                maximum: MAX_APP_READ_ITEMS as u32,
+            });
+        }
+        self.request("app/read", params)
+    }
+
+    pub fn list_mcp_server_status(
+        &self,
+        params: ListMcpServerStatusParams,
+    ) -> Result<ListMcpServerStatusResponse, AppServerError> {
+        self.require_initialized()?;
+        if !(1..=MAX_THREAD_PAGE_LIMIT).contains(&params.limit) {
+            return Err(AppServerError::InvalidPageLimit {
+                requested: params.limit,
+                maximum: MAX_THREAD_PAGE_LIMIT,
+            });
+        }
+        self.request("mcpServerStatus/list", params)
+    }
+
+    pub fn read_mcp_resource(
+        &self,
+        params: McpResourceReadParams,
+    ) -> Result<McpResourceReadResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("mcpServer/resource/read", params)
+    }
+
+    pub fn login_mcp_server(
+        &self,
+        params: McpServerOauthLoginParams,
+    ) -> Result<McpServerOauthLoginResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("mcpServer/oauth/login", params)
+    }
+
+    pub fn reload_mcp_servers(&self) -> Result<(), AppServerError> {
+        self.require_initialized()?;
+        self.request_without_params::<Value>("config/mcpServer/reload")
+            .map(|_| ())
     }
 
     pub fn shutdown(&mut self) -> Result<(), AppServerError> {

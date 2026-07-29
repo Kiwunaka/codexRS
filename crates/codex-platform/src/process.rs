@@ -2,6 +2,7 @@ use std::error::Error;
 use std::fmt;
 use std::io::{self, Read};
 use std::process::{Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -29,6 +30,7 @@ pub enum ProcessError {
     Reader(io::Error),
     ReaderPanicked,
     Wait(io::Error),
+    Cancelled,
     TimedOut,
     Exit {
         status: ExitStatus,
@@ -46,6 +48,7 @@ impl fmt::Display for ProcessError {
             Self::Reader(_) => formatter.write_str("could not read process output"),
             Self::ReaderPanicked => formatter.write_str("process output reader panicked"),
             Self::Wait(_) => formatter.write_str("could not wait for process"),
+            Self::Cancelled => formatter.write_str("process was cancelled"),
             Self::TimedOut => formatter.write_str("process timed out"),
             Self::Exit { status, stderr } => {
                 let code = status
@@ -69,7 +72,11 @@ impl Error for ProcessError {
             Self::Spawn(error) | Self::Reader(error) | Self::Wait(error) => Some(error),
             #[cfg(windows)]
             Self::Job(error) => Some(error),
-            Self::Pipe(_) | Self::ReaderPanicked | Self::TimedOut | Self::Exit { .. } => None,
+            Self::Pipe(_)
+            | Self::ReaderPanicked
+            | Self::Cancelled
+            | Self::TimedOut
+            | Self::Exit { .. } => None,
         }
     }
 }
@@ -80,6 +87,35 @@ pub(crate) fn run_bounded(
     stderr_limit: usize,
     timeout: Duration,
 ) -> Result<BoundedOutput, ProcessError> {
+    run_bounded_inner(command, stdout_limit, stderr_limit, timeout, None)
+}
+
+pub(crate) fn run_bounded_cancelable(
+    command: &mut Command,
+    stdout_limit: usize,
+    stderr_limit: usize,
+    timeout: Duration,
+    cancellation: &AtomicBool,
+) -> Result<BoundedOutput, ProcessError> {
+    run_bounded_inner(
+        command,
+        stdout_limit,
+        stderr_limit,
+        timeout,
+        Some(cancellation),
+    )
+}
+
+fn run_bounded_inner(
+    command: &mut Command,
+    stdout_limit: usize,
+    stderr_limit: usize,
+    timeout: Duration,
+    cancellation: Option<&AtomicBool>,
+) -> Result<BoundedOutput, ProcessError> {
+    if cancellation.is_some_and(|cancellation| cancellation.load(Ordering::Acquire)) {
+        return Err(ProcessError::Cancelled);
+    }
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -117,6 +153,18 @@ pub(crate) fn run_bounded(
     let status = loop {
         if let Some(status) = child.try_wait().map_err(ProcessError::Wait)? {
             break status;
+        }
+        if cancellation.is_some_and(|cancellation| cancellation.load(Ordering::Acquire)) {
+            #[cfg(windows)]
+            drop(job);
+            #[cfg(not(windows))]
+            {
+                let _ = child.kill();
+            }
+            let _ = child.wait();
+            let _ = stdout_reader.join();
+            let _ = stderr_reader.join();
+            return Err(ProcessError::Cancelled);
         }
         if Instant::now() >= deadline {
             #[cfg(windows)]
@@ -172,8 +220,13 @@ fn read_bounded(mut reader: impl Read, limit: usize) -> Result<(Vec<u8>, bool), 
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
+    use std::process::Command;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::thread;
+    use std::time::{Duration, Instant};
 
-    use super::read_bounded;
+    use super::{ProcessError, read_bounded, run_bounded_cancelable};
 
     #[test]
     fn bounded_reader_drains_but_keeps_only_the_budget() -> Result<(), super::ProcessError> {
@@ -183,5 +236,49 @@ mod tests {
         assert_eq!(output, vec![b'x'; 7]);
         assert!(truncated);
         Ok(())
+    }
+
+    #[test]
+    fn cancellation_terminates_a_supervised_process() {
+        let cancellation = Arc::new(AtomicBool::new(false));
+        let cancellation_signal = Arc::clone(&cancellation);
+        let signal = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            cancellation_signal.store(true, Ordering::Release);
+        });
+        let mut command = slow_command();
+        let started = Instant::now();
+
+        let result = run_bounded_cancelable(
+            &mut command,
+            1_024,
+            1_024,
+            Duration::from_secs(10),
+            &cancellation,
+        );
+
+        assert!(signal.join().is_ok(), "cancellation signal should finish");
+        assert!(matches!(result, Err(ProcessError::Cancelled)));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[cfg(windows)]
+    fn slow_command() -> Command {
+        let mut command = Command::new("powershell.exe");
+        command.args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Start-Sleep -Seconds 5",
+        ]);
+        command
+    }
+
+    #[cfg(not(windows))]
+    fn slow_command() -> Command {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 5"]);
+        command
     }
 }
