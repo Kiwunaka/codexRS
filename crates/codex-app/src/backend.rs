@@ -15746,6 +15746,18 @@ mod tests {
 
     #[test]
     fn editable_user_messages_preserve_supported_local_attachments() {
+        #[cfg(windows)]
+        let (image_path, mention_path, skill_path) = (
+            r"C:\repo\design.png",
+            r"C:\repo\README.md",
+            r"C:\skills\imagegen\SKILL.md",
+        );
+        #[cfg(not(windows))]
+        let (image_path, mention_path, skill_path) = (
+            "/repo/design.png",
+            "/repo/README.md",
+            "/skills/imagegen/SKILL.md",
+        );
         let item = map_timeline_item(
             "turn-1".to_owned(),
             json!({
@@ -15753,9 +15765,9 @@ mod tests {
                 "id": "message-1",
                 "content": [
                     {"type": "text", "text": "Update the design"},
-                    {"type": "localImage", "path": r"C:\repo\design.png"},
-                    {"type": "mention", "name": "README.md", "path": r"C:\repo\README.md"},
-                    {"type": "skill", "name": "imagegen", "path": r"C:\skills\imagegen\SKILL.md"}
+                    {"type": "localImage", "path": image_path},
+                    {"type": "mention", "name": "README.md", "path": mention_path},
+                    {"type": "skill", "name": "imagegen", "path": skill_path}
                 ]
             }),
             true,
