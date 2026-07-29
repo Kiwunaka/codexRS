@@ -61,8 +61,9 @@ use gpui::{
     ImageFormat, IntoElement, KeyBinding, KeyContext, KeyDownEvent, Keystroke, ListAlignment,
     ListState, MouseButton, MouseDownEvent, MouseUpEvent, NavigationDirection, ObjectFit,
     PathPromptOptions, Render, RenderImage, ScrollHandle, ScrollWheelEvent, SharedString,
-    Subscription, Task, Timer, WeakEntity, Window, WindowBounds, WindowControlArea, WindowOptions,
-    canvas, div, hsla, img, list, point, prelude::*, px, relative, rgb, size, uniform_list,
+    Subscription, Task, Timer, WeakEntity, Window, WindowBounds, WindowControlArea, WindowKind,
+    WindowOptions, canvas, div, hsla, img, list, point, prelude::*, px, relative, rgb, size,
+    uniform_list,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, InteractiveElementExt, Root, Selectable, Side,
@@ -94,6 +95,8 @@ const WINDOW_WIDTH: f32 = 1_278.0;
 const WINDOW_HEIGHT: f32 = 818.0;
 const WINDOW_MIN_WIDTH: f32 = 480.0;
 const WINDOW_MIN_HEIGHT: f32 = 600.0;
+const ABOUT_WINDOW_WIDTH: f32 = 380.0;
+const ABOUT_WINDOW_HEIGHT: f32 = 360.0;
 const WINDOW_PLACEMENT_PERSIST_DELAY: Duration = Duration::from_millis(400);
 const SIDEBAR_WIDTH: f32 = 275.0;
 const RIGHT_PANEL_COLLAPSE_WIDTH: f32 = 960.0;
@@ -3995,6 +3998,7 @@ pub fn run() {
                 KeyBinding::new(&shortcut(","), OpenSettingsShortcut, None),
                 KeyBinding::new(&shortcut("/"), ShowKeyboardShortcutsShortcut, None),
                 KeyBinding::new("f11", ToggleFullscreenShortcut, None),
+                KeyBinding::new("escape", Escape, Some("AboutDialog")),
                 KeyBinding::new("escape", Escape, Some("McpElicitation")),
                 KeyBinding::new("escape", Escape, Some("StructuredUserInput")),
             ]);
@@ -4055,6 +4059,102 @@ struct TerminalDockResize(TerminalDockLocation);
 impl Render for TerminalDockResize {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
+    }
+}
+
+struct AboutView {
+    focus: FocusHandle,
+}
+
+impl AboutView {
+    fn new(cx: &mut Context<Self>) -> Self {
+        Self {
+            focus: cx.focus_handle(),
+        }
+    }
+}
+
+impl Focusable for AboutView {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
+}
+
+impl Render for AboutView {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .key_context("AboutDialog")
+            .track_focus(&self.focus)
+            .on_action(|_: &Escape, window, _| {
+                window.remove_window();
+            })
+            .size_full()
+            .bg(cx.theme().background)
+            .child(
+                v_flex()
+                    .flex_1()
+                    .items_center()
+                    .justify_center()
+                    .px_8()
+                    .pt_8()
+                    .pb_5()
+                    .child(
+                        div()
+                            .size(px(72.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_xl()
+                            .bg(cx.theme().foreground)
+                            .child(
+                                Icon::new(IconName::Bot)
+                                    .with_size(px(40.0))
+                                    .text_color(cx.theme().background),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .mt_4()
+                            .text_size(px(17.0))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("codexRS"),
+                    )
+                    .child(
+                        div()
+                            .mt_4()
+                            .text_size(px(12.0))
+                            .line_height(px(17.0))
+                            .text_color(cx.theme().muted_foreground)
+                            .child(format!("Version {}", env!("CARGO_PKG_VERSION"))),
+                    )
+                    .child(
+                        div()
+                            .mt(px(14.0))
+                            .text_size(px(12.0))
+                            .text_color(cx.theme().muted_foreground)
+                            .child("© codexRS contributors"),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .h(px(56.0))
+                    .flex_none()
+                    .items_center()
+                    .justify_end()
+                    .px(px(14.0))
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().muted.opacity(0.15))
+                    .child(
+                        Button::new("about-ok")
+                            .label("OK")
+                            .h(px(28.0))
+                            .min_w(px(76.0))
+                            .on_click(|_, window, _| {
+                                window.remove_window();
+                            }),
+                    ),
+            )
     }
 }
 
@@ -4239,6 +4339,7 @@ struct WorkspaceView {
     composer_status_session_copied: bool,
     command_palette: Option<Entity<CommandPaletteView>>,
     workspace_modal: Option<WorkspaceModal>,
+    about_window: Option<AnyWindowHandle>,
     process_manager_refresh_generation: u64,
     pending_conversation_markdown_copy: Option<PendingConversationMarkdownCopy>,
     settings_section: SettingsSection,
@@ -5171,6 +5272,7 @@ impl WorkspaceView {
             composer_status_session_copied: false,
             command_palette: None,
             workspace_modal: None,
+            about_window: None,
             process_manager_refresh_generation: 0,
             pending_conversation_markdown_copy: None,
             settings_section: SettingsSection::General,
@@ -7339,6 +7441,69 @@ impl WorkspaceView {
         window.defer(cx, move |window, cx| {
             feedback_details.update(cx, |input, cx| input.focus(window, cx));
         });
+    }
+
+    fn open_about_window(&mut self, parent: &mut Window, cx: &mut Context<Self>) {
+        if let Some(handle) = self.about_window {
+            if handle
+                .update(cx, |_, window, _| {
+                    window.activate_window();
+                })
+                .is_ok()
+            {
+                return;
+            }
+            self.about_window = None;
+        }
+
+        let about_size = size(px(ABOUT_WINDOW_WIDTH), px(ABOUT_WINDOW_HEIGHT));
+        let about_bounds =
+            Bounds::centered_at(parent.window_bounds().get_bounds().center(), about_size);
+        let workspace = cx.entity().downgrade();
+        let result = cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(about_bounds)),
+                titlebar: Some(gpui::TitlebarOptions {
+                    title: Some(SharedString::from("About codexRS")),
+                    appears_transparent: false,
+                    traffic_light_position: None,
+                }),
+                kind: WindowKind::Floating,
+                is_resizable: false,
+                is_minimizable: false,
+                app_id: Some("dev.codexrs.desktop".to_owned()),
+                window_min_size: Some(about_size),
+                ..Default::default()
+            },
+            move |window, cx| {
+                let about = cx.new(AboutView::new);
+                let about_focus = about.read(cx).focus.clone();
+                window.defer(cx, move |window, _| {
+                    about_focus.focus(window);
+                });
+                let workspace = workspace.clone();
+                window.on_window_should_close(cx, move |_, cx| {
+                    let _ = workspace.update(cx, |this, _| {
+                        this.about_window = None;
+                    });
+                    true
+                });
+                cx.new(|cx| Root::new(about, window, cx))
+            },
+        );
+
+        match result {
+            Ok(handle) => {
+                self.about_window = Some(handle.into());
+                cx.activate(true);
+            }
+            Err(error) => {
+                self.dispatch(
+                    Action::SetStatus(format!("Unable to open About: {error}")),
+                    cx,
+                );
+            }
+        }
     }
 
     fn submit_feedback(&mut self, cx: &mut Context<Self>) {
@@ -10354,7 +10519,8 @@ impl WorkspaceView {
         shortcuts: Arc<HashMap<&'static str, String>>,
     ) -> PopupMenu {
         let shortcuts_view = view.clone();
-        let feedback_view = view;
+        let feedback_view = view.clone();
+        let about_view = view;
         menu.item(PopupMenuItem::link(
             "Documentation",
             "https://developers.openai.com/codex/app",
@@ -10393,10 +10559,13 @@ impl WorkspaceView {
             }),
         )
         .item(PopupMenuItem::separator())
-        .item(PopupMenuItem::link(
-            "About codexRS",
-            "https://github.com/Kiwunaka/codexRS",
-        ))
+        .item(
+            PopupMenuItem::new("About codexRS").on_click(move |_, window, cx| {
+                let _ = about_view.update(cx, |this, cx| {
+                    this.open_about_window(window, cx);
+                });
+            }),
+        )
     }
 
     fn render_title_bar_control(kind: TitleBarControl, cx: &App) -> AnyElement {
