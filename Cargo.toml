@@ -18,7 +18,7 @@ repository = "https://github.com/Kiwunaka/codexRS"
 homepage = "https://github.com/Kiwunaka/codexRS"
 
 [workspace.dependencies]
-base64 = "0.22.1"
+base64 = "0.23.0"
 crossbeam-channel = "0.5.15"
 gpui = "=0.2.2"
 gpui-component = { version = "=0.5.1", default-features = false }
