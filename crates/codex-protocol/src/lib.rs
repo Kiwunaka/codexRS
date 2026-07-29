@@ -1391,6 +1391,18 @@ pub struct ThreadTokenUsageUpdatedNotification {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ModelSafetyBufferingUpdatedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub model: String,
+    pub use_cases: Vec<String>,
+    pub reasons: Vec<String>,
+    pub show_buffering_ui: bool,
+    pub faster_model: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TurnDiffUpdatedNotification {
     pub thread_id: String,
     pub turn_id: String,
@@ -3065,13 +3077,14 @@ mod tests {
         McpServerElicitationRequestResponse, McpServerOauthLoginParams,
         McpServerStartupFailureReason, McpServerStartupState, McpServerStatusDetail,
         McpServerStatusUpdatedNotification, ModelListParams, ModelListResponse,
-        NetworkPolicyAmendment, NetworkPolicyAmendmentDecision, NetworkPolicyRuleAction,
-        PermissionGrantScope, PermissionProfile, PermissionProfileListParams,
-        PermissionProfileListResponse, PermissionsRequestApprovalParams,
-        PermissionsRequestApprovalResponse, PlanType, PluginListMarketplaceKind, PluginReadParams,
-        PluginReadResponse, PluginScheduledTaskSchedule, PluginScheduledTaskSummary, ProtocolError,
-        SkillScope, SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams,
-        SkillsListResponse, ThreadArchiveParams, ThreadBackgroundTerminalsCleanResponse,
+        ModelSafetyBufferingUpdatedNotification, NetworkPolicyAmendment,
+        NetworkPolicyAmendmentDecision, NetworkPolicyRuleAction, PermissionGrantScope,
+        PermissionProfile, PermissionProfileListParams, PermissionProfileListResponse,
+        PermissionsRequestApprovalParams, PermissionsRequestApprovalResponse, PlanType,
+        PluginListMarketplaceKind, PluginReadParams, PluginReadResponse,
+        PluginScheduledTaskSchedule, PluginScheduledTaskSummary, ProtocolError, SkillScope,
+        SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams, SkillsListResponse,
+        ThreadArchiveParams, ThreadBackgroundTerminalsCleanResponse,
         ThreadBackgroundTerminalsListParams, ThreadBackgroundTerminalsListResponse,
         ThreadBackgroundTerminalsTerminateParams, ThreadBackgroundTerminalsTerminateResponse,
         ThreadCompactStartParams, ThreadCompactStartResponse, ThreadDeleteParams, ThreadForkParams,
@@ -3514,6 +3527,31 @@ mod tests {
         assert_eq!(notification.turn_id, "turn-1");
         assert_eq!(notification.token_usage.last.total_tokens, 125);
         assert_eq!(notification.token_usage.model_context_window, Some(1000));
+    }
+
+    #[test]
+    fn model_safety_buffering_notification_matches_the_stable_contract() {
+        let Ok(notification) =
+            serde_json::from_value::<ModelSafetyBufferingUpdatedNotification>(json!({
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "model": "gpt-5.6-sol",
+                "useCases": ["complex_reasoning"],
+                "reasons": ["safety_buffering"],
+                "showBufferingUi": true,
+                "fasterModel": "gpt-5.6-terra"
+            }))
+        else {
+            panic!("stable safety buffering notification should decode");
+        };
+
+        assert_eq!(notification.thread_id, "thread-1");
+        assert_eq!(notification.turn_id, "turn-1");
+        assert_eq!(notification.model, "gpt-5.6-sol");
+        assert_eq!(notification.use_cases, ["complex_reasoning"]);
+        assert_eq!(notification.reasons, ["safety_buffering"]);
+        assert!(notification.show_buffering_ui);
+        assert_eq!(notification.faster_model.as_deref(), Some("gpt-5.6-terra"));
     }
 
     #[test]

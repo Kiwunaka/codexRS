@@ -13,6 +13,7 @@ pub const MAX_VISIBLE_THREADS: usize = 500;
 pub const MAX_LOADED_THREADS: usize = 20;
 pub const MAX_TIMELINE_ITEMS: usize = 2_000;
 pub const MAX_TURN_DIFF_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_RETRYABLE_TURN_MESSAGES: usize = 64;
 pub const MAX_PENDING_APPROVALS: usize = 64;
 pub const MAX_PENDING_MCP_ELICITATIONS: usize = 64;
 pub const MAX_PENDING_USER_INPUT_REQUESTS: usize = 64;
@@ -1107,6 +1108,8 @@ pub struct TimelineState {
     pub context_window_usage: Option<ContextWindowUsage>,
     pub message_edit: Option<MessageEditState>,
     pub last_turn_diff: Option<TurnDiffState>,
+    pub retryable_turn: Option<RetryableTurnSubmission>,
+    pub safety_buffering: Option<SafetyBufferingState>,
 }
 
 impl Default for TimelineState {
@@ -1123,8 +1126,38 @@ impl Default for TimelineState {
             context_window_usage: None,
             message_edit: None,
             last_turn_diff: None,
+            retryable_turn: None,
+            safety_buffering: None,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetryableUserMessage {
+    pub text: String,
+    pub attachments: Vec<ComposerAttachment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetryableTurnSubmission {
+    pub messages: Vec<RetryableUserMessage>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub service_tier: Option<String>,
+    pub permissions: Option<String>,
+    pub approval_policy: Option<String>,
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    pub plan_mode: bool,
+    pub personality: Personality,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SafetyBufferingState {
+    pub turn_id: String,
+    pub faster_model: Option<String>,
+    pub retry_available: bool,
+    pub dismissed: bool,
+    pub retry_pending: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3962,6 +3995,16 @@ pub enum Action {
         task_id: String,
         turn_id: String,
     },
+    TurnSubmissionRecorded {
+        task_id: String,
+        turn_id: String,
+        submission: RetryableTurnSubmission,
+    },
+    TurnSteerRecorded {
+        task_id: String,
+        turn_id: String,
+        message: RetryableUserMessage,
+    },
     TurnCompleted {
         task_id: String,
         turn_id: String,
@@ -3979,6 +4022,27 @@ pub enum Action {
     },
     TurnInterruptFailed {
         task_id: String,
+        message: String,
+    },
+    SafetyBufferingUpdated {
+        task_id: String,
+        turn_id: String,
+        show_buffering_ui: bool,
+        faster_model: Option<String>,
+    },
+    DismissSafetyBuffering {
+        task_id: String,
+        turn_id: String,
+    },
+    RetrySafetyBufferedTurn {
+        task_id: String,
+        turn_id: String,
+    },
+    SafetyBufferedRetryFailed {
+        source_task_id: String,
+        turn_id: String,
+        restore_task_id: Option<String>,
+        prompt: Option<RetryableUserMessage>,
         message: String,
     },
     TimelineDelta {
@@ -4808,6 +4872,12 @@ pub enum Effect {
     InterruptTurn {
         task_id: String,
         turn_id: String,
+    },
+    RetrySafetyBufferedTurn {
+        task_id: String,
+        turn_id: String,
+        faster_model: String,
+        submission: RetryableTurnSubmission,
     },
     RespondApproval {
         request_id: String,
@@ -7494,6 +7564,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             let timeline = state.timelines.entry(task_id.clone()).or_default();
             timeline.active_turn_id = active_turn_id;
             timeline.interrupt_pending = false;
+            timeline.retryable_turn = None;
+            timeline.safety_buffering = None;
             if !is_idle {
                 timeline.goal_continuation_pending = false;
             }
@@ -9162,6 +9234,10 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::TurnStarted { task_id, turn_id } => {
             let timeline = state.timelines.entry(task_id.clone()).or_default();
+            if timeline.active_turn_id.as_deref() != Some(turn_id.as_str()) {
+                timeline.retryable_turn = None;
+                timeline.safety_buffering = None;
+            }
             timeline.active_turn_id = Some(turn_id.clone());
             timeline.interrupt_pending = false;
             timeline.goal_continuation_pending = false;
@@ -9175,14 +9251,84 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
+        Action::TurnSubmissionRecorded {
+            task_id,
+            turn_id,
+            mut submission,
+        } => {
+            let timeline = state.timelines.entry(task_id).or_default();
+            if timeline.active_turn_id.as_deref() != Some(turn_id.as_str()) {
+                return Vec::new();
+            }
+            normalize_retryable_submission(&mut submission);
+            if submission.messages.is_empty() {
+                return Vec::new();
+            }
+            timeline.retryable_turn = Some(submission);
+            if let Some(buffering) = timeline
+                .safety_buffering
+                .as_mut()
+                .filter(|buffering| buffering.turn_id == turn_id)
+            {
+                let was_available = buffering.retry_available;
+                buffering.retry_available = buffering.faster_model.is_some();
+                if was_available != buffering.retry_available {
+                    buffering.dismissed = false;
+                    buffering.retry_pending = false;
+                }
+            }
+            Vec::new()
+        }
+        Action::TurnSteerRecorded {
+            task_id,
+            turn_id,
+            mut message,
+        } => {
+            let timeline = state.timelines.entry(task_id).or_default();
+            if timeline.active_turn_id.as_deref() != Some(turn_id.as_str()) {
+                return Vec::new();
+            }
+            normalize_retryable_user_message(&mut message);
+            let recorded = timeline
+                .retryable_turn
+                .as_mut()
+                .filter(|submission| submission.messages.len() < MAX_RETRYABLE_TURN_MESSAGES)
+                .is_some_and(|submission| {
+                    submission.messages.push(message);
+                    true
+                });
+            if !recorded {
+                timeline.retryable_turn = None;
+                if let Some(buffering) = timeline
+                    .safety_buffering
+                    .as_mut()
+                    .filter(|buffering| buffering.turn_id == turn_id)
+                    && buffering.retry_available
+                {
+                    buffering.retry_available = false;
+                    buffering.dismissed = false;
+                    buffering.retry_pending = false;
+                }
+            }
+            Vec::new()
+        }
         Action::TurnCompleted {
             task_id,
             turn_id,
             failed,
         } => {
             let timeline = state.timelines.entry(task_id.clone()).or_default();
-            if timeline.active_turn_id.as_deref() == Some(turn_id.as_str()) {
+            let completed_active = timeline.active_turn_id.as_deref() == Some(turn_id.as_str());
+            if completed_active {
                 timeline.active_turn_id = None;
+                timeline.retryable_turn = None;
+            }
+            if timeline
+                .safety_buffering
+                .as_ref()
+                .is_some_and(|buffering| buffering.turn_id == turn_id)
+            {
+                timeline.safety_buffering = None;
             }
             timeline.interrupt_pending = false;
             timeline.compaction_in_flight = false;
@@ -9197,8 +9343,17 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::TurnInterrupted { task_id, turn_id } => {
             let timeline = state.timelines.entry(task_id.clone()).or_default();
-            if timeline.active_turn_id.as_deref() == Some(turn_id.as_str()) {
+            let interrupted_active = timeline.active_turn_id.as_deref() == Some(turn_id.as_str());
+            if interrupted_active {
                 timeline.active_turn_id = None;
+                timeline.retryable_turn = None;
+            }
+            if timeline
+                .safety_buffering
+                .as_ref()
+                .is_some_and(|buffering| buffering.turn_id == turn_id)
+            {
+                timeline.safety_buffering = None;
             }
             timeline.interrupt_pending = false;
             timeline.goal_continuation_pending = false;
@@ -9244,6 +9399,130 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.status_message = Some(message);
             Vec::new()
         }
+        Action::SafetyBufferingUpdated {
+            task_id,
+            turn_id,
+            show_buffering_ui,
+            faster_model,
+        } => {
+            let timeline = state.timelines.entry(task_id).or_default();
+            if timeline.active_turn_id.as_deref() != Some(turn_id.as_str()) {
+                return Vec::new();
+            }
+            if !show_buffering_ui {
+                if timeline
+                    .safety_buffering
+                    .as_ref()
+                    .is_some_and(|buffering| buffering.turn_id == turn_id)
+                {
+                    timeline.safety_buffering = None;
+                }
+                return Vec::new();
+            }
+            if timeline
+                .items
+                .iter()
+                .any(|item| item.turn_id == turn_id && item.kind == TimelineKind::Agent)
+            {
+                timeline.safety_buffering = None;
+                return Vec::new();
+            }
+            let retry_available = faster_model.is_some()
+                && timeline.retryable_turn.as_ref().is_some_and(|submission| {
+                    !submission.messages.is_empty()
+                        && submission.messages.len() <= MAX_RETRYABLE_TURN_MESSAGES
+                });
+            let previous = timeline
+                .safety_buffering
+                .take()
+                .filter(|buffering| buffering.turn_id == turn_id);
+            let availability_changed = previous
+                .as_ref()
+                .is_some_and(|buffering| buffering.retry_available != retry_available);
+            timeline.safety_buffering = Some(SafetyBufferingState {
+                turn_id,
+                faster_model,
+                retry_available,
+                dismissed: previous
+                    .as_ref()
+                    .is_some_and(|buffering| buffering.dismissed)
+                    && !availability_changed,
+                retry_pending: previous
+                    .as_ref()
+                    .is_some_and(|buffering| buffering.retry_pending)
+                    && !availability_changed,
+            });
+            Vec::new()
+        }
+        Action::DismissSafetyBuffering { task_id, turn_id } => {
+            if let Some(buffering) = state
+                .timelines
+                .entry(task_id)
+                .or_default()
+                .safety_buffering
+                .as_mut()
+                .filter(|buffering| buffering.turn_id == turn_id)
+            {
+                buffering.dismissed = true;
+            }
+            Vec::new()
+        }
+        Action::RetrySafetyBufferedTurn { task_id, turn_id } => {
+            if state.selected_task_id.as_deref() != Some(task_id.as_str()) {
+                return Vec::new();
+            }
+            let timeline = state.timelines.entry(task_id.clone()).or_default();
+            if timeline.active_turn_id.as_deref() != Some(turn_id.as_str()) {
+                return Vec::new();
+            }
+            let Some(buffering) = timeline.safety_buffering.as_mut().filter(|buffering| {
+                buffering.turn_id == turn_id
+                    && buffering.retry_available
+                    && !buffering.dismissed
+                    && !buffering.retry_pending
+            }) else {
+                return Vec::new();
+            };
+            let Some(faster_model) = buffering.faster_model.clone() else {
+                return Vec::new();
+            };
+            let Some(submission) = timeline.retryable_turn.clone() else {
+                return Vec::new();
+            };
+            buffering.retry_pending = true;
+            buffering.dismissed = true;
+            vec![Effect::RetrySafetyBufferedTurn {
+                task_id,
+                turn_id,
+                faster_model,
+                submission,
+            }]
+        }
+        Action::SafetyBufferedRetryFailed {
+            source_task_id,
+            turn_id,
+            restore_task_id,
+            mut prompt,
+            message,
+        } => {
+            let timeline = state.timelines.entry(source_task_id.clone()).or_default();
+            if let Some(buffering) = timeline
+                .safety_buffering
+                .as_mut()
+                .filter(|buffering| buffering.turn_id == turn_id)
+            {
+                buffering.retry_pending = false;
+                buffering.dismissed = restore_task_id.is_some();
+            }
+            if restore_task_id.as_deref() == state.selected_task_id.as_deref()
+                && let Some(prompt) = prompt.as_mut()
+            {
+                normalize_retryable_user_message(prompt);
+                restore_retry_prompt(state, prompt);
+            }
+            state.status_message = Some(bounded_string(message, MAX_COMPOSER_BYTES));
+            Vec::new()
+        }
         Action::TimelineDelta {
             task_id,
             turn_id,
@@ -9252,6 +9531,12 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             delta,
         } => {
             let timeline = state.timelines.entry(task_id).or_default();
+            if kind == TimelineKind::Agent
+                && timeline.active_turn_id.as_deref() == Some(turn_id.as_str())
+            {
+                timeline.retryable_turn = None;
+                timeline.safety_buffering = None;
+            }
             if let Some(item) = timeline.items.iter_mut().find(|item| item.id == item_id) {
                 if item.kind == TimelineKind::Command {
                     append_bounded(
@@ -9291,6 +9576,12 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::UpsertTimelineItem { task_id, item } => {
             let timeline = state.timelines.entry(task_id).or_default();
+            if item.kind == TimelineKind::Agent
+                && timeline.active_turn_id.as_deref() == Some(item.turn_id.as_str())
+            {
+                timeline.retryable_turn = None;
+                timeline.safety_buffering = None;
+            }
             if item.kind == TimelineKind::ContextCompaction && item.completed {
                 timeline.compaction_in_flight = false;
             }
@@ -13369,6 +13660,63 @@ fn bounded_string(mut value: String, limit: usize) -> String {
     value
 }
 
+fn normalize_retryable_user_message(message: &mut RetryableUserMessage) {
+    message.text = bounded_string(std::mem::take(&mut message.text), MAX_COMPOSER_BYTES);
+    message.attachments.truncate(MAX_COMPOSER_ATTACHMENTS);
+    for attachment in &mut message.attachments {
+        attachment.name = bounded_string(
+            std::mem::take(&mut attachment.name),
+            MAX_ATTACHMENT_LABEL_BYTES,
+        );
+    }
+}
+
+fn normalize_retryable_submission(submission: &mut RetryableTurnSubmission) {
+    submission.messages.truncate(MAX_RETRYABLE_TURN_MESSAGES);
+    for message in &mut submission.messages {
+        normalize_retryable_user_message(message);
+    }
+    for value in [
+        &mut submission.model,
+        &mut submission.effort,
+        &mut submission.service_tier,
+        &mut submission.permissions,
+        &mut submission.approval_policy,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        *value = bounded_string(std::mem::take(value), MAX_MCP_SERVER_FIELD_BYTES);
+    }
+}
+
+fn restore_retry_prompt(state: &mut AppState, prompt: &RetryableUserMessage) {
+    let existing = std::mem::take(&mut state.composer);
+    state.composer = prompt.text.clone();
+    if !existing.is_empty() && state.composer.len() < MAX_COMPOSER_BYTES {
+        if !state.composer.is_empty() {
+            append_bounded(&mut state.composer, "\n\n", MAX_COMPOSER_BYTES);
+        }
+        append_bounded(&mut state.composer, &existing, MAX_COMPOSER_BYTES);
+    }
+
+    let existing_attachments = std::mem::take(&mut state.composer_attachments);
+    state.composer_attachments = prompt.attachments.clone();
+    for attachment in existing_attachments {
+        if state.composer_attachments.len() == MAX_COMPOSER_ATTACHMENTS {
+            break;
+        }
+        if !state
+            .composer_attachments
+            .iter()
+            .any(|current| current.kind == attachment.kind && current.path == attachment.path)
+        {
+            state.composer_attachments.push(attachment);
+        }
+    }
+    state.composer_error = None;
+}
+
 fn normalize_user_input_request(request: &mut UserInputRequest) {
     request.request_id = bounded_string(
         request.request_id.trim().to_owned(),
@@ -14164,11 +14512,12 @@ mod tests {
         PullRequestDetailTab, PullRequestIdentity, PullRequestLifecycle, PullRequestMergeMethod,
         PullRequestMutation, PullRequestMutationKind, PullRequestRelationship,
         PullRequestReviewEvent, PullRequestState, PullRequestSummary, ReasoningEffortOption,
-        ServiceTierOption, SkillCard, SkillScope, TaskRunStatus, TaskSearchResult, TaskSummary,
-        TerminalDockLocation, ThreadGoal, ThreadGoalStatus, TimelineItem, TimelineKind,
-        UsageLimitWindow, UserInputAnswer, UserInputAnswers, UserInputOption, UserInputQuestion,
-        UserInputRequest, appearance_code_theme_supports_variant, computer_app_id_matches,
-        permission_mode_options, reduce, stable_reference, validate_mcp_form_content,
+        RetryableTurnSubmission, RetryableUserMessage, ServiceTierOption, SkillCard, SkillScope,
+        TaskRunStatus, TaskSearchResult, TaskSummary, TerminalDockLocation, ThreadGoal,
+        ThreadGoalStatus, TimelineItem, TimelineKind, UsageLimitWindow, UserInputAnswer,
+        UserInputAnswers, UserInputOption, UserInputQuestion, UserInputRequest,
+        appearance_code_theme_supports_variant, computer_app_id_matches, permission_mode_options,
+        reduce, stable_reference, validate_mcp_form_content,
     };
 
     fn task(id: &str) -> TaskSummary {
@@ -16817,6 +17166,164 @@ mod tests {
             Some("turn-active")
         );
         assert_eq!(state.tasks[0].status, TaskRunStatus::Running);
+    }
+
+    #[test]
+    fn safety_buffering_retry_tracks_only_the_active_submitted_turn() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(
+            &mut state,
+            Action::TurnStarted {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+            },
+        );
+        let submission = RetryableTurnSubmission {
+            messages: vec![RetryableUserMessage {
+                text: "Inspect the failure".to_owned(),
+                attachments: Vec::new(),
+            }],
+            model: Some("gpt-5.6-sol".to_owned()),
+            effort: Some("high".to_owned()),
+            service_tier: Some("priority".to_owned()),
+            permissions: Some(":workspace".to_owned()),
+            approval_policy: Some("on-request".to_owned()),
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            plan_mode: false,
+            personality: Personality::Pragmatic,
+        };
+        reduce(
+            &mut state,
+            Action::TurnSubmissionRecorded {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                submission: submission.clone(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::SafetyBufferingUpdated {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                show_buffering_ui: true,
+                faster_model: Some("gpt-5.6-terra".to_owned()),
+            },
+        );
+        assert!(
+            state.timelines["t1"]
+                .safety_buffering
+                .as_ref()
+                .is_some_and(|buffering| buffering.retry_available && !buffering.dismissed)
+        );
+
+        reduce(
+            &mut state,
+            Action::DismissSafetyBuffering {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::SafetyBufferingUpdated {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                show_buffering_ui: true,
+                faster_model: Some("gpt-5.6-terra".to_owned()),
+            },
+        );
+        assert!(
+            state.timelines["t1"]
+                .safety_buffering
+                .as_ref()
+                .is_some_and(|buffering| buffering.dismissed)
+        );
+
+        reduce(
+            &mut state,
+            Action::SafetyBufferingUpdated {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                show_buffering_ui: true,
+                faster_model: None,
+            },
+        );
+        assert!(
+            state.timelines["t1"]
+                .safety_buffering
+                .as_ref()
+                .is_some_and(|buffering| !buffering.retry_available && !buffering.dismissed)
+        );
+        reduce(
+            &mut state,
+            Action::SafetyBufferingUpdated {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                show_buffering_ui: true,
+                faster_model: Some("gpt-5.6-terra".to_owned()),
+            },
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::RetrySafetyBufferedTurn {
+                    task_id: "t1".to_owned(),
+                    turn_id: "turn-1".to_owned(),
+                },
+            ),
+            [Effect::RetrySafetyBufferedTurn {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                faster_model: "gpt-5.6-terra".to_owned(),
+                submission,
+            }]
+        );
+        assert!(
+            state.timelines["t1"]
+                .safety_buffering
+                .as_ref()
+                .is_some_and(|buffering| buffering.retry_pending && buffering.dismissed)
+        );
+
+        reduce(
+            &mut state,
+            Action::SafetyBufferedRetryFailed {
+                source_task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                restore_task_id: None,
+                prompt: None,
+                message: "Could not retry.".to_owned(),
+            },
+        );
+        assert!(
+            state.timelines["t1"]
+                .safety_buffering
+                .as_ref()
+                .is_some_and(|buffering| !buffering.retry_pending && !buffering.dismissed)
+        );
+        reduce(
+            &mut state,
+            Action::TimelineDelta {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                item_id: "answer-1".to_owned(),
+                kind: TimelineKind::Agent,
+                delta: "Ready".to_owned(),
+            },
+        );
+        assert!(state.timelines["t1"].safety_buffering.is_none());
+        assert!(state.timelines["t1"].retryable_turn.is_none());
+        reduce(
+            &mut state,
+            Action::SafetyBufferingUpdated {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                show_buffering_ui: true,
+                faster_model: Some("gpt-5.6-terra".to_owned()),
+            },
+        );
+        assert!(state.timelines["t1"].safety_buffering.is_none());
     }
 
     #[test]

@@ -154,6 +154,11 @@ const TITLE_BAR_HEIGHT: f32 = 34.0;
 const WINDOWS_TITLE_BAR_CONTROL_WIDTH: f32 = 46.0;
 const PLUGIN_DIRECTORY_HERO_PROMPT: &str =
     "Connect the tools I use every day and suggest one useful workflow.";
+const SAFETY_BUFFERING_LEARN_MORE_URL: &str = "https://help.openai.com/en/articles/20001326";
+const SAFETY_BUFFERING_HEADER: &str =
+    "Our systems are thinking a bit more about this request before responding.";
+const SAFETY_BUFFERING_RETRY_MESSAGE: &str = "Hang tight or retry with a faster model for a quicker response, though it may be less capable of handling complex requests.";
+const SAFETY_BUFFERING_FOOTER: &str = "No action is required. Codex will keep waiting, and this menu will close when the response is ready.";
 const CREATE_PLUGIN_PROMPT: &str = "Create a Codex plugin. Follow the installed plugin-creator \
                                     workflow, ask for the missing requirements, and keep the \
                                     implementation native to Codex.";
@@ -18889,6 +18894,123 @@ impl WorkspaceView {
         )
     }
 
+    fn render_safety_buffering_banner(
+        &mut self,
+        narrow: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let task_id = self.state.selected_task_id.clone()?;
+        let timeline = self.state.timelines.get(&task_id)?;
+        let buffering = timeline
+            .safety_buffering
+            .as_ref()
+            .filter(|buffering| {
+                !buffering.dismissed
+                    && timeline.active_turn_id.as_deref() == Some(buffering.turn_id.as_str())
+            })?
+            .clone();
+        let retry_task_id = task_id.clone();
+        let retry_turn_id = buffering.turn_id.clone();
+        let dismiss_task_id = task_id;
+        let dismiss_turn_id = buffering.turn_id.clone();
+        let retry_button = buffering.retry_available.then(|| {
+            Button::new("safety-buffering-retry")
+                .label(if buffering.retry_pending {
+                    "Retrying…"
+                } else {
+                    "Retry with a faster model"
+                })
+                .small()
+                .primary()
+                .disabled(buffering.retry_pending)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.dispatch(
+                        Action::RetrySafetyBufferedTurn {
+                            task_id: retry_task_id.clone(),
+                            turn_id: retry_turn_id.clone(),
+                        },
+                        cx,
+                    );
+                }))
+        });
+
+        Some(
+            v_flex()
+                .id("safety-buffering-banner")
+                .w_full()
+                .mb_2()
+                .p_3()
+                .gap_2()
+                .rounded_lg()
+                .border_1()
+                .border_color(cx.theme().warning.opacity(0.45))
+                .bg(cx.theme().warning.opacity(0.08))
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .items_start()
+                        .text_color(cx.theme().warning)
+                        .child(Icon::new(IconName::TriangleAlert).small())
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_sm()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child(SAFETY_BUFFERING_HEADER),
+                        ),
+                )
+                .when(buffering.retry_available, |banner| {
+                    banner.child(
+                        div()
+                            .pl_6()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(SAFETY_BUFFERING_RETRY_MESSAGE),
+                    )
+                })
+                .child(
+                    h_flex()
+                        .pl_6()
+                        .gap_2()
+                        .items_center()
+                        .when(narrow, |actions| actions.flex_wrap())
+                        .children(retry_button)
+                        .child(
+                            Button::new("safety-buffering-dismiss")
+                                .label("Dismiss and keep waiting")
+                                .small()
+                                .ghost()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.dispatch(
+                                        Action::DismissSafetyBuffering {
+                                            task_id: dismiss_task_id.clone(),
+                                            turn_id: dismiss_turn_id.clone(),
+                                        },
+                                        cx,
+                                    );
+                                })),
+                        )
+                        .child(
+                            Button::new("safety-buffering-learn-more")
+                                .label("Learn more")
+                                .small()
+                                .ghost()
+                                .on_click(|_, _, cx| {
+                                    cx.open_url(SAFETY_BUFFERING_LEARN_MORE_URL);
+                                }),
+                        ),
+                )
+                .child(
+                    div()
+                        .pl_6()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(SAFETY_BUFFERING_FOOTER),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn render_composer(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let inline_right_panel_open = self.shell_width_class == Some(ShellWidthClass::Wide)
             && (self.state.inspector != InspectorPane::Hidden
@@ -19275,6 +19397,7 @@ impl WorkspaceView {
         let status_panel = self
             .composer_status_open
             .then(|| self.render_composer_status(narrow_composer, cx));
+        let safety_buffering = self.render_safety_buffering_banner(narrow_composer, cx);
         let slash_commands_max_height = (self.shell_viewport_height - 260.0).clamp(180.0, 520.0);
         v_flex()
             .w_full()
@@ -19303,6 +19426,7 @@ impl WorkspaceView {
                 )
             })
             .children(status_panel)
+            .children(safety_buffering)
             .child(
                 v_flex()
                     .w_full()

@@ -35,15 +35,15 @@ use codex_core::{
     MAX_HOOK_PROJECTS, MAX_KEYBOARD_SHORTCUT_ACCELERATOR_BYTES, MAX_KEYBOARD_SHORTCUTS_PER_COMMAND,
     MAX_MCP_FORM_FIELDS, MAX_MCP_FORM_IMAGE_DATA_URL_BYTES, MAX_MCP_FORM_OPTIONS,
     MAX_MCP_FORM_VALUE_BYTES, MAX_MCP_SERVER_FIELD_BYTES, MAX_MCP_SERVER_LIST_ITEMS,
-    MAX_PENDING_APPROVALS, MAX_TERMINAL_TABS, MAX_TURN_DIFF_BYTES, MAX_USER_INPUT_OPTIONS,
-    MAX_USER_INPUT_QUESTIONS, MAX_USER_INPUT_VALUE_BYTES, MAX_VISIBLE_THREADS,
-    MAX_WORKTREE_ROOT_BYTES, MainRoute, MarketplaceSourceCard, MarketplaceUpgradeFailure,
-    McpAuthStatus as CoreMcpAuthStatus, McpBrowserOriginElicitation, McpBrowserResourceElicitation,
-    McpElicitation, McpElicitationContent, McpElicitationDecision, McpElicitationValue,
-    McpFormElicitation, McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpFormOption,
-    McpFormStringFormat, McpResourceCard, McpResourceContentCard, McpResourceTemplateCard,
-    McpServerCard, McpServerDraft, McpServerInfoCard,
-    McpServerStartupFailureReason as CoreMcpServerStartupFailureReason,
+    MAX_PENDING_APPROVALS, MAX_RETRYABLE_TURN_MESSAGES, MAX_TERMINAL_TABS, MAX_TURN_DIFF_BYTES,
+    MAX_USER_INPUT_OPTIONS, MAX_USER_INPUT_QUESTIONS, MAX_USER_INPUT_VALUE_BYTES,
+    MAX_VISIBLE_THREADS, MAX_WORKTREE_ROOT_BYTES, MainRoute, MarketplaceSourceCard,
+    MarketplaceUpgradeFailure, McpAuthStatus as CoreMcpAuthStatus, McpBrowserOriginElicitation,
+    McpBrowserResourceElicitation, McpElicitation, McpElicitationContent, McpElicitationDecision,
+    McpElicitationValue, McpFormElicitation, McpFormField, McpFormFieldKind,
+    McpFormImagePickerItem, McpFormOption, McpFormStringFormat, McpResourceCard,
+    McpResourceContentCard, McpResourceTemplateCard, McpServerCard, McpServerDraft,
+    McpServerInfoCard, McpServerStartupFailureReason as CoreMcpServerStartupFailureReason,
     McpServerStartupState as CoreMcpServerStartupState, McpToolCard, McpTransportKind,
     McpUrlElicitation, ModelOption, NetworkApprovalContext as CoreNetworkApprovalContext,
     NetworkApprovalProtocol as CoreNetworkApprovalProtocol,
@@ -57,13 +57,13 @@ use codex_core::{
     PullRequestIdentity, PullRequestLifecycle, PullRequestMergeMethod, PullRequestMutation,
     PullRequestRelationship, PullRequestReviewEvent, PullRequestState, PullRequestSummary,
     ReasoningEffortOption as CoreReasoningEffortOption, ReducedMotionPreference,
-    STANDARD_SERVICE_TIER_ID, ServiceTierOption, SkillCard, SkillScope as CoreSkillScope,
-    TaskRunStatus, TaskSearchResult, TaskSummary, TerminalDockLocation,
-    ThreadGoal as CoreThreadGoal, ThreadGoalStatus as CoreThreadGoalStatus, TimelineCitation,
-    TimelineItem, TimelineKind, TimelineSource, UsageLimitWindow, UserInputAnswers,
-    UserInputOption as CoreUserInputOption, UserInputQuestion as CoreUserInputQuestion,
-    UserInputRequest, appearance_code_theme_supports_variant, computer_app_id_matches,
-    is_appearance_code_theme_id,
+    RetryableTurnSubmission, RetryableUserMessage, STANDARD_SERVICE_TIER_ID, ServiceTierOption,
+    SkillCard, SkillScope as CoreSkillScope, TaskRunStatus, TaskSearchResult, TaskSummary,
+    TerminalDockLocation, ThreadGoal as CoreThreadGoal, ThreadGoalStatus as CoreThreadGoalStatus,
+    TimelineCitation, TimelineItem, TimelineKind, TimelineSource, UsageLimitWindow,
+    UserInputAnswers, UserInputOption as CoreUserInputOption,
+    UserInputQuestion as CoreUserInputQuestion, UserInputRequest,
+    appearance_code_theme_supports_variant, computer_app_id_matches, is_appearance_code_theme_id,
 };
 use codex_platform::{
     AppServerConfig, AppServerConnection, AppServerError, AppServerEvent, ArtifactFileKind,
@@ -124,9 +124,9 @@ use codex_protocol::{
     McpServerStartupFailureReason as ProtocolMcpServerStartupFailureReason,
     McpServerStartupState as ProtocolMcpServerStartupState,
     McpServerStatus as ProtocolMcpServerStatus, McpServerStatusDetail,
-    McpServerStatusUpdatedNotification, ModelListParams, NetworkApprovalProtocol,
-    NetworkPolicyAmendment, NetworkPolicyAmendmentDecision, NetworkPolicyRuleAction,
-    PermissionGrantScope, PermissionProfile, PermissionProfileListParams,
+    McpServerStatusUpdatedNotification, ModelListParams, ModelSafetyBufferingUpdatedNotification,
+    NetworkApprovalProtocol, NetworkPolicyAmendment, NetworkPolicyAmendmentDecision,
+    NetworkPolicyRuleAction, PermissionGrantScope, PermissionProfile, PermissionProfileListParams,
     PermissionsRequestApprovalParams, PermissionsRequestApprovalResponse, PlanType,
     PluginInstallParams, PluginListMarketplaceKind, PluginListParams, PluginReadParams,
     PluginUninstallParams, SkillScope as ProtocolSkillScope, SkillsConfigWriteParams,
@@ -138,9 +138,9 @@ use codex_protocol::{
     ThreadGoalUpdatedNotification, ThreadItemsListParams, ThreadListParams, ThreadLoadedListParams,
     ThreadReadParams, ThreadResumeInitialTurnsPageParams, ThreadResumeParams, ThreadRollbackParams,
     ThreadSearchParams, ThreadSetNameParams, ThreadSettingsUpdateParams, ThreadStartParams,
-    ThreadTokenUsageUpdatedNotification, ThreadUnarchiveParams, ToolRequestUserInputAnswer,
-    ToolRequestUserInputParams, ToolRequestUserInputResponse, TurnDiffUpdatedNotification,
-    TurnInterruptParams, TurnStartParams, TurnSteerParams, UserInput,
+    ThreadTokenUsageUpdatedNotification, ThreadTurnsListParams, ThreadUnarchiveParams,
+    ToolRequestUserInputAnswer, ToolRequestUserInputParams, ToolRequestUserInputResponse,
+    TurnDiffUpdatedNotification, TurnInterruptParams, TurnStartParams, TurnSteerParams, UserInput,
 };
 use codex_storage::{
     BrowserDownloadRecordStatus, MAX_BROWSER_DOWNLOAD_RECORDS, Store, StoredBrowserDownload,
@@ -150,6 +150,7 @@ use serde_json::{Value, json};
 
 const BACKEND_COMMAND_CAPACITY: usize = 64;
 const BACKEND_EVENT_CAPACITY: usize = 1_024;
+const MAX_RETRYABLE_ACTIVE_TURNS: usize = 64;
 const BACKEND_TICK: Duration = Duration::from_millis(25);
 const APP_SERVER_RECONNECT_INITIAL_DELAY: Duration = Duration::from_secs(1);
 const APP_SERVER_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(20);
@@ -1003,16 +1004,7 @@ enum PendingApproval {
 
 struct StartTurnRequest {
     task_id: String,
-    text: String,
-    model: Option<String>,
-    effort: Option<String>,
-    service_tier: Option<String>,
-    permissions: Option<String>,
-    approval_policy: Option<String>,
-    approvals_reviewer: Option<CoreApprovalsReviewer>,
-    attachments: Vec<ComposerAttachment>,
-    plan_mode: bool,
-    personality: Personality,
+    submission: RetryableTurnSubmission,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2686,6 +2678,7 @@ fn run_backend(commands: Receiver<BackendCommand>, events: Sender<Action>) {
     let mut computer_permissions = HashMap::new();
     let mut computer_capable_threads = HashSet::new();
     let mut computer_allowed_app_ids = HashSet::new();
+    let mut retryable_turns = HashMap::new();
     let mut computer_accessibility = ComputerUseAccessibilityClient::new();
     let mut computer_url_policy = ComputerUseUrlPolicy::new();
     let computer_interruption = match ComputerUseInterruptionMonitor::new() {
@@ -2760,6 +2753,7 @@ fn run_backend(commands: Receiver<BackendCommand>, events: Sender<Action>) {
                     }
                     Ok(Some(event)) => {
                         if let Some(turn) = completed_turn_key(&event) {
+                            retryable_turns.remove(&(turn.thread_id.clone(), turn.turn_id.clone()));
                             if let Some(monitor) = computer_interruption.as_ref() {
                                 monitor.disarm_turn(&turn.thread_id, &turn.turn_id);
                             }
@@ -2866,6 +2860,7 @@ fn run_backend(commands: Receiver<BackendCommand>, events: Sender<Action>) {
                 let _ = overlay.hide();
             }
             interrupted_computer_turns.clear();
+            retryable_turns.clear();
             task_search.clear();
             fuzzy_file_search.reset();
             pull_request_search.clear();
@@ -2964,6 +2959,7 @@ fn run_backend(commands: Receiver<BackendCommand>, events: Sender<Action>) {
                         &mut fuzzy_file_search,
                         &mut personality,
                         &mut pending_worktree_runtime,
+                        &mut retryable_turns,
                     );
                     if let (Some(monitor), Some(turn)) =
                         (computer_interruption.as_ref(), computer_turn_to_rearm)
@@ -3222,6 +3218,7 @@ fn run_effect(
     fuzzy_file_search: &mut FuzzyFileSearchRuntime,
     personality: &mut Personality,
     pending_worktree_runtime: &mut Option<PendingWorktreeRuntime>,
+    retryable_turns: &mut HashMap<(String, String), RetryableTurnSubmission>,
 ) {
     if effect == Effect::CancelPendingWorktreeFork {
         if let Some(runtime) = pending_worktree_runtime.as_ref() {
@@ -5129,26 +5126,40 @@ fn run_effect(
                             task_id: task_id.clone(),
                         },
                     );
-                    let turn_started = start_turn(
+                    let turn_started = match start_turn(
                         app_server,
                         StartTurnRequest {
                             task_id: task_id.clone(),
-                            text: initial_message,
-                            model,
-                            effort,
-                            service_tier,
-                            permissions,
-                            approval_policy,
-                            approvals_reviewer,
-                            attachments,
-                            plan_mode,
-                            personality: *personality,
+                            submission: RetryableTurnSubmission {
+                                messages: vec![RetryableUserMessage {
+                                    text: initial_message,
+                                    attachments,
+                                }],
+                                model,
+                                effort,
+                                service_tier,
+                                permissions,
+                                approval_policy,
+                                approvals_reviewer,
+                                plan_mode,
+                                personality: *personality,
+                            },
                         },
                         events,
                         browser,
                         browser_download_preferences,
                         browser_permissions,
-                    );
+                        retryable_turns,
+                    ) {
+                        Ok(()) => true,
+                        Err(error) => {
+                            emit(
+                                events,
+                                Action::SetStatus(format!("failed to start turn: {error}")),
+                            );
+                            false
+                        }
+                    };
                     if turn_started && let Some(objective) = goal_objective {
                         match app_server.set_thread_goal(ThreadGoalSetParams {
                             thread_id: task_id.clone(),
@@ -5789,22 +5800,25 @@ fn run_effect(
                 app_server,
                 StartTurnRequest {
                     task_id: task_id.clone(),
-                    text,
-                    model,
-                    effort,
-                    service_tier,
-                    permissions,
-                    approval_policy,
-                    approvals_reviewer,
-                    attachments,
-                    plan_mode,
-                    personality: *personality,
+                    submission: RetryableTurnSubmission {
+                        messages: vec![RetryableUserMessage { text, attachments }],
+                        model,
+                        effort,
+                        service_tier,
+                        permissions,
+                        approval_policy,
+                        approvals_reviewer,
+                        plan_mode,
+                        personality: *personality,
+                    },
                 },
                 events,
                 browser,
                 browser_download_preferences,
                 browser_permissions,
-            );
+                retryable_turns,
+            )
+            .is_ok();
             if started {
                 emit(
                     events,
@@ -5852,26 +5866,33 @@ fn run_effect(
             attachments,
             plan_mode,
         } => {
-            let _ = start_turn(
+            if let Err(error) = start_turn(
                 app_server,
                 StartTurnRequest {
                     task_id,
-                    text,
-                    model,
-                    effort,
-                    service_tier,
-                    permissions,
-                    approval_policy,
-                    approvals_reviewer,
-                    attachments,
-                    plan_mode,
-                    personality: *personality,
+                    submission: RetryableTurnSubmission {
+                        messages: vec![RetryableUserMessage { text, attachments }],
+                        model,
+                        effort,
+                        service_tier,
+                        permissions,
+                        approval_policy,
+                        approvals_reviewer,
+                        plan_mode,
+                        personality: *personality,
+                    },
                 },
                 events,
                 browser,
                 browser_download_preferences,
                 browser_permissions,
-            );
+                retryable_turns,
+            ) {
+                emit(
+                    events,
+                    Action::SetStatus(format!("failed to start turn: {error}")),
+                );
+            }
         }
         Effect::SteerTurn {
             task_id,
@@ -5879,15 +5900,27 @@ fn run_effect(
             text,
             attachments,
         } => {
-            if let Err(error) = app_server.steer_turn(TurnSteerParams {
-                thread_id: task_id,
-                input: composer_inputs(text, attachments),
-                expected_turn_id,
+            let message = RetryableUserMessage { text, attachments };
+            match app_server.steer_turn(TurnSteerParams {
+                thread_id: task_id.clone(),
+                input: composer_inputs(message.text.clone(), message.attachments.clone()),
+                expected_turn_id: expected_turn_id.clone(),
             }) {
-                emit(
+                Ok(_) => {
+                    record_retryable_steer(retryable_turns, &task_id, &expected_turn_id, &message);
+                    emit(
+                        events,
+                        Action::TurnSteerRecorded {
+                            task_id,
+                            turn_id: expected_turn_id,
+                            message,
+                        },
+                    );
+                }
+                Err(error) => emit(
                     events,
                     Action::SetStatus(format!("failed to steer turn: {error}")),
-                );
+                ),
             }
         }
         Effect::InterruptTurn { task_id, turn_id } => {
@@ -5906,6 +5939,32 @@ fn run_effect(
                     },
                 );
             }
+        }
+        Effect::RetrySafetyBufferedTurn {
+            task_id,
+            turn_id,
+            faster_model,
+            submission,
+        } => {
+            if let Some(overlay) = computer_overlay {
+                let _ = overlay.complete_turn(&task_id, &turn_id);
+            }
+            let submission = retryable_turns
+                .remove(&(task_id.clone(), turn_id.clone()))
+                .unwrap_or(submission);
+            retry_safety_buffered_turn(
+                app_server,
+                task_id,
+                turn_id,
+                faster_model,
+                submission,
+                computer_capable_threads,
+                events,
+                browser,
+                browser_download_preferences,
+                browser_permissions,
+                retryable_turns,
+            );
         }
         Effect::RespondApproval {
             request_id,
@@ -6907,6 +6966,189 @@ fn fork_app_server_task(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn retry_safety_buffered_turn(
+    app_server: &AppServerConnection,
+    source_task_id: String,
+    turn_id: String,
+    faster_model: String,
+    mut submission: RetryableTurnSubmission,
+    computer_capable_threads: &mut HashSet<String>,
+    events: &Sender<Action>,
+    browser: &mut Option<BrowserRuntime>,
+    browser_download_preferences: &BrowserDownloadPreferences,
+    browser_permissions: &BrowserPermissionsState,
+    retryable_turns: &mut HashMap<(String, String), RetryableTurnSubmission>,
+) {
+    let prompt = submission.messages.first().cloned();
+    if app_server
+        .interrupt_turn(TurnInterruptParams {
+            thread_id: source_task_id.clone(),
+            turn_id: turn_id.clone(),
+        })
+        .is_err()
+    {
+        emit_safety_buffered_retry_failure(
+            events,
+            source_task_id,
+            turn_id,
+            None,
+            None,
+            "Could not stop the buffered response. Try the faster model again.",
+        );
+        return;
+    }
+
+    let turns = match app_server.list_thread_turns(ThreadTurnsListParams {
+        thread_id: source_task_id.clone(),
+        limit: 2,
+        sort_direction: HistorySortDirection::Desc,
+        cursor: None,
+        items_view: Some("summary".to_owned()),
+    }) {
+        Ok(page) => page.data,
+        Err(_) => {
+            emit_safety_buffered_retry_failure(
+                events,
+                source_task_id.clone(),
+                turn_id.clone(),
+                Some(source_task_id),
+                prompt,
+                "Could not verify the interrupted response. Your prompt was restored.",
+            );
+            return;
+        }
+    };
+    if safety_retry_fork_point(&turns, &turn_id).is_err() {
+        emit_safety_buffered_retry_failure(
+            events,
+            source_task_id.clone(),
+            turn_id.clone(),
+            Some(source_task_id),
+            prompt,
+            "The buffered response changed before it could be retried. Your prompt was restored.",
+        );
+        return;
+    }
+
+    let response = match app_server.fork_thread(ThreadForkParams {
+        thread_id: source_task_id.clone(),
+        cwd: None,
+        last_turn_id: None,
+        before_turn_id: Some(turn_id.clone()),
+        exclude_turns: Some(true),
+        defer_goal_continuation: Some(true),
+    }) {
+        Ok(response) => response,
+        Err(_) => {
+            emit_safety_buffered_retry_failure(
+                events,
+                source_task_id.clone(),
+                turn_id.clone(),
+                Some(source_task_id),
+                prompt,
+                "Could not create the faster-model chat. Your prompt was restored.",
+            );
+            return;
+        }
+    };
+
+    let task = map_task(response.thread);
+    let retry_task_id = task.id.clone();
+    let inherits_computer_use = computer_capable_threads.contains(&source_task_id);
+    if inherits_computer_use {
+        computer_capable_threads.insert(retry_task_id.clone());
+    }
+    submission.model = Some(faster_model);
+    submission.effort = Some("low".to_owned());
+    emit(events, Action::TaskCreated(task));
+    if inherits_computer_use {
+        emit(
+            events,
+            Action::ComputerUseAvailable {
+                task_id: retry_task_id.clone(),
+            },
+        );
+    }
+    emit(
+        events,
+        Action::TaskSettingsLoaded {
+            task_id: retry_task_id.clone(),
+            model: submission.model.clone(),
+            effort: submission.effort.clone(),
+            service_tier: submission.service_tier.clone(),
+            permissions: submission.permissions.clone(),
+            approval_policy: submission.approval_policy.clone(),
+            approvals_reviewer: submission.approvals_reviewer,
+        },
+    );
+
+    if start_turn(
+        app_server,
+        StartTurnRequest {
+            task_id: retry_task_id.clone(),
+            submission,
+        },
+        events,
+        browser,
+        browser_download_preferences,
+        browser_permissions,
+        retryable_turns,
+    )
+    .is_err()
+    {
+        emit_safety_buffered_retry_failure(
+            events,
+            source_task_id,
+            turn_id,
+            Some(retry_task_id),
+            prompt,
+            "The faster-model chat was created, but the response could not start. Your prompt was restored.",
+        );
+    }
+}
+
+fn safety_retry_fork_point(turns: &[Value], turn_id: &str) -> Result<(), &'static str> {
+    let Some(latest) = turns.first() else {
+        return Err("the interrupted turn is missing");
+    };
+    if string_field(latest, "id").as_deref() != Some(turn_id) {
+        return Err("the interrupted turn is no longer latest");
+    }
+    if string_field(latest, "status").as_deref() == Some("inProgress") {
+        return Err("the interrupted turn is still in progress");
+    }
+    if turns
+        .get(1)
+        .and_then(|turn| string_field(turn, "status"))
+        .as_deref()
+        == Some("inProgress")
+    {
+        return Err("the previous turn is still in progress");
+    }
+    Ok(())
+}
+
+fn emit_safety_buffered_retry_failure(
+    events: &Sender<Action>,
+    source_task_id: String,
+    turn_id: String,
+    restore_task_id: Option<String>,
+    prompt: Option<RetryableUserMessage>,
+    message: &str,
+) {
+    emit(
+        events,
+        Action::SafetyBufferedRetryFailed {
+            source_task_id,
+            turn_id,
+            restore_task_id,
+            prompt,
+            message: message.to_owned(),
+        },
+    );
+}
+
 fn start_turn(
     app_server: &AppServerConnection,
     request: StartTurnRequest,
@@ -6914,19 +7156,11 @@ fn start_turn(
     browser: &mut Option<BrowserRuntime>,
     browser_download_preferences: &BrowserDownloadPreferences,
     browser_permissions: &BrowserPermissionsState,
-) -> bool {
+    retryable_turns: &mut HashMap<(String, String), RetryableTurnSubmission>,
+) -> Result<(), AppServerError> {
     let StartTurnRequest {
         task_id,
-        text,
-        model,
-        effort,
-        service_tier,
-        permissions,
-        approval_policy,
-        approvals_reviewer,
-        attachments,
-        plan_mode,
-        personality,
+        submission,
     } = request;
     if let Err(message) = ensure_browser_context(
         browser,
@@ -6953,50 +7187,64 @@ fn start_turn(
             items_view: Some("summary".to_owned()),
         }),
     });
-    let collaboration_mode = plan_mode
+    let collaboration_mode = submission
+        .plan_mode
         .then(|| {
-            model.clone().map(|model| CollaborationMode {
+            submission.model.clone().map(|model| CollaborationMode {
                 mode: CollaborationModeKind::Plan,
                 settings: CollaborationModeSettings {
                     model,
-                    reasoning_effort: effort.clone(),
+                    reasoning_effort: submission.effort.clone(),
                     developer_instructions: None,
                 },
             })
         })
         .flatten();
-    match app_server.start_turn(TurnStartParams {
+    let response = app_server.start_turn(TurnStartParams {
         thread_id: task_id.clone(),
-        input: composer_inputs(text, attachments),
+        input: retryable_submission_inputs(&submission.messages),
         client_user_message_id: None,
         cwd: None,
         runtime_workspace_roots: None,
-        approval_policy,
-        approvals_reviewer: approvals_reviewer.map(protocol_approvals_reviewer),
-        permissions,
-        model,
-        effort,
-        service_tier: Some(service_tier),
+        approval_policy: submission.approval_policy.clone(),
+        approvals_reviewer: submission
+            .approvals_reviewer
+            .map(protocol_approvals_reviewer),
+        permissions: submission.permissions.clone(),
+        model: submission.model.clone(),
+        effort: submission.effort.clone(),
+        service_tier: Some(submission.service_tier.clone()),
         summary: None,
-        personality: Some(Some(personality.as_str().to_owned())),
+        personality: Some(Some(submission.personality.as_str().to_owned())),
         output_schema: None,
         collaboration_mode,
-    }) {
-        Ok(response) => {
-            let turn_id = string_field(&response.turn, "id").unwrap_or_default();
-            if !turn_id.is_empty() {
-                emit(events, Action::TurnStarted { task_id, turn_id });
-            }
-            true
+    })?;
+    let turn_id = string_field(&response.turn, "id").unwrap_or_default();
+    if !turn_id.is_empty() {
+        retryable_turns.retain(|(thread_id, _), _| thread_id != &task_id);
+        if retryable_turns.len() == MAX_RETRYABLE_ACTIVE_TURNS
+            && let Some(entry_to_evict) = retryable_turns.keys().next().cloned()
+        {
+            retryable_turns.remove(&entry_to_evict);
         }
-        Err(error) => {
-            emit(
-                events,
-                Action::SetStatus(format!("failed to start turn: {error}")),
-            );
-            false
-        }
+        retryable_turns.insert((task_id.clone(), turn_id.clone()), submission.clone());
+        emit(
+            events,
+            Action::TurnStarted {
+                task_id: task_id.clone(),
+                turn_id: turn_id.clone(),
+            },
+        );
+        emit(
+            events,
+            Action::TurnSubmissionRecorded {
+                task_id,
+                turn_id,
+                submission,
+            },
+        );
     }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -7711,6 +7959,40 @@ fn composer_inputs(text: String, attachments: Vec<ComposerAttachment>) -> Vec<Us
     }
     input.extend(structured);
     input
+}
+
+fn retryable_submission_inputs(messages: &[RetryableUserMessage]) -> Vec<UserInput> {
+    let mut input = Vec::new();
+    for (index, message) in messages.iter().enumerate() {
+        if index > 0 {
+            input.push(UserInput::text("\n"));
+        }
+        input.extend(composer_inputs(
+            message.text.clone(),
+            message.attachments.clone(),
+        ));
+    }
+    input
+}
+
+fn record_retryable_steer(
+    retryable_turns: &mut HashMap<(String, String), RetryableTurnSubmission>,
+    task_id: &str,
+    turn_id: &str,
+    message: &RetryableUserMessage,
+) {
+    let key = (task_id.to_owned(), turn_id.to_owned());
+    let cache_overflowed = retryable_turns.get_mut(&key).is_some_and(|submission| {
+        if submission.messages.len() == MAX_RETRYABLE_TURN_MESSAGES {
+            true
+        } else {
+            submission.messages.push(message.clone());
+            false
+        }
+    });
+    if cache_overflowed {
+        retryable_turns.remove(&key);
+    }
 }
 
 fn start_terminal(
@@ -10627,6 +10909,25 @@ fn handle_notification(method: &str, params: Value, events: &Sender<Action>) -> 
                         task_id: notification.thread_id,
                         last_total_tokens: notification.token_usage.last.total_tokens,
                         model_context_window: notification.token_usage.model_context_window,
+                    },
+                );
+            }
+        }
+        "model/safetyBuffering/updated" => {
+            if let Ok(notification) =
+                serde_json::from_value::<ModelSafetyBufferingUpdatedNotification>(params)
+            {
+                emit(
+                    events,
+                    Action::SafetyBufferingUpdated {
+                        task_id: notification.thread_id,
+                        turn_id: notification.turn_id,
+                        show_buffering_ui: notification.show_buffering_ui,
+                        faster_model: notification.faster_model.and_then(|model| {
+                            let model =
+                                bounded(model.trim().to_owned(), MAX_ATTACHMENT_LABEL_BYTES);
+                            (!model.is_empty()).then_some(model)
+                        }),
                     },
                 );
             }
@@ -14177,8 +14478,9 @@ mod tests {
         McpFormElicitation, McpFormFieldKind, McpServerDraft, McpServerStartupFailureReason,
         McpServerStartupState, McpTransportKind, NetworkPolicyAction, OutputArtifactKind,
         PermissionFileSystemAccess, PermissionRequestDetail, Personality, PluginDirectoryTab,
-        PrimaryWindowPlacement, PullRequestMergeMethod, ReducedMotionPreference, TimelineKind,
-        UserInputAnswer, UserInputAnswers,
+        PrimaryWindowPlacement, PullRequestMergeMethod, ReducedMotionPreference,
+        RetryableTurnSubmission, RetryableUserMessage, TimelineKind, UserInputAnswer,
+        UserInputAnswers,
     };
     use codex_platform::{AppServerEvent, ComputerApplication, ComputerKey};
     use codex_protocol::{
@@ -14217,7 +14519,8 @@ mod tests {
         parse_git_preferences, parse_keyboard_shortcut_preferences, parse_primary_window_placement,
         personalization_snapshot, plugin_directory_includes_marketplace,
         plugin_directory_marketplace_kinds, pull_request_generation_prompt,
-        pull_request_output_schema, restored_browser_download, run_computer_tool,
+        pull_request_output_schema, record_retryable_steer, restored_browser_download,
+        retryable_submission_inputs, run_computer_tool, safety_retry_fork_point,
         stored_browser_download, user_input_response,
     };
 
@@ -14375,6 +14678,99 @@ mod tests {
             &input[1],
             UserInput::Skill { name, path } if name == "review" && path == &skill_path
         ));
+    }
+
+    #[test]
+    fn safety_retry_preserves_committed_steers_with_message_boundaries() {
+        let input = retryable_submission_inputs(&[
+            RetryableUserMessage {
+                text: "Inspect the failure".to_owned(),
+                attachments: Vec::new(),
+            },
+            RetryableUserMessage {
+                text: "Focus on the Windows path".to_owned(),
+                attachments: Vec::new(),
+            },
+        ]);
+
+        assert_eq!(input.len(), 3);
+        assert!(matches!(
+            &input[0],
+            UserInput::Text { text, .. } if text == "Inspect the failure"
+        ));
+        assert!(matches!(
+            &input[1],
+            UserInput::Text { text, .. } if text == "\n"
+        ));
+        assert!(matches!(
+            &input[2],
+            UserInput::Text { text, .. } if text == "Focus on the Windows path"
+        ));
+    }
+
+    #[test]
+    fn successful_steer_is_cached_before_the_reducer_round_trip() {
+        let key = ("thread-1".to_owned(), "turn-1".to_owned());
+        let mut retryable_turns = HashMap::from([(
+            key.clone(),
+            RetryableTurnSubmission {
+                messages: vec![RetryableUserMessage {
+                    text: "Inspect the failure".to_owned(),
+                    attachments: Vec::new(),
+                }],
+                model: Some("gpt-5.6-sol".to_owned()),
+                effort: Some("high".to_owned()),
+                service_tier: None,
+                permissions: None,
+                approval_policy: None,
+                approvals_reviewer: None,
+                plan_mode: false,
+                personality: Personality::Pragmatic,
+            },
+        )]);
+
+        record_retryable_steer(
+            &mut retryable_turns,
+            &key.0,
+            &key.1,
+            &RetryableUserMessage {
+                text: "Focus on Windows".to_owned(),
+                attachments: Vec::new(),
+            },
+        );
+
+        assert_eq!(
+            retryable_turns[&key]
+                .messages
+                .iter()
+                .map(|message| message.text.as_str())
+                .collect::<Vec<_>>(),
+            ["Inspect the failure", "Focus on Windows"]
+        );
+    }
+
+    #[test]
+    fn safety_retry_requires_the_interrupted_turn_to_remain_latest() {
+        let valid = vec![
+            json!({"id": "turn-2", "status": "interrupted"}),
+            json!({"id": "turn-1", "status": "completed"}),
+        ];
+        assert!(safety_retry_fork_point(&valid, "turn-2").is_ok());
+        assert!(safety_retry_fork_point(&valid, "turn-1").is_err());
+        assert!(
+            safety_retry_fork_point(&[json!({"id": "turn-2", "status": "inProgress"})], "turn-2")
+                .is_err()
+        );
+        assert!(
+            safety_retry_fork_point(
+                &[
+                    json!({"id": "turn-2", "status": "interrupted"}),
+                    json!({"id": "turn-1", "status": "inProgress"}),
+                ],
+                "turn-2"
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -15755,6 +16151,36 @@ mod tests {
                 last_total_tokens: 125,
                 model_context_window: Some(1000),
             }) if task_id == "thread-1"
+        ));
+    }
+
+    #[test]
+    fn safety_buffering_notification_keeps_only_bounded_retry_metadata() {
+        let (events, actions) = bounded(1);
+
+        assert!(!handle_notification(
+            "model/safetyBuffering/updated",
+            json!({
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "model": "gpt-5.6-sol",
+                "useCases": ["provider-only-use-case"],
+                "reasons": ["provider-only-reason"],
+                "showBufferingUi": true,
+                "fasterModel": "x".repeat(700)
+            }),
+            &events
+        ));
+        assert!(matches!(
+            actions.try_recv(),
+            Ok(Action::SafetyBufferingUpdated {
+                task_id,
+                turn_id,
+                show_buffering_ui: true,
+                faster_model: Some(faster_model),
+            }) if task_id == "thread-1"
+                && turn_id == "turn-1"
+                && faster_model.len() == 512
         ));
     }
 
