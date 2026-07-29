@@ -14141,6 +14141,21 @@ mod tests {
         }
     }
 
+    fn repository_path() -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(r"C:\repo")
+        } else {
+            PathBuf::from("/repo")
+        }
+    }
+
+    fn task_in_repository(id: &str) -> TaskSummary {
+        TaskSummary {
+            cwd: repository_path(),
+            ..task(id)
+        }
+    }
+
     fn pull_request(number: u64) -> PullRequestSummary {
         PullRequestSummary {
             identity: PullRequestIdentity {
@@ -15605,7 +15620,8 @@ mod tests {
     #[test]
     fn a_new_chat_is_created_only_when_its_first_message_is_submitted() {
         let mut state = AppState::default();
-        state.tasks.push(task("t1"));
+        let repository = repository_path();
+        state.tasks.push(task_in_repository("t1"));
         state.selected_task_id = Some("t1".to_owned());
         state.composer_controls.selected_model = Some("gpt-fast".to_owned());
         state.composer_controls.selected_effort = Some("high".to_owned());
@@ -15625,11 +15641,11 @@ mod tests {
             reduce(&mut state, Action::BeginNewChat),
             [
                 Effect::RefreshSkills {
-                    cwds: vec![PathBuf::from("C:\\repo")],
+                    cwds: vec![repository.clone()],
                     force_reload: false,
                 },
                 Effect::RefreshComposerPlugins {
-                    cwds: vec![PathBuf::from("C:\\repo")],
+                    cwds: vec![repository.clone()],
                     force_refetch: false,
                 },
                 Effect::PersistUiState {
@@ -15640,16 +15656,8 @@ mod tests {
         );
         assert_eq!(state.selected_task_id, None);
 
-        let document = if cfg!(windows) {
-            PathBuf::from(r"C:\repo\AGENTS.md")
-        } else {
-            PathBuf::from("/repo/AGENTS.md")
-        };
-        let image = if cfg!(windows) {
-            PathBuf::from(r"C:\repo\screen.png")
-        } else {
-            PathBuf::from("/repo/screen.png")
-        };
+        let document = repository.join("AGENTS.md");
+        let image = repository.join("screen.png");
         reduce(&mut state, Action::TogglePlanMode);
         reduce(
             &mut state,
@@ -15662,7 +15670,7 @@ mod tests {
         assert_eq!(
             reduce(&mut state, Action::SubmitComposer),
             [Effect::CreateTask {
-                cwd: Some(PathBuf::from("C:\\repo")),
+                cwd: Some(repository),
                 model: Some("gpt-fast".to_owned()),
                 effort: Some("high".to_owned()),
                 service_tier: None,
@@ -15990,7 +15998,7 @@ mod tests {
     #[test]
     fn a_worktree_becomes_the_explicit_workspace_for_the_next_chat() {
         let mut state = AppState::default();
-        let worktree = PathBuf::from("C:\\repo-feature");
+        let worktree = repository_path().with_file_name("repo-feature");
         state.git.worktrees.push(GitWorktreeState {
             path: worktree.clone(),
             branch: Some("feature/native-ui".to_owned()),
@@ -16080,7 +16088,8 @@ mod tests {
     #[test]
     fn selecting_an_unloaded_task_requests_one_timeline_page() {
         let mut state = AppState::default();
-        state.tasks.push(task("t1"));
+        let repository = repository_path();
+        state.tasks.push(task_in_repository("t1"));
 
         let effects = reduce(&mut state, Action::SelectTask("t1".to_owned()));
 
@@ -16099,17 +16108,17 @@ mod tests {
                     task_id: "t1".to_owned(),
                 },
                 Effect::RememberWorkspace {
-                    path: PathBuf::from("C:\\repo"),
+                    path: repository.clone(),
                 },
                 Effect::RefreshGit {
-                    cwd: PathBuf::from("C:\\repo"),
+                    cwd: repository.clone(),
                 },
                 Effect::RefreshSkills {
-                    cwds: vec![PathBuf::from("C:\\repo")],
+                    cwds: vec![repository.clone()],
                     force_reload: false,
                 },
                 Effect::RefreshComposerPlugins {
-                    cwds: vec![PathBuf::from("C:\\repo")],
+                    cwds: vec![repository],
                     force_refetch: false,
                 },
             ]
@@ -16521,14 +16530,15 @@ mod tests {
     #[test]
     fn new_and_fork_slash_commands_reuse_the_existing_chat_actions() {
         let mut state = AppState::default();
-        reduce(&mut state, Action::TaskCreated(task("t1")));
+        let repository = repository_path();
+        reduce(&mut state, Action::TaskCreated(task_in_repository("t1")));
 
         reduce(&mut state, Action::ComposerChanged("/fork".to_owned()));
         assert_eq!(
             reduce(&mut state, Action::SubmitComposer),
             [Effect::ForkTask {
                 task_id: "t1".to_owned(),
-                cwd: Some(PathBuf::from("C:\\repo")),
+                cwd: Some(repository.clone()),
                 title: "Task".to_owned(),
             }]
         );
@@ -16540,11 +16550,11 @@ mod tests {
             reduce(&mut state, Action::SubmitComposer),
             [
                 Effect::RefreshSkills {
-                    cwds: vec![PathBuf::from("C:\\repo")],
+                    cwds: vec![repository.clone()],
                     force_reload: false,
                 },
                 Effect::RefreshComposerPlugins {
-                    cwds: vec![PathBuf::from("C:\\repo")],
+                    cwds: vec![repository],
                     force_refetch: false,
                 },
                 Effect::PersistUiState {
@@ -16560,7 +16570,8 @@ mod tests {
     #[test]
     fn fork_destinations_keep_the_source_workspace_and_title() {
         let mut state = AppState::default();
-        reduce(&mut state, Action::TaskCreated(task("t1")));
+        let repository = repository_path();
+        reduce(&mut state, Action::TaskCreated(task_in_repository("t1")));
         let worktrees_root = if cfg!(windows) {
             PathBuf::from(r"E:\codex-worktrees")
         } else {
@@ -16572,7 +16583,7 @@ mod tests {
             reduce(&mut state, Action::ForkSelectedTaskIntoWorktree),
             [Effect::ForkTaskIntoWorktree {
                 task_id: "t1".to_owned(),
-                cwd: PathBuf::from("C:\\repo"),
+                cwd: repository.clone(),
                 title: "Task".to_owned(),
                 worktrees_root: Some(worktrees_root),
             }]
@@ -16593,7 +16604,7 @@ mod tests {
             ),
             [Effect::ForkTask {
                 task_id: "t1".to_owned(),
-                cwd: Some(PathBuf::from("C:\\repo")),
+                cwd: Some(repository),
                 title: "Task".to_owned(),
             }]
         );
@@ -16602,20 +16613,22 @@ mod tests {
     #[test]
     fn failed_worktree_conversation_retries_in_the_existing_worktree() {
         let mut state = AppState::default();
-        reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(&mut state, Action::TaskCreated(task_in_repository("t1")));
         reduce(&mut state, Action::ForkSelectedTaskIntoWorktree);
+        let managed_git_root = repository_path().with_file_name("managed-repo");
+        let managed_workspace = managed_git_root.join("nested");
 
         assert_eq!(
             reduce(
                 &mut state,
                 Action::PendingWorktreeForkReady {
-                    workspace_root: PathBuf::from("C:\\managed\\repo\\nested"),
-                    git_root: PathBuf::from("C:\\managed\\repo"),
+                    workspace_root: managed_workspace.clone(),
+                    git_root: managed_git_root.clone(),
                 },
             ),
             [Effect::RetryPendingWorktreeFork {
                 task_id: "t1".to_owned(),
-                cwd: PathBuf::from("C:\\managed\\repo\\nested"),
+                cwd: managed_workspace.clone(),
                 title: "Task".to_owned(),
             }]
         );
@@ -16635,7 +16648,7 @@ mod tests {
             reduce(&mut state, Action::RetryPendingWorktreeFork),
             [Effect::RetryPendingWorktreeFork {
                 task_id: "t1".to_owned(),
-                cwd: PathBuf::from("C:\\managed\\repo\\nested"),
+                cwd: managed_workspace,
                 title: "Task".to_owned(),
             }]
         );
@@ -16649,7 +16662,7 @@ mod tests {
         assert_eq!(pending.attempt, 2);
         assert_eq!(
             pending.git_root.as_deref(),
-            Some(std::path::Path::new("C:\\managed\\repo"))
+            Some(managed_git_root.as_path())
         );
 
         reduce(
@@ -16660,15 +16673,16 @@ mod tests {
         assert!(state.pending_worktree_fork.is_none());
         assert_eq!(
             state.status_message.as_deref(),
-            Some("Worktree kept at C:\\managed\\repo")
+            Some(format!("Worktree kept at {}", managed_git_root.display()).as_str())
         );
     }
 
     #[test]
     fn cancelling_pending_worktree_ignores_a_stale_ready_event() {
         let mut state = AppState::default();
-        reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(&mut state, Action::TaskCreated(task_in_repository("t1")));
         reduce(&mut state, Action::ForkSelectedTaskIntoWorktree);
+        let stale_worktree = repository_path().with_file_name("stale-worktree");
 
         assert_eq!(
             reduce(&mut state, Action::CancelPendingWorktreeFork),
@@ -16680,8 +16694,8 @@ mod tests {
             reduce(
                 &mut state,
                 Action::PendingWorktreeForkReady {
-                    workspace_root: PathBuf::from("C:\\managed\\repo"),
-                    git_root: PathBuf::from("C:\\managed\\repo"),
+                    workspace_root: stale_worktree.clone(),
+                    git_root: stale_worktree,
                 },
             )
             .is_empty()
@@ -19150,8 +19164,9 @@ mod tests {
 
     #[test]
     fn marketplace_tabs_load_the_stable_catalog_for_the_active_project() {
+        let repository = repository_path();
         let mut state = AppState {
-            tasks: vec![task("active")],
+            tasks: vec![task_in_repository("active")],
             selected_task_id: Some("active".to_owned()),
             ..AppState::default()
         };
@@ -19164,7 +19179,7 @@ mod tests {
                     inspector: InspectorPane::Hidden,
                 },
                 Effect::RefreshMarketplace {
-                    cwds: vec![PathBuf::from("C:\\repo")],
+                    cwds: vec![repository.clone()],
                     directory_tab: PluginDirectoryTab::CuratedByOpenAi,
                     force_refetch: false,
                     include_all_marketplaces: false,
@@ -19177,7 +19192,7 @@ mod tests {
                 Action::SelectMarketplaceTab(MarketplaceTab::Skills)
             ),
             [Effect::RefreshSkills {
-                cwds: vec![PathBuf::from("C:\\repo")],
+                cwds: vec![repository.clone()],
                 force_reload: false,
             }]
         );
@@ -19185,7 +19200,7 @@ mod tests {
         assert_eq!(
             reduce(&mut state, Action::RefreshSkills),
             [Effect::RefreshSkills {
-                cwds: vec![PathBuf::from("C:\\repo")],
+                cwds: vec![repository],
                 force_reload: true,
             }]
         );
@@ -20301,22 +20316,24 @@ mod tests {
 
     #[test]
     fn hooks_require_trust_and_refresh_after_bounded_config_mutations() {
-        let key = "C:\\repo\\.codex\\hooks.json:pre_tool_use:0:0".to_owned();
+        let repository = repository_path();
+        let source_path = repository.join(".codex").join("hooks.json");
+        let key = format!("{}:pre_tool_use:0:0", source_path.display());
         let mut state = AppState {
-            tasks: vec![task("thread-1")],
+            tasks: vec![task_in_repository("thread-1")],
             selected_task_id: Some("thread-1".to_owned()),
             ..AppState::default()
         };
         assert_eq!(
             reduce(&mut state, Action::RefreshHooks),
             [Effect::RefreshHooks {
-                cwds: vec![PathBuf::from("C:\\repo")],
+                cwds: vec![repository.clone()],
             }]
         );
         reduce(
             &mut state,
             Action::HooksLoaded(vec![HookProjectEntry {
-                cwd: PathBuf::from("C:\\repo"),
+                cwd: repository.clone(),
                 hooks: vec![HookCard {
                     key: key.clone(),
                     event_name: HookEventName::PreToolUse,
@@ -20326,7 +20343,7 @@ mod tests {
                     command: Some("python hook.py".to_owned()),
                     timeout_sec: 5,
                     status_message: Some("Checking command".to_owned()),
-                    source_path: PathBuf::from("C:\\repo\\.codex\\hooks.json"),
+                    source_path,
                     source: HookSource::Project,
                     plugin_id: None,
                     display_order: 0,
@@ -20369,7 +20386,7 @@ mod tests {
                 },
             ),
             [Effect::RefreshHooks {
-                cwds: vec![PathBuf::from("C:\\repo")],
+                cwds: vec![repository],
             }]
         );
 
