@@ -18,6 +18,8 @@ All notable changes to codexRS are documented here. The project follows
 - Native PTY/ConPTY terminal and supervised process trees.
 - Opt-in Computer Use with bounded in-memory screenshots and explicit input
   authorization.
+- Native singleton About window with the package version, fixed reference
+  geometry, and OK/Escape close behavior.
 - Single-writer codexRS SQLite state separate from live Codex data.
 - Windows and Ubuntu CI, dependency policy, and release packaging workflows.
 
