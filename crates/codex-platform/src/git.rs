@@ -1891,7 +1891,8 @@ mod tests {
 
         let managed =
             super::create_managed_worktree(&repository.0.join("crates/native"), &worktrees.0)?;
-        assert!(managed.git_root.starts_with(&worktrees.0));
+        let canonical_worktrees = super::managed_worktree_canonicalize(&worktrees.0)?;
+        assert!(managed.git_root.starts_with(canonical_worktrees));
         assert_eq!(
             managed.workspace_root,
             managed.git_root.join("crates/native")
