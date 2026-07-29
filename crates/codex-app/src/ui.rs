@@ -14383,6 +14383,26 @@ impl WorkspaceView {
         let (summary, detail) = timeline_activity_content(&item);
         let item_key = (task_id.to_owned(), item.id.clone());
         let expanded = self.expanded_timeline_item.as_ref() == Some(&item_key);
+        let generated_image_cards = item
+            .output_artifacts
+            .iter()
+            .filter(|artifact| artifact.kind == OutputArtifactKind::GeneratedImage)
+            .cloned()
+            .enumerate()
+            .map(|(artifact_index, artifact)| {
+                self.render_timeline_generated_image_card(
+                    task_id,
+                    index,
+                    artifact_index,
+                    artifact,
+                    cx,
+                )
+            })
+            .collect::<Vec<_>>();
+        let image_generation_pending = item.kind == TimelineKind::Image
+            && !item.completed
+            && item.text.trim() == "Generating image..."
+            && generated_image_cards.is_empty();
         let sources = item
             .sources
             .iter()
@@ -14520,10 +14540,117 @@ impl WorkspaceView {
             .w_full()
             .px_6()
             .py_1()
+            .gap_1()
             .child(row)
+            .children(generated_image_cards)
+            .when(image_generation_pending, |activity| {
+                activity.child(
+                    v_flex()
+                        .ml_6()
+                        .mb_2()
+                        .size(px(400.0))
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(16.0))
+                        .bg(cx.theme().muted.opacity(0.35))
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Generating image..."),
+                )
+            })
             .when_some(expanded_content, |activity, content| {
                 activity.child(content)
             })
+            .into_any_element()
+    }
+
+    fn render_timeline_generated_image_card(
+        &mut self,
+        task_id: &str,
+        item_index: usize,
+        artifact_index: usize,
+        artifact: OutputArtifact,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let path = artifact.path;
+        let Some(workspace) = self
+            .state
+            .tasks
+            .iter()
+            .find(|task| task.id == task_id)
+            .map(|task| task.cwd.clone())
+        else {
+            return self.render_timeline_output_card(
+                item_index,
+                artifact_index,
+                OutputArtifact {
+                    path,
+                    kind: OutputArtifactKind::GeneratedImage,
+                },
+                cx,
+            );
+        };
+        let source = ArtifactImageSource {
+            workspace,
+            path: path.clone(),
+        };
+        let open_path = path;
+        let loading_background = cx.theme().muted.opacity(0.35);
+        let loading_foreground = cx.theme().muted_foreground;
+
+        div()
+            .id(SharedString::from(format!(
+                "timeline-generated-image-{item_index}-{artifact_index}"
+            )))
+            .ml_6()
+            .mb_2()
+            .w_full()
+            .max_w(px(400.0))
+            .h(px(400.0))
+            .flex_none()
+            .overflow_hidden()
+            .rounded(px(16.0))
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().background)
+            .when(pointer_cursors_enabled(cx), |element| {
+                element.cursor_pointer()
+            })
+            .hover(|element| element.border_color(cx.theme().ring))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.dispatch(Action::OpenOutput(open_path.clone()), cx);
+            }))
+            .child(
+                img(move |window: &mut Window, cx: &mut App| {
+                    window.use_asset::<ArtifactImageAsset>(&source, cx)
+                })
+                .size_full()
+                .object_fit(ObjectFit::Contain)
+                .with_loading(move || {
+                    v_flex()
+                        .size_full()
+                        .items_center()
+                        .justify_center()
+                        .bg(loading_background)
+                        .text_xs()
+                        .text_color(loading_foreground)
+                        .child("Loading image...")
+                        .into_any_element()
+                })
+                .with_fallback(move || {
+                    v_flex()
+                        .size_full()
+                        .items_center()
+                        .justify_center()
+                        .gap_2()
+                        .bg(loading_background)
+                        .text_xs()
+                        .text_color(loading_foreground)
+                        .child(Icon::new(IconName::GalleryVerticalEnd).small())
+                        .child("Image unavailable")
+                        .into_any_element()
+                }),
+            )
             .into_any_element()
     }
 
