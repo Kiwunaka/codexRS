@@ -18,7 +18,7 @@ repository = "https://github.com/Kiwunaka/codexRS"
 homepage = "https://github.com/Kiwunaka/codexRS"
 
 [workspace.dependencies]
-base64 = "0.22.1"
+base64 = "0.23.0"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 crossbeam-channel = "0.5.15"
 futures = "0.3.31"
