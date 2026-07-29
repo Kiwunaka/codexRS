@@ -125,8 +125,9 @@ use codex_protocol::{
     McpServerStartupState as ProtocolMcpServerStartupState,
     McpServerStatus as ProtocolMcpServerStatus, McpServerStatusDetail,
     McpServerStatusUpdatedNotification, ModelListParams, ModelSafetyBufferingUpdatedNotification,
-    NetworkApprovalProtocol, NetworkPolicyAmendment, NetworkPolicyAmendmentDecision,
-    NetworkPolicyRuleAction, PermissionGrantScope, PermissionProfile, PermissionProfileListParams,
+    ModelVerification, ModelVerificationNotification, NetworkApprovalProtocol,
+    NetworkPolicyAmendment, NetworkPolicyAmendmentDecision, NetworkPolicyRuleAction,
+    PermissionGrantScope, PermissionProfile, PermissionProfileListParams,
     PermissionsRequestApprovalParams, PermissionsRequestApprovalResponse, PlanType,
     PluginInstallParams, PluginListMarketplaceKind, PluginListParams, PluginReadParams,
     PluginUninstallParams, SkillScope as ProtocolSkillScope, SkillsConfigWriteParams,
@@ -167,6 +168,8 @@ const MAX_WEB_SEARCH_SOURCES: usize = 32;
 const MAX_CITATION_FIELD_BYTES: usize = 4 * 1024;
 const MAX_SOURCE_TITLE_BYTES: usize = 512;
 const MAX_SOURCE_URL_BYTES: usize = 8 * 1024;
+const TRUSTED_ACCESS_FOR_CYBER_WARNING: &str = "Your conversations have multiple flags for possible cybersecurity risk. Responses may take longer because extra safety checks are on. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber";
+const TRUSTED_ACCESS_FOR_CYBER_URL: &str = "https://chatgpt.com/cyber";
 const MAX_STATUS_BYTES: usize = 16 * 1024;
 const MAX_CONFIG_PATH_BYTES: usize = 32 * 1024;
 const MAX_CONFIG_VERSION_BYTES: usize = 512;
@@ -10913,6 +10916,39 @@ fn handle_notification(method: &str, params: Value, events: &Sender<Action>) -> 
                 );
             }
         }
+        "model/verification" => {
+            if let Ok(notification) =
+                serde_json::from_value::<ModelVerificationNotification>(params)
+                && notification
+                    .verifications
+                    .contains(&ModelVerification::TrustedAccessForCyber)
+            {
+                let turn_id = notification.turn_id;
+                emit(
+                    events,
+                    Action::UpsertTimelineItem {
+                        task_id: notification.thread_id,
+                        item: TimelineItem {
+                            id: format!("model-verification:{turn_id}:trusted-access-for-cyber"),
+                            turn_id,
+                            kind: TimelineKind::Warning,
+                            text: TRUSTED_ACCESS_FOR_CYBER_WARNING.to_owned(),
+                            detail: None,
+                            process_id: None,
+                            memory_citations: Vec::new(),
+                            sources: vec![TimelineSource {
+                                title: "Trusted Access for Cyber".to_owned(),
+                                url: TRUSTED_ACCESS_FOR_CYBER_URL.to_owned(),
+                            }],
+                            attachments: Vec::new(),
+                            output_artifacts: Vec::new(),
+                            edit_supported: false,
+                            completed: true,
+                        },
+                    },
+                );
+            }
+        }
         "model/safetyBuffering/updated" => {
             if let Ok(notification) =
                 serde_json::from_value::<ModelSafetyBufferingUpdatedNotification>(params)
@@ -14479,8 +14515,8 @@ mod tests {
         McpServerStartupState, McpTransportKind, NetworkPolicyAction, OutputArtifactKind,
         PermissionFileSystemAccess, PermissionRequestDetail, Personality, PluginDirectoryTab,
         PrimaryWindowPlacement, PullRequestMergeMethod, ReducedMotionPreference,
-        RetryableTurnSubmission, RetryableUserMessage, TimelineKind, UserInputAnswer,
-        UserInputAnswers,
+        RetryableTurnSubmission, RetryableUserMessage, TimelineItem, TimelineKind, TimelineSource,
+        UserInputAnswer, UserInputAnswers,
     };
     use codex_platform::{AppServerEvent, ComputerApplication, ComputerKey};
     use codex_protocol::{
@@ -14496,22 +14532,23 @@ mod tests {
         COMPUTER_USE_USER_INPUT_STALE_MESSAGE, ComputerUseAccessibilityClient,
         ComputerUsePermission, GOAL_CONTINUATION_DELAY, GitRefreshDebouncer,
         GoalContinuationScheduler, MAX_ITEM_TEXT_BYTES, McpElicitationMapError, PendingApproval,
-        STABLE_OPT_OUT_NOTIFICATION_METHODS, TASK_SEARCH_DEBOUNCE, TaskSearchDebouncer,
-        TerminalParserCallbacks, agent_configuration_snapshot, appearance_theme_key,
-        browser_origin_auto_decision, browser_origin_elicitation_response, browser_policy_target,
-        browser_resource_auto_decision, browser_resource_elicitation_response,
-        combined_git_generation_prompt, combined_git_output_schema, commit_generation_prompt,
-        commit_message_output_schema, composer_config_key, composer_inputs,
-        computer_application_value, computer_tool_request_meta,
-        computer_tool_requires_interruption_monitor, computer_use_allowed_app_ids,
-        computer_use_allowed_app_ids_value, computer_use_app_authorized,
-        computer_use_dynamic_tools, computer_window_argument, computer_window_schema,
-        drag_coordinates, encode_appearance_preferences, encode_browser_download_preferences,
-        encode_browser_permissions, encode_git_preferences, encode_keyboard_shortcut_preferences,
-        encode_primary_window_placement, forbidden_computer_target_message, handle_notification,
-        hook_state_config_value, index_app_logos, initialize_capabilities, is_hidden_timeline_item,
-        map_app_detail, map_app_server_approval, map_apps, map_fuzzy_file_search_results,
-        map_mcp_elicitation, map_mcp_resource_contents, map_mcp_runtime_catalog, map_timeline_item,
+        STABLE_OPT_OUT_NOTIFICATION_METHODS, TASK_SEARCH_DEBOUNCE, TRUSTED_ACCESS_FOR_CYBER_URL,
+        TRUSTED_ACCESS_FOR_CYBER_WARNING, TaskSearchDebouncer, TerminalParserCallbacks,
+        agent_configuration_snapshot, appearance_theme_key, browser_origin_auto_decision,
+        browser_origin_elicitation_response, browser_policy_target, browser_resource_auto_decision,
+        browser_resource_elicitation_response, combined_git_generation_prompt,
+        combined_git_output_schema, commit_generation_prompt, commit_message_output_schema,
+        composer_config_key, composer_inputs, computer_application_value,
+        computer_tool_request_meta, computer_tool_requires_interruption_monitor,
+        computer_use_allowed_app_ids, computer_use_allowed_app_ids_value,
+        computer_use_app_authorized, computer_use_dynamic_tools, computer_window_argument,
+        computer_window_schema, drag_coordinates, encode_appearance_preferences,
+        encode_browser_download_preferences, encode_browser_permissions, encode_git_preferences,
+        encode_keyboard_shortcut_preferences, encode_primary_window_placement,
+        forbidden_computer_target_message, handle_notification, hook_state_config_value,
+        index_app_logos, initialize_capabilities, is_hidden_timeline_item, map_app_detail,
+        map_app_server_approval, map_apps, map_fuzzy_file_search_results, map_mcp_elicitation,
+        map_mcp_resource_contents, map_mcp_runtime_catalog, map_timeline_item,
         map_user_input_request, mcp_elicitation_content_json, mcp_server_config_value,
         parse_appearance_preferences, parse_appearance_theme, parse_browser_download_preferences,
         parse_browser_permissions, parse_computer_key_chord, parse_generated_commit_message,
@@ -16182,6 +16219,54 @@ mod tests {
                 && turn_id == "turn-1"
                 && faster_model.len() == 512
         ));
+    }
+
+    #[test]
+    fn model_verification_notification_surfaces_only_the_stable_cyber_warning() {
+        let (events, actions) = bounded(1);
+
+        assert!(!handle_notification(
+            "model/verification",
+            json!({
+                "threadId": "thread-1",
+                "turnId": "turn-7",
+                "verifications": ["trustedAccessForCyber"]
+            }),
+            &events
+        ));
+        assert!(matches!(
+            actions.try_recv(),
+            Ok(Action::UpsertTimelineItem {
+                task_id,
+                item: TimelineItem {
+                    id,
+                    turn_id,
+                    kind: TimelineKind::Warning,
+                    text,
+                    sources,
+                    completed: true,
+                    ..
+                },
+            }) if task_id == "thread-1"
+                && id == "model-verification:turn-7:trusted-access-for-cyber"
+                && turn_id == "turn-7"
+                && text == TRUSTED_ACCESS_FOR_CYBER_WARNING
+                && sources == [TimelineSource {
+                    title: "Trusted Access for Cyber".to_owned(),
+                    url: TRUSTED_ACCESS_FOR_CYBER_URL.to_owned(),
+                }]
+        ));
+
+        assert!(!handle_notification(
+            "model/verification",
+            json!({
+                "threadId": "thread-1",
+                "turnId": "turn-8",
+                "verifications": []
+            }),
+            &events
+        ));
+        assert!(actions.try_recv().is_err());
     }
 
     #[test]

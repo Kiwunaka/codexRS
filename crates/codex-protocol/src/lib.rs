@@ -1401,6 +1401,20 @@ pub struct ModelSafetyBufferingUpdatedNotification {
     pub faster_model: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ModelVerification {
+    TrustedAccessForCyber,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelVerificationNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub verifications: Vec<ModelVerification>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnDiffUpdatedNotification {
@@ -3077,14 +3091,14 @@ mod tests {
         McpServerElicitationRequestResponse, McpServerOauthLoginParams,
         McpServerStartupFailureReason, McpServerStartupState, McpServerStatusDetail,
         McpServerStatusUpdatedNotification, ModelListParams, ModelListResponse,
-        ModelSafetyBufferingUpdatedNotification, NetworkPolicyAmendment,
-        NetworkPolicyAmendmentDecision, NetworkPolicyRuleAction, PermissionGrantScope,
-        PermissionProfile, PermissionProfileListParams, PermissionProfileListResponse,
-        PermissionsRequestApprovalParams, PermissionsRequestApprovalResponse, PlanType,
-        PluginListMarketplaceKind, PluginReadParams, PluginReadResponse,
-        PluginScheduledTaskSchedule, PluginScheduledTaskSummary, ProtocolError, SkillScope,
-        SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams, SkillsListResponse,
-        ThreadArchiveParams, ThreadBackgroundTerminalsCleanResponse,
+        ModelSafetyBufferingUpdatedNotification, ModelVerification, ModelVerificationNotification,
+        NetworkPolicyAmendment, NetworkPolicyAmendmentDecision, NetworkPolicyRuleAction,
+        PermissionGrantScope, PermissionProfile, PermissionProfileListParams,
+        PermissionProfileListResponse, PermissionsRequestApprovalParams,
+        PermissionsRequestApprovalResponse, PlanType, PluginListMarketplaceKind, PluginReadParams,
+        PluginReadResponse, PluginScheduledTaskSchedule, PluginScheduledTaskSummary, ProtocolError,
+        SkillScope, SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams,
+        SkillsListResponse, ThreadArchiveParams, ThreadBackgroundTerminalsCleanResponse,
         ThreadBackgroundTerminalsListParams, ThreadBackgroundTerminalsListResponse,
         ThreadBackgroundTerminalsTerminateParams, ThreadBackgroundTerminalsTerminateResponse,
         ThreadCompactStartParams, ThreadCompactStartResponse, ThreadDeleteParams, ThreadForkParams,
@@ -3552,6 +3566,24 @@ mod tests {
         assert_eq!(notification.reasons, ["safety_buffering"]);
         assert!(notification.show_buffering_ui);
         assert_eq!(notification.faster_model.as_deref(), Some("gpt-5.6-terra"));
+    }
+
+    #[test]
+    fn model_verification_notification_matches_the_stable_contract() {
+        let Ok(notification) = serde_json::from_value::<ModelVerificationNotification>(json!({
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "verifications": ["trustedAccessForCyber"]
+        })) else {
+            panic!("stable model verification notification should decode");
+        };
+
+        assert_eq!(notification.thread_id, "thread-1");
+        assert_eq!(notification.turn_id, "turn-1");
+        assert_eq!(
+            notification.verifications,
+            [ModelVerification::TrustedAccessForCyber]
+        );
     }
 
     #[test]
