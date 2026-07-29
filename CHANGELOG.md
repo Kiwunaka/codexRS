@@ -11,6 +11,8 @@ All notable changes to codexRS are documented here. The project follows
   Computer Use surfaces.
 - Bounded typed protocol for the official Codex app-server.
 - Task paging, timeline streaming, forks, approvals, and plugin operations.
+- Stable-shaped generated-image placeholders and bounded, clickable timeline
+  previews backed by the existing native Outputs viewer.
 - Native Git status, staging, branch switching, worktree creation, and
   virtualized unified diffs.
 - Native PTY/ConPTY terminal and supervised process trees.
