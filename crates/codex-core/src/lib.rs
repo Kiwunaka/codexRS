@@ -1,13 +1,162 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 pub const MAX_COMPOSER_BYTES: usize = 256 * 1024;
+pub const MAX_COMPOSER_ATTACHMENTS: usize = 32;
+pub const MAX_ATTACHMENT_LABEL_BYTES: usize = 512;
+pub const MAX_FUZZY_FILE_QUERY_BYTES: usize = 1_024;
+pub const MAX_FUZZY_FILE_RESULTS: usize = 100;
+pub const MAX_FUZZY_FILE_ROOTS: usize = 8;
+pub const MAX_FUZZY_FILE_PATH_BYTES: usize = 8 * 1024;
 pub const MAX_VISIBLE_THREADS: usize = 500;
+pub const MAX_LOADED_THREADS: usize = 20;
 pub const MAX_TIMELINE_ITEMS: usize = 2_000;
+pub const MAX_TURN_DIFF_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_PENDING_APPROVALS: usize = 64;
+pub const MAX_PENDING_MCP_ELICITATIONS: usize = 64;
+pub const MAX_PENDING_USER_INPUT_REQUESTS: usize = 64;
+pub const MAX_USER_INPUT_QUESTIONS: usize = 3;
+pub const MAX_USER_INPUT_OPTIONS: usize = 64;
+pub const MAX_USER_INPUT_VALUE_BYTES: usize = 8 * 1024;
+pub const MAX_MCP_FORM_FIELDS: usize = 32;
+pub const MAX_MCP_FORM_OPTIONS: usize = 64;
+pub const MAX_MCP_FORM_VALUE_BYTES: usize = 8 * 1024;
+pub const MAX_MCP_FORM_IMAGE_DATA_URL_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_MARKETPLACE_ITEMS: usize = 500;
+pub const MAX_PLUGIN_DETAIL_ITEMS: usize = 100;
+pub const MAX_MARKETPLACE_SOURCE_BYTES: usize = 4 * 1024;
+pub const MAX_MARKETPLACE_SOURCES: usize = 128;
+pub const MAX_MARKETPLACE_NAME_BYTES: usize = 256;
+pub const MAX_MARKETPLACE_REF_BYTES: usize = 512;
+pub const MAX_MARKETPLACE_SPARSE_PATHS: usize = 64;
+pub const MAX_MARKETPLACE_SPARSE_PATH_BYTES: usize = 2 * 1024;
+pub const MAX_SKILL_ITEMS: usize = 500;
+pub const MAX_HOOK_PROJECTS: usize = 64;
+pub const MAX_HOOK_ITEMS: usize = 1_000;
+pub const MAX_HOOK_ISSUES: usize = 256;
+pub const MAX_HOOK_FIELD_BYTES: usize = 16 * 1024;
+pub const MAX_APP_ITEMS: usize = 500;
+pub const MAX_MCP_SERVER_ITEMS: usize = 500;
+pub const MAX_MCP_SERVER_FIELD_BYTES: usize = 8 * 1024;
+pub const MAX_MCP_SERVER_LIST_ITEMS: usize = 128;
 pub const MAX_COMPUTER_WINDOWS: usize = 100;
+pub const MAX_COMPUTER_APPLICATIONS: usize = 40;
+pub const MAX_COMPUTER_ALLOWED_APPS: usize = 100;
+pub const MAX_COMPUTER_APP_ID_BYTES: usize = 512;
+pub const MAX_BROWSER_CONTEXT_ID_BYTES: usize = 256;
+pub const MAX_BROWSER_TABS: usize = 16;
+pub const MAX_BROWSER_URL_BYTES: usize = 8 * 1024;
+pub const MAX_BROWSER_TITLE_BYTES: usize = 512;
+pub const MAX_BROWSER_FRAME_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_BROWSER_KEY_BYTES: usize = 64;
+pub const MAX_BROWSER_TEXT_BYTES: usize = 256;
+pub const MAX_BROWSER_DOWNLOADS: usize = 200;
+pub const MAX_BROWSER_DOWNLOAD_PATH_BYTES: usize = 8 * 1024;
+pub const MAX_BROWSER_SITE_PERMISSIONS: usize = 200;
+pub const MAX_BROWSER_PERMISSION_ORIGIN_BYTES: usize = 8 * 1024;
 pub const MAX_GIT_BRANCH_BYTES: usize = 1_024;
+pub const MAX_GIT_BRANCH_PREFIX_BYTES: usize = 128;
+pub const MAX_GIT_INSTRUCTIONS_BYTES: usize = 16 * 1024;
+pub const MAX_WORKTREE_ROOT_BYTES: usize = 16 * 1024;
+pub const MAX_GIT_COMMIT_MESSAGE_CHARS: usize = 4_000;
+pub const MAX_GIT_PULL_REQUEST_TITLE_CHARS: usize = 120;
+pub const MAX_GIT_PULL_REQUEST_BODY_CHARS: usize = 30_000;
+pub const MAX_PULL_REQUEST_SEARCH_CHARS: usize = 256;
+pub const MAX_PULL_REQUEST_ITEMS: usize = 1_000;
+pub const MAX_BACKGROUND_TERMINALS: usize = 256;
+pub const MAX_TERMINAL_TABS: usize = 16;
+pub const MAX_TERMINAL_TABS_PER_TASK: usize = 8;
+pub const MAX_OUTPUT_ARTIFACTS: usize = 128;
+pub const MAX_COMPOSER_OPTIONS: usize = 64;
+pub const MAX_TASK_TITLE_BYTES: usize = 512;
+pub const MAX_TASK_SEARCH_QUERY_BYTES: usize = 1_024;
+pub const MAX_TASK_SEARCH_RESULTS: usize = 500;
+pub const MAX_PINNED_TASKS: usize = 50;
+pub const MAX_PINNED_TASK_ID_BYTES: usize = 256;
+pub const MAX_PENDING_WORKTREE_FORK_ERROR_BYTES: usize = 16 * 1024;
+pub const MAX_GOAL_OBJECTIVE_BYTES: usize = 16 * 1024;
+pub const MAX_ACCOUNT_FIELD_BYTES: usize = 512;
+pub const MAX_USAGE_LIMIT_WINDOWS: usize = 2;
+pub const MAX_FEEDBACK_DETAILS_BYTES: usize = 16 * 1024;
+pub const MAX_KEYBOARD_SHORTCUT_COMMANDS: usize = 70;
+pub const MAX_KEYBOARD_SHORTCUTS_PER_COMMAND: usize = 4;
+pub const MAX_KEYBOARD_SHORTCUT_ACCELERATOR_BYTES: usize = 128;
+pub const STANDARD_SERVICE_TIER_ID: &str = "default";
+
+pub const KEYBOARD_SHORTCUT_COMMAND_IDS: [&str; 71] = [
+    "newTask",
+    "newProjectlessTask",
+    "archiveThread",
+    "toggleThreadPin",
+    "copyConversationMarkdown",
+    "copyDeeplink",
+    "copySessionId",
+    "copyWorkingDirectory",
+    "forkThread",
+    "searchChats",
+    "navigateBack",
+    "navigateForward",
+    "previousThread",
+    "nextThread",
+    "thread1",
+    "thread2",
+    "thread3",
+    "thread4",
+    "thread5",
+    "thread6",
+    "thread7",
+    "thread8",
+    "thread9",
+    "findInThread",
+    "focusBrowserAddressBar",
+    "navigateBrowserBack",
+    "navigateBrowserForward",
+    "toggleSidebar",
+    "toggleBottomPanel",
+    "openReviewTab",
+    "toggleReviewTab",
+    "toggleSidePanel",
+    "toggleMaximizeSidePanel",
+    "toggleTerminal",
+    "openBrowserTab",
+    "toggleBrowserPanel",
+    "openFolder",
+    "forceReloadSkills",
+    "openSkills",
+    "keyboardShortcuts",
+    "mcpSettings",
+    "personalitySettings",
+    "settings",
+    "openProcessManager",
+    "logOut",
+    "feedback",
+    "showKeyboardShortcuts",
+    "openCommandMenu",
+    "searchFiles",
+    "composer.openModelPicker",
+    "composer.openProjectPicker",
+    "composer.submit",
+    "composer.addPhotos",
+    "composer.addFiles",
+    "composer.toggleFastMode",
+    "composer.increaseReasoningEffort",
+    "composer.decreaseReasoningEffort",
+    "composer.cycleReasoningEffort",
+    "composer.togglePlanMode",
+    "approval.approve",
+    "approval.decline",
+    "git.commit",
+    "git.createPullRequest",
+    "git.createDraftPullRequest",
+    "git.createBranch",
+    "git.mergePullRequest",
+    "git.openPullRequest",
+    "renameThread",
+    "closeWindow",
+    "quit",
+    "toggleFullScreen",
+];
 
 /// Identifies the installed build used as the behavioral oracle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,6 +164,7 @@ pub struct BuildReference {
     pub package_name: &'static str,
     pub package_version: &'static str,
     pub cli_version: &'static str,
+    pub cli_sha256: &'static str,
     pub architecture: &'static str,
     pub runtime: &'static str,
 }
@@ -23,6 +173,7 @@ pub const STABLE_REFERENCE: BuildReference = BuildReference {
     package_name: "OpenAI.Codex",
     package_version: "26.721.3996.0",
     cli_version: "0.146.0-alpha.3.1",
+    cli_sha256: "39e9e041ea33ac34aad9578adfe660c5c7a6dc8f82620b77623960f9352a6ef3",
     architecture: "x64",
     runtime: "Owl/Chromium 150.0.7871.128",
 };
@@ -45,15 +196,627 @@ pub enum ConnectionStatus {
 pub enum MainRoute {
     Tasks,
     Repository,
+    PullRequests,
     Marketplace,
     Settings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InspectorPane {
+    Hidden,
     Changes,
+    Outputs,
+    Files,
     Terminal,
     ComputerUse,
+    Browser,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalDockLocation {
+    Bottom,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AppearanceTheme {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppearanceVariant {
+    Light,
+    Dark,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppearanceSemanticColors {
+    pub diff_added: u32,
+    pub diff_removed: u32,
+    pub skill: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppearancePalette {
+    pub accent: u32,
+    pub contrast: u8,
+    pub code_font: Option<String>,
+    pub code_theme_id: String,
+    pub ink: u32,
+    pub opaque_windows: bool,
+    pub semantic_colors: AppearanceSemanticColors,
+    pub surface: u32,
+    pub ui_font: Option<String>,
+}
+
+impl AppearancePalette {
+    pub fn codex(variant: AppearanceVariant) -> Self {
+        match variant {
+            AppearanceVariant::Light => Self {
+                accent: 0x33_9c_ff,
+                contrast: 45,
+                code_font: None,
+                code_theme_id: "codex".to_owned(),
+                ink: 0x1a_1c_1f,
+                opaque_windows: false,
+                semantic_colors: AppearanceSemanticColors {
+                    diff_added: 0x00_a2_40,
+                    diff_removed: 0xba_26_23,
+                    skill: 0x92_4f_f7,
+                },
+                surface: 0xff_ff_ff,
+                ui_font: None,
+            },
+            AppearanceVariant::Dark => Self {
+                accent: 0x33_9c_ff,
+                contrast: 60,
+                code_font: None,
+                code_theme_id: "codex".to_owned(),
+                ink: 0xff_ff_ff,
+                opaque_windows: false,
+                semantic_colors: AppearanceSemanticColors {
+                    diff_added: 0x40_c9_77,
+                    diff_removed: 0xfa_42_3e,
+                    skill: 0xad_7b_f9,
+                },
+                surface: 0x18_18_18,
+                ui_font: None,
+            },
+        }
+    }
+
+    pub fn proof_light() -> Self {
+        Self {
+            accent: 0x3d_75_5d,
+            code_theme_id: "proof".to_owned(),
+            ink: 0x2f_31_2d,
+            semantic_colors: AppearanceSemanticColors {
+                diff_added: 0x3d_75_5d,
+                diff_removed: 0xba_26_23,
+                skill: 0x5f_6a_c2,
+            },
+            surface: 0xf5_f3_ed,
+            ..Self::codex(AppearanceVariant::Light)
+        }
+    }
+
+    pub fn select_code_theme(&mut self, theme_id: &str, variant: AppearanceVariant) -> bool {
+        let Some(seed) = appearance_code_theme_seed(theme_id, variant) else {
+            return false;
+        };
+        self.accent = seed.accent;
+        self.code_theme_id = theme_id.to_owned();
+        self.ink = seed.ink;
+        self.semantic_colors = seed.semantic_colors;
+        self.surface = seed.surface;
+
+        match (theme_id, variant) {
+            ("linear", _) => {
+                self.ui_font = Some("Inter".to_owned());
+                self.opaque_windows = true;
+            }
+            ("lobster", AppearanceVariant::Dark) => {
+                self.ui_font = Some("Satoshi".to_owned());
+            }
+            ("matrix", AppearanceVariant::Dark) => {
+                self.code_font = None;
+                self.ui_font = Some(
+                    "ui-monospace, \"SFMono-Regular\", \"SF Mono\", Menlo, Consolas, \"Liberation Mono\", monospace"
+                        .to_owned(),
+                );
+                self.opaque_windows = true;
+            }
+            ("notion", _) => {
+                self.code_font = None;
+                self.ui_font = None;
+                self.opaque_windows = true;
+            }
+            ("proof", AppearanceVariant::Light) => {
+                self.code_font = None;
+                self.ui_font = None;
+                self.opaque_windows = false;
+            }
+            ("raycast", _) => {
+                self.code_font = Some("\"Jetbrains Mono\"".to_owned());
+                self.ui_font = Some("Inter".to_owned());
+                self.opaque_windows = false;
+            }
+            ("sentry", AppearanceVariant::Dark) => {
+                self.code_font = None;
+                self.ui_font = None;
+            }
+            ("vercel", AppearanceVariant::Light) => {
+                self.code_font =
+                    Some("\"Geist Mono\", ui-monospace, \"SFMono-Regular\"".to_owned());
+                self.contrast = 40;
+                self.ui_font = Some("Geist, Inter".to_owned());
+                self.opaque_windows = true;
+            }
+            ("vercel", AppearanceVariant::Dark) => {
+                self.code_font =
+                    Some("\"Geist Mono\", ui-monospace, \"SFMono-Regular\"".to_owned());
+                self.contrast = 50;
+                self.ui_font = Some("Geist, Inter".to_owned());
+                self.opaque_windows = true;
+            }
+            ("xcode", AppearanceVariant::Light) => {
+                self.code_font = Some("\"SFMono-Regular\"".to_owned());
+            }
+            ("xcode", AppearanceVariant::Dark) => {
+                self.code_font = Some("\"SFMono-Medium\"".to_owned());
+            }
+            _ => {}
+        }
+        true
+    }
+
+    pub fn normalized(mut self, variant: AppearanceVariant) -> Self {
+        let defaults = Self::codex(variant);
+        self.accent &= 0xff_ff_ff;
+        self.contrast = self.contrast.min(100);
+        self.code_font = normalize_appearance_font(self.code_font);
+        if !appearance_code_theme_supports_variant(&self.code_theme_id, variant) {
+            self.code_theme_id = defaults.code_theme_id;
+        }
+        self.ink &= 0xff_ff_ff;
+        self.semantic_colors.diff_added &= 0xff_ff_ff;
+        self.semantic_colors.diff_removed &= 0xff_ff_ff;
+        self.semantic_colors.skill &= 0xff_ff_ff;
+        self.surface &= 0xff_ff_ff;
+        self.ui_font = normalize_appearance_font(self.ui_font);
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ReducedMotionPreference {
+    #[default]
+    System,
+    On,
+    Off,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DiffMarkerStyle {
+    #[default]
+    Color,
+    Symbols,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KeyboardShortcutPreferences {
+    pub overrides: HashMap<String, Vec<String>>,
+}
+
+impl KeyboardShortcutPreferences {
+    pub fn normalized(self) -> Self {
+        let mut overrides = HashMap::new();
+        for command_id in KEYBOARD_SHORTCUT_COMMAND_IDS {
+            if overrides.len() >= MAX_KEYBOARD_SHORTCUT_COMMANDS {
+                break;
+            }
+            let Some(bindings) = self.overrides.get(command_id) else {
+                continue;
+            };
+            let mut normalized = Vec::new();
+            for binding in bindings {
+                let binding = binding.trim();
+                if binding.is_empty()
+                    || binding.len() > MAX_KEYBOARD_SHORTCUT_ACCELERATOR_BYTES
+                    || binding.chars().any(char::is_control)
+                    || normalized
+                        .iter()
+                        .any(|existing: &String| existing.eq_ignore_ascii_case(binding))
+                {
+                    continue;
+                }
+                normalized.push(binding.to_owned());
+                if normalized.len() >= MAX_KEYBOARD_SHORTCUTS_PER_COMMAND {
+                    break;
+                }
+            }
+            overrides.insert(command_id.to_owned(), normalized);
+        }
+        Self { overrides }
+    }
+
+    pub fn bindings_for(&self, command_id: &str) -> Option<&[String]> {
+        self.overrides.get(command_id).map(Vec::as_slice)
+    }
+
+    pub fn has_custom_bindings(&self) -> bool {
+        !self.overrides.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyboardShortcutUpdateTarget {
+    Command(String),
+    ResetAll,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppearancePreferences {
+    pub code_font_size: u8,
+    pub dark: AppearancePalette,
+    pub diff_marker_style: DiffMarkerStyle,
+    pub light: AppearancePalette,
+    pub reduced_motion: ReducedMotionPreference,
+    pub ui_font_size: u8,
+    pub use_pointer_cursors: bool,
+}
+
+impl AppearancePreferences {
+    pub fn palette(&self, variant: AppearanceVariant) -> &AppearancePalette {
+        match variant {
+            AppearanceVariant::Light => &self.light,
+            AppearanceVariant::Dark => &self.dark,
+        }
+    }
+
+    pub fn palette_mut(&mut self, variant: AppearanceVariant) -> &mut AppearancePalette {
+        match variant {
+            AppearanceVariant::Light => &mut self.light,
+            AppearanceVariant::Dark => &mut self.dark,
+        }
+    }
+
+    pub fn normalized(mut self) -> Self {
+        self.code_font_size = self.code_font_size.clamp(8, 24);
+        self.dark = self.dark.normalized(AppearanceVariant::Dark);
+        self.light = self.light.normalized(AppearanceVariant::Light);
+        self.ui_font_size = self.ui_font_size.clamp(11, 16);
+        self
+    }
+}
+
+impl Default for AppearancePreferences {
+    fn default() -> Self {
+        Self {
+            code_font_size: 12,
+            dark: AppearancePalette::codex(AppearanceVariant::Dark),
+            diff_marker_style: DiffMarkerStyle::Color,
+            light: AppearancePalette::codex(AppearanceVariant::Light),
+            reduced_motion: ReducedMotionPreference::System,
+            ui_font_size: 14,
+            use_pointer_cursors: false,
+        }
+    }
+}
+
+pub const APPEARANCE_CODE_THEMES: [(&str, &str); 28] = [
+    ("absolutely", "Absolutely"),
+    ("ayu", "Ayu"),
+    ("catppuccin", "Catppuccin"),
+    ("codex", "Codex"),
+    ("dracula", "Dracula"),
+    ("everforest", "Everforest"),
+    ("github", "GitHub"),
+    ("gruvbox", "Gruvbox"),
+    ("linear", "Linear"),
+    ("lobster", "Lobster"),
+    ("material", "Material"),
+    ("matrix", "Matrix"),
+    ("monokai", "Monokai"),
+    ("night-owl", "Night Owl"),
+    ("nord", "Nord"),
+    ("notion", "Notion"),
+    ("oscurange", "Oscurange"),
+    ("one", "One"),
+    ("proof", "Proof"),
+    ("raycast", "Raycast"),
+    ("rose-pine", "Rose Pine"),
+    ("sentry", "Sentry"),
+    ("solarized", "Solarized"),
+    ("temple", "Temple"),
+    ("tokyo-night", "Tokyo Night"),
+    ("vercel", "Vercel"),
+    ("vscode-plus", "VS Code Plus"),
+    ("xcode", "Xcode"),
+];
+
+#[derive(Clone, Copy)]
+struct AppearanceCodeThemeSeed {
+    accent: u32,
+    ink: u32,
+    semantic_colors: AppearanceSemanticColors,
+    surface: u32,
+}
+
+fn appearance_code_theme_seed(
+    theme_id: &str,
+    variant: AppearanceVariant,
+) -> Option<AppearanceCodeThemeSeed> {
+    macro_rules! seed {
+        ($accent:expr, $ink:expr, $added:expr, $removed:expr, $skill:expr, $surface:expr) => {
+            Some(AppearanceCodeThemeSeed {
+                accent: $accent,
+                ink: $ink,
+                semantic_colors: AppearanceSemanticColors {
+                    diff_added: $added,
+                    diff_removed: $removed,
+                    skill: $skill,
+                },
+                surface: $surface,
+            })
+        };
+    }
+
+    match (theme_id, variant) {
+        ("absolutely", AppearanceVariant::Light) => {
+            seed!(
+                0xcc_7d_5e, 0x2d_2d_2b, 0x00_c8_53, 0xff_5f_38, 0xcc_7d_5e, 0xf9_f9_f7
+            )
+        }
+        ("absolutely", AppearanceVariant::Dark) => {
+            seed!(
+                0xcc_7d_5e, 0xf9_f9_f7, 0x00_c8_53, 0xff_5f_38, 0xcc_7d_5e, 0x2d_2d_2b
+            )
+        }
+        ("ayu", AppearanceVariant::Dark) => {
+            seed!(
+                0xe6_b4_50, 0xbf_bd_b6, 0x70_bf_56, 0xf2_6d_78, 0xd0_a1_ff, 0x10_14_1c
+            )
+        }
+        ("catppuccin", AppearanceVariant::Light) => {
+            seed!(
+                0x88_39_ef, 0x4c_4f_69, 0x40_a0_2b, 0xd2_0f_39, 0x88_39_ef, 0xef_f1_f5
+            )
+        }
+        ("catppuccin", AppearanceVariant::Dark) => {
+            seed!(
+                0xcb_a6_f7, 0xcd_d6_f4, 0xa6_e3_a1, 0xf3_8b_a8, 0xcb_a6_f7, 0x1e_1e_2e
+            )
+        }
+        ("codex", AppearanceVariant::Light) => {
+            seed!(
+                0x01_69_cc, 0x0d_0d_0d, 0x00_a2_40, 0xe0_2e_2a, 0x75_1e_d9, 0xff_ff_ff
+            )
+        }
+        ("codex", AppearanceVariant::Dark) => {
+            seed!(
+                0x01_69_cc, 0xfc_fc_fc, 0x00_a2_40, 0xe0_2e_2a, 0xb0_6d_ff, 0x11_11_11
+            )
+        }
+        ("dracula", AppearanceVariant::Dark) => {
+            seed!(
+                0xff_79_c6, 0xf8_f8_f2, 0x50_fa_7b, 0xff_55_55, 0xff_79_c6, 0x28_2a_36
+            )
+        }
+        ("everforest", AppearanceVariant::Light) => {
+            seed!(
+                0x93_b2_59, 0x5c_6a_72, 0x8d_a1_01, 0xf8_55_52, 0xdf_69_ba, 0xfd_f6_e3
+            )
+        }
+        ("everforest", AppearanceVariant::Dark) => {
+            seed!(
+                0xa7_c0_80, 0xd3_c6_aa, 0xa7_c0_80, 0xe6_7e_80, 0xd6_99_b6, 0x2d_35_3b
+            )
+        }
+        ("github", AppearanceVariant::Light) => {
+            seed!(
+                0x09_69_da, 0x1f_23_28, 0x1a_7f_37, 0xcf_22_2e, 0x82_50_df, 0xff_ff_ff
+            )
+        }
+        ("github", AppearanceVariant::Dark) => {
+            seed!(
+                0x1f_6f_eb, 0xe6_ed_f3, 0x3f_b9_50, 0xf8_51_49, 0xbc_8c_ff, 0x0d_11_17
+            )
+        }
+        ("gruvbox", AppearanceVariant::Light) => {
+            seed!(
+                0x45_85_88, 0x3c_38_36, 0x3c_38_36, 0xcc_24_1d, 0xb1_62_86, 0xfb_f1_c7
+            )
+        }
+        ("gruvbox", AppearanceVariant::Dark) => {
+            seed!(
+                0x45_85_88, 0xeb_db_b2, 0xeb_db_b2, 0xcc_24_1d, 0xb1_62_86, 0x28_28_28
+            )
+        }
+        ("linear", AppearanceVariant::Light) => {
+            seed!(
+                0x5e_6a_d2, 0x1b_1b_1b, 0x52_a4_50, 0xc9_44_46, 0x81_60_d8, 0xfc_fc_fd
+            )
+        }
+        ("linear", AppearanceVariant::Dark) => {
+            seed!(
+                0x60_6a_cc, 0xe3_e4_e6, 0x69_c9_67, 0xff_7e_78, 0xc2_a1_ff, 0x0f_0f_11
+            )
+        }
+        ("lobster", AppearanceVariant::Dark) => {
+            seed!(
+                0xff_5c_5c, 0xe4_e4_e7, 0x22_c5_5e, 0xff_5c_5c, 0x3b_82_f6, 0x11_18_27
+            )
+        }
+        ("material", AppearanceVariant::Dark) => {
+            seed!(
+                0x80_cb_c4, 0xee_ff_ff, 0xc3_e8_8d, 0xf0_71_78, 0xc7_92_ea, 0x21_21_21
+            )
+        }
+        ("matrix", AppearanceVariant::Dark) => {
+            seed!(
+                0x1e_ff_5a, 0xb8_ff_ca, 0x1e_ff_5a, 0xfa_42_3e, 0x1e_ff_5a, 0x04_08_05
+            )
+        }
+        ("monokai", AppearanceVariant::Dark) => {
+            seed!(
+                0x99_94_7c, 0xf8_f8_f2, 0x86_b4_2b, 0xc4_26_5e, 0x8c_6b_c8, 0x27_28_22
+            )
+        }
+        ("night-owl", AppearanceVariant::Dark) => {
+            seed!(
+                0x44_59_6b, 0xd6_de_eb, 0xc5_e4_78, 0xef_53_50, 0xc7_92_ea, 0x01_16_27
+            )
+        }
+        ("nord", AppearanceVariant::Dark) => {
+            seed!(
+                0x88_c0_d0, 0xd8_de_e9, 0xa3_be_8c, 0xbf_61_6a, 0xb4_8e_ad, 0x2e_34_40
+            )
+        }
+        ("notion", AppearanceVariant::Light) => {
+            seed!(
+                0x31_83_d8, 0x37_35_2f, 0x00_80_00, 0xa3_15_15, 0x00_00_ff, 0xff_ff_ff
+            )
+        }
+        ("notion", AppearanceVariant::Dark) => {
+            seed!(
+                0x31_83_d8, 0xd9_d9_d8, 0x4e_c9_b0, 0xfa_42_3e, 0x31_83_d8, 0x19_19_19
+            )
+        }
+        ("oscurange", AppearanceVariant::Dark) => {
+            seed!(
+                0xf9_b9_8c, 0xe6_e6_e6, 0x40_c9_77, 0xfa_42_3e, 0x47_9f_fa, 0x0b_0b_0f
+            )
+        }
+        ("one", AppearanceVariant::Light) => {
+            seed!(
+                0x52_6f_ff, 0x38_3a_42, 0x3b_ba_54, 0xe4_56_49, 0x52_6f_ff, 0xfa_fa_fa
+            )
+        }
+        ("one", AppearanceVariant::Dark) => {
+            seed!(
+                0x4d_78_cc, 0xab_b2_bf, 0x8c_c2_65, 0xe0_55_61, 0xc1_62_de, 0x28_2c_34
+            )
+        }
+        ("proof", AppearanceVariant::Light) => {
+            seed!(
+                0x3d_75_5d, 0x2f_31_2d, 0x3d_75_5d, 0xba_26_23, 0x5f_6a_c2, 0xf5_f3_ed
+            )
+        }
+        ("raycast", AppearanceVariant::Light) => {
+            seed!(
+                0xff_63_63, 0x03_03_03, 0x00_6b_4f, 0xb1_24_24, 0x9a_1b_6e, 0xff_ff_ff
+            )
+        }
+        ("raycast", AppearanceVariant::Dark) => {
+            seed!(
+                0xff_63_63, 0xfe_fe_fe, 0x59_d4_99, 0xff_63_63, 0xcf_2f_98, 0x10_10_10
+            )
+        }
+        ("rose-pine", AppearanceVariant::Light) => {
+            seed!(
+                0xd7_82_7e, 0x57_52_79, 0x56_94_9f, 0x79_75_93, 0x90_7a_a9, 0xfa_f4_ed
+            )
+        }
+        ("rose-pine", AppearanceVariant::Dark) => {
+            seed!(
+                0xea_9a_97, 0xe0_de_f4, 0x9c_cf_d8, 0x90_8c_aa, 0xc4_a7_e7, 0x23_21_36
+            )
+        }
+        ("sentry", AppearanceVariant::Dark) => {
+            seed!(
+                0x70_55_f6, 0xe6_df_f9, 0x8e_e6_d7, 0xfa_42_3e, 0x70_55_f6, 0x2d_29_35
+            )
+        }
+        ("solarized", AppearanceVariant::Light) => {
+            seed!(
+                0xb5_89_00, 0x65_7b_83, 0x85_99_00, 0xdc_32_2f, 0xd3_36_82, 0xfd_f6_e3
+            )
+        }
+        ("solarized", AppearanceVariant::Dark) => {
+            seed!(
+                0xd3_01_02, 0x83_94_96, 0x85_99_00, 0xdc_32_2f, 0xd3_36_82, 0x00_2b_36
+            )
+        }
+        ("temple", AppearanceVariant::Dark) => {
+            seed!(
+                0xe4_f2_22, 0xc7_e6_da, 0x40_c9_77, 0xfa_42_3e, 0xe4_f2_22, 0x02_12_0c
+            )
+        }
+        ("tokyo-night", AppearanceVariant::Dark) => {
+            seed!(
+                0x3d_59_a1, 0xa9_b1_d6, 0x44_9d_ab, 0x91_4c_54, 0x9d_7c_d8, 0x1a_1b_26
+            )
+        }
+        ("vercel", AppearanceVariant::Light) => {
+            seed!(
+                0x00_6a_ff, 0x17_17_17, 0x28_a9_48, 0xeb_00_1d, 0xa1_00_f8, 0xff_ff_ff
+            )
+        }
+        ("vercel", AppearanceVariant::Dark) => {
+            seed!(
+                0x00_6e_fe, 0xed_ed_ed, 0x00_ad_3a, 0xf1_33_42, 0x95_40_d5, 0x00_00_00
+            )
+        }
+        ("vscode-plus", AppearanceVariant::Light) => {
+            seed!(
+                0x00_7a_cc, 0x00_00_00, 0x00_80_00, 0xee_00_00, 0x00_00_ff, 0xff_ff_ff
+            )
+        }
+        ("vscode-plus", AppearanceVariant::Dark) => {
+            seed!(
+                0x00_7a_cc, 0xd4_d4_d4, 0x369432, 0xf4_47_47, 0x00_00_80, 0x1e_1e_1e
+            )
+        }
+        ("xcode", AppearanceVariant::Light) => {
+            seed!(
+                0x0e_0e_ff, 0x00_00_00, 0x00_a2_40, 0xc41a16, 0x0e_0e_ff, 0xff_ff_ff
+            )
+        }
+        ("xcode", AppearanceVariant::Dark) => {
+            seed!(
+                0x54_82_ff, 0xff_ff_ff, 0x67_b7_a4, 0xfc_6a_5d, 0x54_82_ff, 0x1f_1f_24
+            )
+        }
+        _ => None,
+    }
+}
+
+pub const MAX_APPEARANCE_FONT_FAMILY_BYTES: usize = 256;
+
+fn normalize_appearance_font(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let value = value.trim();
+        (!value.is_empty() && value.len() <= MAX_APPEARANCE_FONT_FAMILY_BYTES)
+            .then(|| value.to_owned())
+    })
+}
+
+pub fn is_appearance_code_theme_id(value: &str) -> bool {
+    APPEARANCE_CODE_THEMES
+        .iter()
+        .any(|(theme_id, _)| *theme_id == value)
+}
+
+pub fn appearance_code_theme_supports_variant(theme_id: &str, variant: AppearanceVariant) -> bool {
+    appearance_code_theme_seed(theme_id, variant).is_some()
+}
+
+const TERMINAL_BOTTOM_DEFAULT_SIZE: u32 = 280;
+const TERMINAL_BOTTOM_MIN_SIZE: u32 = 160;
+const TERMINAL_RIGHT_DEFAULT_SIZE: u32 = 600;
+const TERMINAL_RIGHT_MIN_SIZE: u32 = 320;
+const TERMINAL_PERSISTED_MAX_SIZE: u32 = 16_384;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntegratedTerminalShell {
+    PowerShell,
+    CommandPrompt,
+    GitBash,
+    Wsl,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,10 +843,135 @@ pub struct TaskSummary {
     pub title: String,
     pub preview: String,
     pub cwd: PathBuf,
+    pub created_at: i64,
     pub updated_at: i64,
     pub parent_task_id: Option<String>,
     pub forked_from_id: Option<String>,
     pub status: TaskRunStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingWorktreeForkPhase {
+    CreatingWorktree,
+    StartingConversation,
+    FailedCreatingWorktree,
+    FailedStartingConversation,
+}
+
+impl PendingWorktreeForkPhase {
+    #[must_use]
+    pub const fn failed(self) -> bool {
+        matches!(
+            self,
+            Self::FailedCreatingWorktree | Self::FailedStartingConversation
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingWorktreeFork {
+    pub source_task_id: String,
+    pub source_cwd: PathBuf,
+    pub source_title: String,
+    pub workspace_root: Option<PathBuf>,
+    pub git_root: Option<PathBuf>,
+    pub phase: PendingWorktreeForkPhase,
+    pub error_message: Option<String>,
+    pub attempt: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskSearchResult {
+    pub task: TaskSummary,
+    pub snippet: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskSearchState {
+    pub status: LoadStatus,
+    pub generation: u64,
+    pub query: String,
+    pub results: Vec<TaskSearchResult>,
+    pub next_cursor: Option<String>,
+}
+
+impl Default for TaskSearchState {
+    fn default() -> Self {
+        Self {
+            status: LoadStatus::Idle,
+            generation: 0,
+            query: String::new(),
+            results: Vec::new(),
+            next_cursor: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArchivedTasksState {
+    pub status: LoadStatus,
+    pub generation: u64,
+    pub tasks: Vec<TaskSummary>,
+    pub next_cursor: Option<String>,
+}
+
+impl Default for ArchivedTasksState {
+    fn default() -> Self {
+        Self {
+            status: LoadStatus::Idle,
+            generation: 0,
+            tasks: Vec::new(),
+            next_cursor: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchivedTaskDeleteKind {
+    Single,
+    Project,
+    All,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreadGoalStatus {
+    Active,
+    Paused,
+    Blocked,
+    UsageLimited,
+    BudgetLimited,
+    Complete,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadGoal {
+    pub task_id: String,
+    pub objective: String,
+    pub status: ThreadGoalStatus,
+    pub tokens_used: i64,
+    pub token_budget: Option<i64>,
+    pub time_used_seconds: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadGoalState {
+    pub status: LoadStatus,
+    pub goal: Option<ThreadGoal>,
+    pub completed_goal: Option<ThreadGoal>,
+    pub completed_goal_turn_id: Option<String>,
+}
+
+impl Default for ThreadGoalState {
+    fn default() -> Self {
+        Self {
+            status: LoadStatus::Idle,
+            goal: None,
+            completed_goal: None,
+            completed_goal_turn_id: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,7 +983,38 @@ pub enum TimelineKind {
     Command,
     FileChange,
     Tool,
+    WebSearch,
+    Subagent,
+    Image,
+    BackgroundProcess,
+    ContextCompaction,
     Notice,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimelineCitation {
+    pub path: String,
+    pub line_start: u32,
+    pub line_end: u32,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimelineSource {
+    pub title: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputArtifactKind {
+    File,
+    GeneratedImage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputArtifact {
+    pub path: PathBuf,
+    pub kind: OutputArtifactKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,7 +1023,71 @@ pub struct TimelineItem {
     pub turn_id: String,
     pub kind: TimelineKind,
     pub text: String,
+    pub detail: Option<String>,
+    pub process_id: Option<String>,
+    pub memory_citations: Vec<TimelineCitation>,
+    pub sources: Vec<TimelineSource>,
+    pub attachments: Vec<ComposerAttachment>,
+    pub output_artifacts: Vec<OutputArtifact>,
+    pub edit_supported: bool,
     pub completed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageEditState {
+    pub turn_id: String,
+    pub draft: String,
+    pub attachments: Vec<ComposerAttachment>,
+    pub rollback_applied: bool,
+    pub in_flight: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContextWindowUsage {
+    used_tokens: u64,
+    context_window: u64,
+}
+
+impl ContextWindowUsage {
+    #[must_use]
+    pub fn rounded_percent(self) -> u8 {
+        let numerator = u128::from(self.used_tokens).saturating_mul(100);
+        let rounded = numerator.saturating_add(u128::from(self.context_window) / 2)
+            / u128::from(self.context_window);
+        u8::try_from(rounded.min(100)).unwrap_or(100)
+    }
+
+    #[must_use]
+    pub fn rounded_remaining_percent(self) -> u8 {
+        let remaining = self.context_window.saturating_sub(self.used_tokens);
+        let numerator = u128::from(remaining).saturating_mul(100);
+        let rounded = numerator.saturating_add(u128::from(self.context_window) / 2)
+            / u128::from(self.context_window);
+        u8::try_from(rounded.min(100)).unwrap_or(100)
+    }
+
+    #[must_use]
+    pub const fn used_tokens(self) -> u64 {
+        self.used_tokens
+    }
+
+    #[must_use]
+    pub const fn context_window(self) -> u64 {
+        self.context_window
+    }
+
+    fn from_last_turn(last_total_tokens: i64, model_context_window: Option<i64>) -> Option<Self> {
+        let context_window = u64::try_from(model_context_window?).ok()?;
+        if context_window == 0 {
+            return None;
+        }
+        let used_tokens = u64::try_from(last_total_tokens).ok()?.min(context_window);
+        Some(Self {
+            used_tokens,
+            context_window,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,6 +1097,12 @@ pub struct TimelineState {
     pub items: Vec<TimelineItem>,
     pub next_cursor: Option<String>,
     pub active_turn_id: Option<String>,
+    pub interrupt_pending: bool,
+    pub goal_continuation_pending: bool,
+    pub compaction_in_flight: bool,
+    pub context_window_usage: Option<ContextWindowUsage>,
+    pub message_edit: Option<MessageEditState>,
+    pub last_turn_diff: Option<TurnDiffState>,
 }
 
 impl Default for TimelineState {
@@ -124,7 +1113,48 @@ impl Default for TimelineState {
             items: Vec::new(),
             next_cursor: None,
             active_turn_id: None,
+            interrupt_pending: false,
+            goal_continuation_pending: false,
+            compaction_in_flight: false,
+            context_window_usage: None,
+            message_edit: None,
+            last_turn_diff: None,
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnDiffState {
+    pub turn_id: String,
+    pub unified_diff: String,
+    pub truncated: bool,
+}
+
+impl TimelineState {
+    #[must_use]
+    pub fn output_artifacts(&self) -> Vec<OutputArtifact> {
+        let mut seen = HashSet::new();
+        let mut artifacts = Vec::new();
+        for item in self.items.iter().rev() {
+            let active_turn = self.active_turn_id.as_deref() == Some(item.turn_id.as_str());
+            for artifact in item.output_artifacts.iter().rev() {
+                if active_turn && artifact.kind != OutputArtifactKind::GeneratedImage {
+                    continue;
+                }
+                let mut key = artifact.path.to_string_lossy().replace('\\', "/");
+                if cfg!(windows) {
+                    key.make_ascii_lowercase();
+                }
+                if key.is_empty() || !seen.insert(key) {
+                    continue;
+                }
+                artifacts.push(artifact.clone());
+                if artifacts.len() == MAX_OUTPUT_ARTIFACTS {
+                    return artifacts;
+                }
+            }
+        }
+        artifacts
     }
 }
 
@@ -137,11 +1167,14 @@ pub enum ApprovalKind {
     DynamicTool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApprovalDecision {
     Accept,
     Decline,
     AcceptForSession,
+    AlwaysAllow,
+    AcceptWithExecpolicyAmendment(Vec<String>),
+    ApplyNetworkPolicyAmendment(NetworkPolicyAmendment),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,6 +1185,319 @@ pub struct ApprovalRequest {
     pub kind: ApprovalKind,
     pub title: String,
     pub detail: String,
+    pub context: ApprovalContext,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApprovalContext {
+    Command(CommandApprovalContext),
+    FileChange(FileChangeApprovalContext),
+    Permissions(PermissionsApprovalContext),
+    DynamicTool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandApprovalContext {
+    pub item_id: String,
+    pub command: String,
+    pub reason: Option<String>,
+    pub network_approval_context: Option<NetworkApprovalContext>,
+    pub proposed_execpolicy_amendment: Option<Vec<String>>,
+    pub proposed_network_policy_amendment: Option<NetworkPolicyAmendment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileChangeApprovalContext {
+    pub item_id: String,
+    pub grant_root: Option<String>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionsApprovalContext {
+    pub item_id: String,
+    pub cwd: String,
+    pub reason: Option<String>,
+    pub details: Vec<PermissionRequestDetail>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PermissionRequestDetail {
+    Network,
+    FileSystem {
+        access: PermissionFileSystemAccess,
+        paths: Vec<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionFileSystemAccess {
+    Read,
+    Write,
+    ReadWrite,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkApprovalContext {
+    pub host: String,
+    pub protocol: NetworkApprovalProtocol,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkApprovalProtocol {
+    Http,
+    Https,
+    Socks5Tcp,
+    Socks5Udp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkPolicyAmendment {
+    pub action: NetworkPolicyAction,
+    pub host: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkPolicyAction {
+    Allow,
+    Deny,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserInputRequest {
+    pub request_id: String,
+    pub task_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub auto_resolution_ms: Option<u64>,
+    pub questions: Vec<UserInputQuestion>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserInputQuestion {
+    pub id: String,
+    pub header: String,
+    pub question: String,
+    pub options: Vec<UserInputOption>,
+    pub is_other: bool,
+    pub is_secret: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserInputOption {
+    pub label: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct UserInputAnswers {
+    pub answers: Vec<UserInputAnswer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserInputAnswer {
+    pub question_id: String,
+    pub answers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpElicitationDecision {
+    Accept,
+    Decline,
+    Cancel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserOriginElicitationDecision {
+    AllowOnce,
+    AllowSite,
+    AllowAll,
+    Deny,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserResourceElicitationDecision {
+    AllowOnce,
+    AllowConversation,
+    AlwaysAllow,
+    Deny,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpBrowserOriginElicitation {
+    pub request_id: String,
+    pub task_id: String,
+    pub turn_id: Option<String>,
+    pub server_name: String,
+    pub source_name: String,
+    pub origin: String,
+    pub reason: Option<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpBrowserResourceElicitation {
+    pub request_id: String,
+    pub task_id: String,
+    pub turn_id: Option<String>,
+    pub server_name: String,
+    pub source_name: String,
+    pub origin: String,
+    pub resource: BrowserPermissionResource,
+    pub message: String,
+    pub reason: Option<String>,
+    pub persist_session: bool,
+    pub persist_always: bool,
+    pub elevated_risk: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpUrlElicitation {
+    pub request_id: String,
+    pub task_id: String,
+    pub turn_id: Option<String>,
+    pub server_name: String,
+    pub elicitation_id: String,
+    pub message: String,
+    pub url: String,
+    pub link_opened: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpFormElicitation {
+    pub request_id: String,
+    pub task_id: String,
+    pub turn_id: Option<String>,
+    pub server_name: String,
+    pub message: String,
+    pub openai: bool,
+    pub unsupported_openai: bool,
+    pub fields: Vec<McpFormField>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpFormField {
+    pub name: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub required: bool,
+    pub kind: McpFormFieldKind,
+    pub default: Option<McpElicitationValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum McpFormFieldKind {
+    String {
+        min_length: Option<usize>,
+        max_length: Option<usize>,
+        format: Option<McpFormStringFormat>,
+    },
+    SingleSelect {
+        options: Vec<McpFormOption>,
+    },
+    MultiSelect {
+        options: Vec<McpFormOption>,
+        min_items: Option<usize>,
+        max_items: Option<usize>,
+    },
+    ImagePicker {
+        items: Vec<McpFormImagePickerItem>,
+    },
+    Boolean,
+    Number {
+        integer: bool,
+        minimum: Option<String>,
+        maximum: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpFormStringFormat {
+    Email,
+    Uri,
+    Date,
+    DateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpFormOption {
+    pub value: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpFormImagePickerItem {
+    pub value: String,
+    pub title: String,
+    pub image_data_url: Arc<str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum McpElicitation {
+    BrowserOrigin(McpBrowserOriginElicitation),
+    BrowserResource(McpBrowserResourceElicitation),
+    Url(McpUrlElicitation),
+    Form(McpFormElicitation),
+}
+
+impl McpElicitation {
+    pub fn request_id(&self) -> &str {
+        match self {
+            Self::BrowserOrigin(request) => &request.request_id,
+            Self::BrowserResource(request) => &request.request_id,
+            Self::Url(request) => &request.request_id,
+            Self::Form(request) => &request.request_id,
+        }
+    }
+
+    pub fn task_id(&self) -> &str {
+        match self {
+            Self::BrowserOrigin(request) => &request.task_id,
+            Self::BrowserResource(request) => &request.task_id,
+            Self::Url(request) => &request.task_id,
+            Self::Form(request) => &request.task_id,
+        }
+    }
+
+    pub fn turn_id(&self) -> Option<&str> {
+        match self {
+            Self::BrowserOrigin(request) => request.turn_id.as_deref(),
+            Self::BrowserResource(request) => request.turn_id.as_deref(),
+            Self::Url(request) => request.turn_id.as_deref(),
+            Self::Form(request) => request.turn_id.as_deref(),
+        }
+    }
+
+    pub fn server_name(&self) -> &str {
+        match self {
+            Self::BrowserOrigin(request) => &request.server_name,
+            Self::BrowserResource(request) => &request.server_name,
+            Self::Url(request) => &request.server_name,
+            Self::Form(request) => &request.server_name,
+        }
+    }
+
+    pub fn message(&self) -> &str {
+        match self {
+            Self::BrowserOrigin(request) => &request.message,
+            Self::BrowserResource(request) => &request.message,
+            Self::Url(request) => &request.message,
+            Self::Form(request) => &request.message,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum McpElicitationValue {
+    String(String),
+    Number(String),
+    Boolean(bool),
+    Strings(Vec<String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct McpElicitationContent {
+    pub fields: Vec<(String, McpElicitationValue)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -160,17 +1506,307 @@ pub struct ComputerUseState {
     pub enabled_for_task: bool,
     pub selected_window_id: Option<String>,
     pub selected_window_title: Option<String>,
+    pub selected_application_id: Option<String>,
     pub input_authorized_for_session: bool,
     pub last_capture_label: Option<String>,
+    pub applications: Vec<ComputerApplicationState>,
+    pub launching_application_id: Option<String>,
     pub windows: Vec<ComputerWindowState>,
     pub windows_loading: bool,
     pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserTabState {
+    pub id: String,
+    pub url: String,
+    pub title: String,
+    pub loading: bool,
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserFrameState {
+    pub tab_id: String,
+    pub jpeg: Arc<[u8]>,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserMouseButton {
+    Left,
+    Middle,
+    Right,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserKeyInput {
+    pub key: String,
+    pub text: Option<String>,
+    pub alt: bool,
+    pub control: bool,
+    pub meta: bool,
+    pub shift: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserState {
+    pub status: LoadStatus,
+    pub executable: Option<PathBuf>,
+    pub tabs: Vec<BrowserTabState>,
+    pub active_tab_id: Option<String>,
+    pub frame: Option<BrowserFrameState>,
+    pub error: Option<String>,
+}
+
+impl Default for BrowserState {
+    fn default() -> Self {
+        Self {
+            status: LoadStatus::Idle,
+            executable: None,
+            tabs: Vec::new(),
+            active_tab_id: None,
+            frame: None,
+            error: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserDownloadStatus {
+    Started,
+    InProgress,
+    Paused,
+    Failed,
+    Canceled,
+    Complete,
+}
+
+impl BrowserDownloadStatus {
+    #[must_use]
+    pub const fn active(self) -> bool {
+        matches!(self, Self::Started | Self::InProgress | Self::Paused)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserDownloadState {
+    pub can_cancel: bool,
+    pub can_pause: bool,
+    pub can_resume: bool,
+    pub context_id: String,
+    pub file_exists: bool,
+    pub filename: String,
+    pub id: String,
+    pub path: PathBuf,
+    pub received_bytes: u64,
+    pub started_at_ms: u64,
+    pub status: BrowserDownloadStatus,
+    pub total_bytes: u64,
+    pub updated_at_ms: u64,
+    pub url: String,
+    pub user_initiated: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BrowserDownloadsState {
+    pub downloads: VecDeque<BrowserDownloadState>,
+    pub unacknowledged_ids: HashSet<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BrowserDownloadPreferences {
+    pub download_directory: Option<PathBuf>,
+    pub prompt_for_user_downloads: bool,
+}
+
+impl BrowserDownloadPreferences {
+    #[must_use]
+    pub fn normalized(mut self) -> Self {
+        self.download_directory = self.download_directory.filter(|path| {
+            path.is_absolute() && !path.as_os_str().is_empty() && {
+                let value = path.to_string_lossy();
+                value.len() <= MAX_BROWSER_DOWNLOAD_PATH_BYTES && !value.contains('\0')
+            }
+        });
+        self
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BrowserApprovalMode {
+    #[default]
+    AlwaysAsk,
+    NeverAsk,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BrowserPermissionValue {
+    #[default]
+    Default,
+    Allow,
+    Block,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserPermissionResource {
+    Browse,
+    Download,
+    Upload,
+    FullCdp,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserSitePermission {
+    pub origin: String,
+    pub browse: BrowserPermissionValue,
+    pub download: BrowserPermissionValue,
+    pub upload: BrowserPermissionValue,
+    pub full_cdp: BrowserPermissionValue,
+}
+
+impl BrowserSitePermission {
+    #[must_use]
+    pub const fn permission(&self, resource: BrowserPermissionResource) -> BrowserPermissionValue {
+        match resource {
+            BrowserPermissionResource::Browse => self.browse,
+            BrowserPermissionResource::Download => self.download,
+            BrowserPermissionResource::Upload => self.upload,
+            BrowserPermissionResource::FullCdp => self.full_cdp,
+        }
+    }
+
+    pub fn set_permission(
+        &mut self,
+        resource: BrowserPermissionResource,
+        value: BrowserPermissionValue,
+    ) {
+        match resource {
+            BrowserPermissionResource::Browse => self.browse = value,
+            BrowserPermissionResource::Download => self.download = value,
+            BrowserPermissionResource::Upload => self.upload = value,
+            BrowserPermissionResource::FullCdp => self.full_cdp = value,
+        }
+    }
+
+    #[must_use]
+    pub const fn is_default(&self) -> bool {
+        matches!(
+            (self.browse, self.download, self.upload, self.full_cdp),
+            (
+                BrowserPermissionValue::Default,
+                BrowserPermissionValue::Default,
+                BrowserPermissionValue::Default,
+                BrowserPermissionValue::Default
+            )
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserPermissionsState {
+    pub approval_mode: BrowserApprovalMode,
+    pub download_approval_mode: BrowserApprovalMode,
+    pub upload_approval_mode: BrowserApprovalMode,
+    pub full_cdp_access_enabled: bool,
+    pub sites: Vec<BrowserSitePermission>,
+}
+
+impl Default for BrowserPermissionsState {
+    fn default() -> Self {
+        Self {
+            approval_mode: BrowserApprovalMode::AlwaysAsk,
+            download_approval_mode: BrowserApprovalMode::AlwaysAsk,
+            upload_approval_mode: BrowserApprovalMode::AlwaysAsk,
+            full_cdp_access_enabled: false,
+            sites: Vec::new(),
+        }
+    }
+}
+
+impl BrowserPermissionsState {
+    #[must_use]
+    pub fn normalized(mut self) -> Self {
+        let mut seen = HashSet::with_capacity(self.sites.len().min(MAX_BROWSER_SITE_PERMISSIONS));
+        self.sites.retain_mut(|site| {
+            site.origin = bounded_string(
+                site.origin.trim().to_owned(),
+                MAX_BROWSER_PERMISSION_ORIGIN_BYTES,
+            );
+            !site.origin.is_empty()
+                && !site.origin.chars().any(char::is_control)
+                && !site.is_default()
+                && seen.insert(site.origin.clone())
+                && seen.len() <= MAX_BROWSER_SITE_PERMISSIONS
+        });
+        self.sites.truncate(MAX_BROWSER_SITE_PERMISSIONS);
+        self.sites
+            .sort_by(|left, right| left.origin.cmp(&right.origin));
+        self
+    }
+
+    pub fn upsert_site(&mut self, mut site: BrowserSitePermission) {
+        site.origin = bounded_string(
+            site.origin.trim().to_owned(),
+            MAX_BROWSER_PERMISSION_ORIGIN_BYTES,
+        );
+        if site.origin.is_empty() || site.origin.chars().any(char::is_control) {
+            return;
+        }
+        self.sites.retain(|entry| entry.origin != site.origin);
+        if !site.is_default() && self.sites.len() < MAX_BROWSER_SITE_PERMISSIONS {
+            self.sites.push(site);
+        }
+        self.sites
+            .sort_by(|left, right| left.origin.cmp(&right.origin));
+    }
+
+    pub fn remove_site(&mut self, origin: &str) {
+        self.sites.retain(|site| site.origin != origin);
+    }
+
+    #[must_use]
+    pub fn permission_matching(
+        &self,
+        resource: BrowserPermissionResource,
+        mut matches: impl FnMut(&str) -> bool,
+    ) -> BrowserPermissionValue {
+        let mut allowed = false;
+        for site in &self.sites {
+            if !matches(&site.origin) {
+                continue;
+            }
+            match site.permission(resource) {
+                BrowserPermissionValue::Block => return BrowserPermissionValue::Block,
+                BrowserPermissionValue::Allow => allowed = true,
+                BrowserPermissionValue::Default => {}
+            }
+        }
+        if allowed {
+            BrowserPermissionValue::Allow
+        } else {
+            BrowserPermissionValue::Default
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComputerApplicationState {
+    pub id: String,
+    pub display_name: Option<String>,
+    pub last_used_date: Option<String>,
+    pub use_count: Option<u32>,
+    pub is_running: bool,
+    pub window_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComputerWindowState {
     pub id: String,
     pub application: String,
+    pub application_id: String,
     pub title: String,
     pub width: u32,
     pub height: u32,
@@ -179,29 +1815,451 @@ pub struct ComputerWindowState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComputerUseSettingsState {
+    pub status: LoadStatus,
+    pub always_allowed_app_ids: Vec<String>,
+    pub pending_removal_app_id: Option<String>,
+    pub error: Option<String>,
+}
+
+impl Default for ComputerUseSettingsState {
+    fn default() -> Self {
+        Self {
+            status: LoadStatus::Idle,
+            always_allowed_app_ids: Vec::new(),
+            pending_removal_app_id: None,
+            error: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginCard {
     pub id: String,
+    pub install_name: String,
     pub marketplace: String,
     pub name: String,
     pub description: String,
     pub category: Option<String>,
+    pub developer: Option<String>,
+    pub logo_url: Option<String>,
+    pub logo_url_dark: Option<String>,
+    pub default_prompt: Option<String>,
+    pub version: Option<String>,
     pub installed: bool,
     pub enabled: bool,
+    pub installable: bool,
     pub featured: bool,
+    pub featured_rank: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarketplaceSourceCard {
+    pub name: String,
+    pub path: Option<PathBuf>,
+    pub plugin_count: usize,
+    pub removable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MarketplaceUpgradeFailure {
+    pub marketplace_name: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginDetailItem {
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginSkillDetail {
+    pub name: String,
+    pub display_name: String,
+    pub description: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginScheduledTaskCard {
+    pub name: String,
+    pub prompt: String,
+    pub schedule: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginDetailView {
+    pub plugin_id: String,
+    pub description: String,
+    pub capabilities: Vec<String>,
+    pub website_url: Option<String>,
+    pub privacy_policy_url: Option<String>,
+    pub terms_of_service_url: Option<String>,
+    pub skills: Vec<PluginSkillDetail>,
+    pub apps: Vec<PluginDetailItem>,
+    pub app_templates: Vec<PluginDetailItem>,
+    pub hooks: Vec<PluginDetailItem>,
+    pub mcp_servers: Vec<String>,
+    pub scheduled_tasks: Vec<PluginScheduledTaskCard>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MarketplaceTab {
+    #[default]
+    Plugins,
+    Skills,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MarketplaceManageTab {
+    #[default]
+    InstalledPlugins,
+    Apps,
+    Mcps,
+    Skills,
+    Marketplaces,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PluginDirectoryTab {
+    #[default]
+    CuratedByOpenAi,
+    SharedWithYou,
+    CreatedByMe,
+    Workspace,
+    Local,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MarketplaceSectionFilter {
+    Featured,
+    Category(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillScope {
+    User,
+    Repo,
+    System,
+    Admin,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillCard {
+    pub name: String,
+    pub display_name: String,
+    pub description: String,
+    pub path: PathBuf,
+    pub scope: SkillScope,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HookEventName {
+    PreToolUse,
+    PermissionRequest,
+    PostToolUse,
+    PreCompact,
+    PostCompact,
+    SessionStart,
+    SessionEnd,
+    UserPromptSubmit,
+    SubagentStart,
+    SubagentStop,
+    Stop,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookHandlerType {
+    Command,
+    Prompt,
+    Agent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HookSource {
+    User,
+    Project,
+    Admin,
+    SessionFlags,
+    Plugin,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookTrustStatus {
+    Managed,
+    Untrusted,
+    Trusted,
+    Modified,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookCard {
+    pub key: String,
+    pub event_name: HookEventName,
+    pub handler_type: HookHandlerType,
+    pub is_managed: bool,
+    pub matcher: Option<String>,
+    pub command: Option<String>,
+    pub timeout_sec: u64,
+    pub status_message: Option<String>,
+    pub source_path: PathBuf,
+    pub source: HookSource,
+    pub plugin_id: Option<String>,
+    pub display_order: i64,
+    pub enabled: bool,
+    pub current_hash: String,
+    pub trust_status: HookTrustStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookIssue {
+    pub path: PathBuf,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookProjectEntry {
+    pub cwd: PathBuf,
+    pub hooks: Vec<HookCard>,
+    pub warnings: Vec<String>,
+    pub errors: Vec<HookIssue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HooksState {
+    pub status: LoadStatus,
+    pub cwds: Vec<PathBuf>,
+    pub entries: Vec<HookProjectEntry>,
+    pub pending_key: Option<String>,
+    pub error: Option<String>,
+}
+
+impl Default for HooksState {
+    fn default() -> Self {
+        Self {
+            status: LoadStatus::Idle,
+            cwds: Vec::new(),
+            entries: Vec::new(),
+            pending_key: None,
+            error: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppCard {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub plugin_display_names: Vec<String>,
+    pub logo_url: Option<String>,
+    pub logo_url_dark: Option<String>,
+    pub install_url: Option<String>,
+    pub is_accessible: bool,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppToolCard {
+    pub name: String,
+    pub title: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppDetailView {
+    pub app_id: String,
+    pub name: String,
+    pub description: String,
+    pub logo_url: Option<String>,
+    pub logo_url_dark: Option<String>,
+    pub install_url: Option<String>,
+    pub distribution_channel: Option<String>,
+    pub plugin_display_names: Vec<String>,
+    pub tools: Vec<AppToolCard>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpAuthStatus {
+    Unknown,
+    Unsupported,
+    NotLoggedIn,
+    BearerToken,
+    OAuth,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpTransportKind {
+    Stdio,
+    StreamableHttp,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpServerStartupState {
+    Starting,
+    Ready,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpServerStartupFailureReason {
+    ReauthenticationRequired,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpServerDraft {
+    pub name: String,
+    pub transport: McpTransportKind,
+    pub command: String,
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+    pub env_vars: Vec<String>,
+    pub cwd: String,
+    pub url: String,
+    pub bearer_token_env_var: String,
+    pub http_headers: Vec<(String, String)>,
+    pub env_http_headers: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpServerInfoCard {
+    pub name: String,
+    pub version: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub website_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpToolCard {
+    pub name: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub input_schema: String,
+    pub output_schema: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpResourceCard {
+    pub name: String,
+    pub uri: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub mime_type: Option<String>,
+    pub size: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpResourceContentCard {
+    pub uri: String,
+    pub mime_type: Option<String>,
+    pub text: Option<String>,
+    pub blob_bytes: Option<u64>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct McpResourceReadState {
+    pub server: Option<String>,
+    pub uri: Option<String>,
+    pub status: Option<LoadStatus>,
+    pub contents: Vec<McpResourceContentCard>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpResourceTemplateCard {
+    pub name: String,
+    pub uri_template: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub mime_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpServerCard {
+    pub key: String,
+    pub name: String,
+    pub enabled: bool,
+    pub read_only: bool,
+    pub transport: Option<McpTransportKind>,
+    pub command: String,
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+    pub env_vars: Vec<String>,
+    pub cwd: String,
+    pub url: String,
+    pub bearer_token_env_var: String,
+    pub http_headers: Vec<(String, String)>,
+    pub env_http_headers: Vec<(String, String)>,
+    pub auth_status: McpAuthStatus,
+    pub authorization_url: Option<String>,
+    pub startup_state: Option<McpServerStartupState>,
+    pub startup_error: Option<String>,
+    pub startup_failure_reason: Option<McpServerStartupFailureReason>,
+    pub server_info: Option<McpServerInfoCard>,
+    pub tools: Vec<McpToolCard>,
+    pub resources: Vec<McpResourceCard>,
+    pub resource_templates: Vec<McpResourceTemplateCard>,
+    pub inspection_truncated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MarketplaceState {
+    pub selected_tab: MarketplaceTab,
+    pub selected_directory_tab: PluginDirectoryTab,
+    pub manage_mode: bool,
+    pub selected_manage_tab: MarketplaceManageTab,
     pub status: Option<LoadStatus>,
+    pub apps_status: Option<LoadStatus>,
+    pub mcp_status: Option<LoadStatus>,
+    pub skills_status: Option<LoadStatus>,
     pub query: String,
+    pub selected_section: Option<MarketplaceSectionFilter>,
     pub plugins: Vec<PluginCard>,
+    pub composer_plugins: Vec<PluginCard>,
+    pub marketplace_sources: Vec<MarketplaceSourceCard>,
+    pub apps: Vec<AppCard>,
+    pub mcp_servers: Vec<McpServerCard>,
+    pub plugin_mcp_servers: Vec<McpServerCard>,
+    pub skills: Vec<SkillCard>,
     pub errors: Vec<String>,
+    pub app_errors: Vec<String>,
+    pub mcp_errors: Vec<String>,
+    pub skill_errors: Vec<String>,
+    pub pending_plugin_id: Option<String>,
+    pub pending_app_id: Option<String>,
+    pub pending_mcp_key: Option<String>,
+    pub pending_mcp_auth_name: Option<String>,
+    pub mcp_mutation_error: Option<String>,
+    pub pending_skill_path: Option<PathBuf>,
+    pub pending_plugin_skill_name: Option<String>,
+    pub marketplace_add_pending: bool,
+    pub marketplace_add_error: Option<String>,
+    pub pending_marketplace_remove: Option<String>,
+    pub marketplace_upgrade_pending: bool,
+    pub marketplace_mutation_error: Option<String>,
+    pub selected_plugin_id: Option<String>,
+    pub plugin_detail_status: Option<LoadStatus>,
+    pub plugin_detail: Option<PluginDetailView>,
+    pub plugin_detail_error: Option<String>,
+    pub selected_app_id: Option<String>,
+    pub app_detail_status: Option<LoadStatus>,
+    pub app_detail: Option<AppDetailView>,
+    pub app_detail_error: Option<String>,
+    pub mcp_resource_read: McpResourceReadState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GitState {
     pub repository_root: Option<PathBuf>,
     pub branch: Option<String>,
+    pub default_branch: Option<String>,
+    pub upstream_ref: Option<String>,
     pub ahead: u32,
     pub behind: u32,
     pub changed_files: usize,
@@ -210,9 +2268,575 @@ pub struct GitState {
     pub branches: Vec<GitBranchState>,
     pub worktrees: Vec<GitWorktreeState>,
     pub diff_generation: u64,
+    pub selected_scope: GitDiffScope,
     pub selected_path: Option<PathBuf>,
     pub unified_diff: String,
     pub truncated: bool,
+    pub pending_branch_operation: Option<String>,
+    pub branch_mutation_error: Option<String>,
+    pub branch_conflict: Option<GitBranchConflictState>,
+    pub pending_commit: Option<GitCommitPhase>,
+    pub commit_error: Option<String>,
+    pub pull_request_provider: GitPullRequestProvider,
+    pub pull_request: Option<GitPullRequestState>,
+    pub pending_pull_request: Option<GitPullRequestPhase>,
+    pub pull_request_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitCommitPhase {
+    GeneratingMessage,
+    Committing,
+    Pushing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitCommitNextStep {
+    Commit,
+    CommitAndPush,
+    Push,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GitPullRequestProvider {
+    #[default]
+    Unknown,
+    Loading,
+    Available,
+    CliMissing,
+    AuthenticationRequired,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitPullRequestState {
+    pub number: Option<u64>,
+    pub title: String,
+    pub url: String,
+    pub base_branch: String,
+    pub head_branch: String,
+    pub is_draft: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitPullRequestPhase {
+    GeneratingMessages,
+    Committing,
+    Pushing,
+    Creating,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitPullRequestNextStep {
+    Create,
+    PushAndCreate,
+    CommitPushAndCreate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PullRequestRelationship {
+    All,
+    Authored,
+    #[default]
+    ReviewRequested,
+    Reviewed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PullRequestLifecycle {
+    All,
+    #[default]
+    Open,
+    Merged,
+    Closed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PullRequestState {
+    Open,
+    Closed,
+    Merged,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PullRequestCiStatus {
+    #[default]
+    None,
+    Pending,
+    Passing,
+    Failing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PullRequestDetailTab {
+    #[default]
+    Summary,
+    Timeline,
+    Code,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PullRequestIdentity {
+    pub hostname: String,
+    pub owner: String,
+    pub repository: String,
+    pub number: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PullRequestSummary {
+    pub identity: PullRequestIdentity,
+    pub node_id: String,
+    pub title: String,
+    pub url: String,
+    pub state: PullRequestState,
+    pub is_draft: bool,
+    pub author_login: Option<String>,
+    pub base_branch: String,
+    pub head_branch: String,
+    pub additions: u64,
+    pub deletions: u64,
+    pub created_at: String,
+    pub updated_at: String,
+    pub ci_status: PullRequestCiStatus,
+    pub is_author: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PullRequestDetail {
+    pub summary: PullRequestSummary,
+    pub body: String,
+    pub head_revision: String,
+    pub review_decision: Option<String>,
+    pub mergeable: Option<String>,
+    pub merge_state_status: Option<String>,
+    pub checks: Vec<PullRequestCheck>,
+    pub activity: Vec<PullRequestActivity>,
+    pub checks_partial: bool,
+    pub activity_partial: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PullRequestActivityKind {
+    Event,
+    Comment,
+    Review,
+    ReviewComment,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PullRequestActivity {
+    pub id: String,
+    pub kind: PullRequestActivityKind,
+    pub actor_login: Option<String>,
+    pub body: String,
+    pub created_at: String,
+    pub event: Option<String>,
+    pub url: Option<String>,
+    pub path: Option<String>,
+    pub line: Option<u64>,
+    pub start_line: Option<u64>,
+    pub review_thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PullRequestCheckStatus {
+    Pending,
+    Passing,
+    Failing,
+    Neutral,
+    Skipped,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PullRequestReviewEvent {
+    Approve,
+    Comment,
+    RequestChanges,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PullRequestMergeMethod {
+    #[default]
+    Merge,
+    Squash,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitPreferences {
+    pub branch_prefix: String,
+    pub always_force_push: bool,
+    pub create_pull_request_as_draft: bool,
+    pub pull_request_merge_method: PullRequestMergeMethod,
+    pub review_mode: GitReviewMode,
+    pub commit_instructions: String,
+    pub pull_request_instructions: String,
+    pub worktree_root: Option<PathBuf>,
+}
+
+impl GitPreferences {
+    pub fn normalized(mut self) -> Self {
+        self.branch_prefix = bounded_string(
+            self.branch_prefix
+                .trim()
+                .chars()
+                .filter(|character| *character != '\0')
+                .collect(),
+            MAX_GIT_BRANCH_PREFIX_BYTES,
+        );
+        self.commit_instructions = bounded_string(
+            self.commit_instructions
+                .chars()
+                .filter(|character| *character != '\0')
+                .collect(),
+            MAX_GIT_INSTRUCTIONS_BYTES,
+        );
+        self.pull_request_instructions = bounded_string(
+            self.pull_request_instructions
+                .chars()
+                .filter(|character| *character != '\0')
+                .collect(),
+            MAX_GIT_INSTRUCTIONS_BYTES,
+        );
+        self.worktree_root = self.worktree_root.take().and_then(|path| {
+            let value = path
+                .to_string_lossy()
+                .trim()
+                .chars()
+                .filter(|character| *character != '\0')
+                .collect::<String>();
+            if value.len() > MAX_WORKTREE_ROOT_BYTES {
+                return None;
+            }
+            let path = PathBuf::from(value);
+            path.is_absolute().then_some(path)
+        });
+        self
+    }
+}
+
+impl Default for GitPreferences {
+    fn default() -> Self {
+        Self {
+            branch_prefix: "codex/".to_owned(),
+            always_force_push: false,
+            create_pull_request_as_draft: false,
+            pull_request_merge_method: PullRequestMergeMethod::Merge,
+            review_mode: GitReviewMode::Full,
+            commit_instructions: String::new(),
+            pull_request_instructions: String::new(),
+            worktree_root: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GitReviewMode {
+    #[default]
+    Full,
+    LastTurnOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Personality {
+    None,
+    #[default]
+    Friendly,
+    Pragmatic,
+}
+
+impl Personality {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Friendly => "friendly",
+            Self::Pragmatic => "pragmatic",
+        }
+    }
+
+    #[must_use]
+    pub fn from_config(value: Option<&str>) -> Self {
+        match value {
+            Some("none") => Self::None,
+            Some("pragmatic") => Self::Pragmatic,
+            _ => Self::Friendly,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PersonalizationState {
+    pub status: LoadStatus,
+    pub personality: Personality,
+    pub memory_available: bool,
+    pub memories_enabled: bool,
+    pub allow_memory_generation_from_tool_assisted_chats: bool,
+    pub pending: bool,
+    pub error: Option<String>,
+}
+
+impl Default for PersonalizationState {
+    fn default() -> Self {
+        Self {
+            status: LoadStatus::Idle,
+            personality: Personality::default(),
+            memory_available: false,
+            memories_enabled: false,
+            allow_memory_generation_from_tool_assisted_chats: false,
+            pending: false,
+            error: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersonalizationMutationKind {
+    Personality,
+    Memories,
+    ToolAssistedMemories,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentConfigScopeKind {
+    Project,
+    User,
+    Managed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentConfigScope {
+    pub id: String,
+    pub kind: AgentConfigScopeKind,
+    pub label: String,
+    pub tooltip: String,
+    pub file_path: Option<PathBuf>,
+    pub expected_version: Option<String>,
+    pub approval_policy: Option<String>,
+    pub sandbox_mode: Option<String>,
+    pub network_access: Option<bool>,
+    pub disabled_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentConfigurationState {
+    pub status: LoadStatus,
+    pub cwd: Option<PathBuf>,
+    pub scopes: Vec<AgentConfigScope>,
+    pub selected_scope_id: Option<String>,
+    pub effective_approval_policy: String,
+    pub effective_sandbox_mode: String,
+    pub effective_network_access: bool,
+    pub allowed_approval_policies: Vec<String>,
+    pub allowed_sandbox_modes: Vec<String>,
+    pub approval_managed: bool,
+    pub sandbox_managed: bool,
+    pub network_managed: bool,
+    pub pending: Option<AgentConfigurationMutationKind>,
+    pub error: Option<String>,
+}
+
+impl Default for AgentConfigurationState {
+    fn default() -> Self {
+        Self {
+            status: LoadStatus::Idle,
+            cwd: None,
+            scopes: Vec::new(),
+            selected_scope_id: None,
+            effective_approval_policy: "on-request".to_owned(),
+            effective_sandbox_mode: "read-only".to_owned(),
+            effective_network_access: false,
+            allowed_approval_policies: vec![
+                "untrusted".to_owned(),
+                "on-request".to_owned(),
+                "never".to_owned(),
+            ],
+            allowed_sandbox_modes: vec![
+                "read-only".to_owned(),
+                "workspace-write".to_owned(),
+                "danger-full-access".to_owned(),
+            ],
+            approval_managed: false,
+            sandbox_managed: false,
+            network_managed: false,
+            pending: None,
+            error: None,
+        }
+    }
+}
+
+impl AgentConfigurationState {
+    #[must_use]
+    pub fn selected_scope(&self) -> Option<&AgentConfigScope> {
+        let selected = self.selected_scope_id.as_deref();
+        self.scopes
+            .iter()
+            .find(|scope| Some(scope.id.as_str()) == selected)
+            .or_else(|| self.scopes.first())
+    }
+
+    #[must_use]
+    pub fn displayed_approval_policy(&self) -> &str {
+        self.selected_scope()
+            .and_then(|scope| scope.approval_policy.as_deref())
+            .unwrap_or(&self.effective_approval_policy)
+    }
+
+    #[must_use]
+    pub fn displayed_sandbox_mode(&self) -> &str {
+        self.selected_scope()
+            .and_then(|scope| scope.sandbox_mode.as_deref())
+            .unwrap_or(&self.effective_sandbox_mode)
+    }
+
+    #[must_use]
+    pub fn displayed_network_access(&self) -> bool {
+        self.selected_scope()
+            .and_then(|scope| scope.network_access)
+            .unwrap_or(self.effective_network_access)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentConfigurationMutationKind {
+    ApprovalPolicy,
+    SandboxMode,
+    NetworkAccess,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PullRequestMutationKind {
+    Comment,
+    Approve,
+    ReviewComment,
+    RequestChanges,
+    Merge,
+    Squash,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PullRequestMutation {
+    Comment {
+        body: String,
+    },
+    Review {
+        event: PullRequestReviewEvent,
+        body: String,
+    },
+    Merge {
+        method: PullRequestMergeMethod,
+    },
+}
+
+impl PullRequestMutation {
+    const fn kind(&self) -> PullRequestMutationKind {
+        match self {
+            Self::Comment { .. } => PullRequestMutationKind::Comment,
+            Self::Review {
+                event: PullRequestReviewEvent::Approve,
+                ..
+            } => PullRequestMutationKind::Approve,
+            Self::Review {
+                event: PullRequestReviewEvent::Comment,
+                ..
+            } => PullRequestMutationKind::ReviewComment,
+            Self::Review {
+                event: PullRequestReviewEvent::RequestChanges,
+                ..
+            } => PullRequestMutationKind::RequestChanges,
+            Self::Merge {
+                method: PullRequestMergeMethod::Merge,
+            } => PullRequestMutationKind::Merge,
+            Self::Merge {
+                method: PullRequestMergeMethod::Squash,
+            } => PullRequestMutationKind::Squash,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PullRequestCheck {
+    pub name: String,
+    pub workflow: Option<String>,
+    pub status: PullRequestCheckStatus,
+    pub description: Option<String>,
+    pub link: Option<String>,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PullRequestInboxState {
+    pub generation: u64,
+    pub status: LoadStatus,
+    pub account_login: Option<String>,
+    pub account_avatar_url: Option<String>,
+    pub query: String,
+    pub relationship: PullRequestRelationship,
+    pub lifecycle: PullRequestLifecycle,
+    pub items: Vec<PullRequestSummary>,
+    pub total_count: u64,
+    pub next_cursor: Option<String>,
+    pub truncated: bool,
+    pub loading_more: bool,
+    pub selected: Option<PullRequestIdentity>,
+    pub detail_generation: u64,
+    pub detail_status: LoadStatus,
+    pub detail: Option<PullRequestDetail>,
+    pub error: Option<String>,
+    pub detail_error: Option<String>,
+    pub detail_tab: PullRequestDetailTab,
+    pub diff_generation: u64,
+    pub diff_status: LoadStatus,
+    pub diff_head_revision: Option<String>,
+    pub unified_diff: String,
+    pub diff_error: Option<String>,
+    pub mutation_generation: u64,
+    pub pending_mutation: Option<PullRequestMutationKind>,
+    pub mutation_error: Option<String>,
+}
+
+impl Default for PullRequestInboxState {
+    fn default() -> Self {
+        Self {
+            generation: 0,
+            status: LoadStatus::Idle,
+            account_login: None,
+            account_avatar_url: None,
+            query: String::new(),
+            relationship: PullRequestRelationship::ReviewRequested,
+            lifecycle: PullRequestLifecycle::Open,
+            items: Vec::new(),
+            total_count: 0,
+            next_cursor: None,
+            truncated: false,
+            loading_more: false,
+            selected: None,
+            detail_generation: 0,
+            detail_status: LoadStatus::Idle,
+            detail: None,
+            error: None,
+            detail_error: None,
+            detail_tab: PullRequestDetailTab::Summary,
+            diff_generation: 0,
+            diff_status: LoadStatus::Idle,
+            diff_head_revision: None,
+            unified_diff: String::new(),
+            diff_error: None,
+            mutation_generation: 0,
+            pending_mutation: None,
+            mutation_error: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GitDiffScope {
+    LastTurn,
+    #[default]
+    Unstaged,
+    Staged,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -234,6 +2858,10 @@ pub struct GitFileState {
     pub kind: GitFileKind,
     pub staged: bool,
     pub unstaged: bool,
+    pub staged_additions: u32,
+    pub staged_deletions: u32,
+    pub unstaged_additions: u32,
+    pub unstaged_deletions: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -247,18 +2875,148 @@ pub struct GitBranchState {
 pub struct GitWorktreeState {
     pub path: PathBuf,
     pub branch: Option<String>,
+    pub bare: bool,
     pub detached: bool,
     pub locked: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct TerminalState {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitBranchConflictState {
+    pub branch: String,
+    pub create_branch: bool,
+    pub paths: Vec<PathBuf>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalTabState {
+    pub id: u64,
+    pub task_id: String,
+    pub cwd: PathBuf,
+    pub shell: Option<IntegratedTerminalShell>,
     pub process_id: Option<String>,
     pub title: String,
     pub output: String,
+    pub starting: bool,
     pub running: bool,
+    pub stopping: bool,
     pub truncated: bool,
     pub exit_code: Option<u32>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalState {
+    pub tabs: Vec<TerminalTabState>,
+    pub active_tab_ids: HashMap<String, u64>,
+    pub next_tab_id: u64,
+    pub location: TerminalDockLocation,
+    pub bottom_panel_height: u32,
+    pub right_panel_width: u32,
+    pub shell: Option<IntegratedTerminalShell>,
+    pub available_shells: Vec<IntegratedTerminalShell>,
+}
+
+impl Default for TerminalState {
+    fn default() -> Self {
+        Self {
+            tabs: Vec::new(),
+            active_tab_ids: HashMap::new(),
+            next_tab_id: 1,
+            location: TerminalDockLocation::Bottom,
+            bottom_panel_height: TERMINAL_BOTTOM_DEFAULT_SIZE,
+            right_panel_width: TERMINAL_RIGHT_DEFAULT_SIZE,
+            shell: None,
+            available_shells: Vec::new(),
+        }
+    }
+}
+
+impl TerminalState {
+    pub fn active_tab_for(&self, task_id: &str) -> Option<&TerminalTabState> {
+        let active_id = self.active_tab_ids.get(task_id)?;
+        self.tabs
+            .iter()
+            .find(|tab| tab.id == *active_id && tab.task_id == task_id)
+    }
+
+    pub fn tabs_for(&self, task_id: &str) -> impl Iterator<Item = &TerminalTabState> {
+        self.tabs.iter().filter(move |tab| tab.task_id == task_id)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackgroundTerminal {
+    pub item_id: String,
+    pub process_id: String,
+    pub command: String,
+    pub cwd: PathBuf,
+    pub os_pid: Option<u32>,
+    pub cpu_percent: Option<f64>,
+    pub rss_kb: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProcessManagerState {
+    pub task_id: Option<String>,
+    pub status: LoadStatus,
+    pub terminals: Vec<BackgroundTerminal>,
+    pub next_cursor: Option<String>,
+    pub terminating_process_ids: Vec<String>,
+    pub cleaning: bool,
+    pub error: Option<String>,
+}
+
+impl Default for ProcessManagerState {
+    fn default() -> Self {
+        Self {
+            task_id: None,
+            status: LoadStatus::Idle,
+            terminals: Vec::new(),
+            next_cursor: None,
+            terminating_process_ids: Vec::new(),
+            cleaning: false,
+            error: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtifactPreviewKind {
+    Text,
+    Image,
+    TooLarge,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactPreview {
+    pub path: PathBuf,
+    pub file_name: String,
+    pub extension: String,
+    pub size_bytes: u64,
+    pub kind: ArtifactPreviewKind,
+    pub text: Option<String>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArtifactState {
+    pub selected_path: Option<PathBuf>,
+    pub status: LoadStatus,
+    pub preview: Option<ArtifactPreview>,
+    pub error: Option<String>,
+}
+
+impl Default for ArtifactState {
+    fn default() -> Self {
+        Self {
+            selected_path: None,
+            status: LoadStatus::Idle,
+            preview: None,
+            error: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -275,26 +3033,474 @@ pub struct RuntimeState {
     pub codex_home_default: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountKind {
+    ApiKey,
+    ChatGpt,
+    AmazonBedrock,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountProfile {
+    pub kind: AccountKind,
+    pub email: Option<String>,
+    pub plan: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageLimitWindow {
+    pub used_percent: u8,
+    pub window_duration_mins: Option<i64>,
+    pub resets_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountCredits {
+    pub has_credits: bool,
+    pub unlimited: bool,
+    pub balance: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AccountAuthOperation {
+    #[default]
+    Idle,
+    StartingLogin,
+    AwaitingLogin,
+    CancelingLogin,
+    LoggingOut,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountState {
+    pub status: LoadStatus,
+    pub profile: Option<AccountProfile>,
+    pub requires_openai_auth: bool,
+    pub usage_limits: Vec<UsageLimitWindow>,
+    pub credits: Option<AccountCredits>,
+    pub usage_error: Option<String>,
+    pub error: Option<String>,
+    pub auth_operation: AccountAuthOperation,
+    pub login_id: Option<String>,
+    pub auth_error: Option<String>,
+}
+
+impl Default for AccountState {
+    fn default() -> Self {
+        Self {
+            status: LoadStatus::Idle,
+            profile: None,
+            requires_openai_auth: false,
+            usage_limits: Vec::new(),
+            credits: None,
+            usage_error: None,
+            error: None,
+            auth_operation: AccountAuthOperation::Idle,
+            login_id: None,
+            auth_error: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeedbackClassification {
+    Bug,
+    BadResult,
+    GoodResult,
+    SafetyCheck,
+    Other,
+}
+
+impl FeedbackClassification {
+    pub const ALL: [Self; 5] = [
+        Self::Bug,
+        Self::BadResult,
+        Self::GoodResult,
+        Self::SafetyCheck,
+        Self::Other,
+    ];
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bug => "bug",
+            Self::BadResult => "bad-result",
+            Self::GoodResult => "good-result",
+            Self::SafetyCheck => "safety_check",
+            Self::Other => "other",
+        }
+    }
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Bug => "Bug",
+            Self::BadResult => "Bad result",
+            Self::GoodResult => "Good result",
+            Self::SafetyCheck => "Safety check",
+            Self::Other => "Other",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FeedbackUploadState {
+    pub pending: bool,
+    pub error: Option<String>,
+    pub feedback_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReasoningEffortOption {
+    pub id: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceTierOption {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelOption {
+    pub id: String,
+    pub display_name: String,
+    pub description: String,
+    pub is_default: bool,
+    pub default_effort: String,
+    pub supported_efforts: Vec<ReasoningEffortOption>,
+    pub service_tiers: Vec<ServiceTierOption>,
+    pub default_service_tier: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionProfileOption {
+    pub id: String,
+    pub description: Option<String>,
+    pub allowed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalsReviewer {
+    User,
+    AutoReview,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PermissionRequirements {
+    pub allowed_approval_policies: Option<Vec<String>>,
+    pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
+    pub default_permissions: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionModeOption {
+    pub id: String,
+    pub label: String,
+    pub description: Option<String>,
+    pub permissions: String,
+    pub approval_policy: Option<String>,
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    pub allowed: bool,
+}
+
+#[must_use]
+pub fn permission_mode_options(
+    profiles: &[PermissionProfileOption],
+    requirements: &PermissionRequirements,
+) -> Vec<PermissionModeOption> {
+    let profile_allowed = |id: &str| {
+        profiles
+            .iter()
+            .find(|profile| profile.id == id)
+            .is_some_and(|profile| profile.allowed)
+    };
+    let policy_allowed = |policy: &str| {
+        requirements
+            .allowed_approval_policies
+            .as_ref()
+            .is_none_or(|allowed| allowed.iter().any(|candidate| candidate == policy))
+    };
+    let reviewer_allowed = |reviewer: ApprovalsReviewer| {
+        requirements
+            .allowed_approvals_reviewers
+            .as_ref()
+            .is_none_or(|allowed| allowed.contains(&reviewer))
+    };
+    let mut modes = vec![
+        PermissionModeOption {
+            id: "preset:ask-for-approval".to_owned(),
+            label: "Ask for approval".to_owned(),
+            description: Some(
+                "Codex can work in the current workspace and asks before higher-risk actions."
+                    .to_owned(),
+            ),
+            permissions: ":workspace".to_owned(),
+            approval_policy: Some("on-request".to_owned()),
+            approvals_reviewer: Some(ApprovalsReviewer::User),
+            allowed: profile_allowed(":workspace")
+                && policy_allowed("on-request")
+                && reviewer_allowed(ApprovalsReviewer::User),
+        },
+        PermissionModeOption {
+            id: "preset:auto-review".to_owned(),
+            label: "Auto-review".to_owned(),
+            description: Some("Only ask for actions detected as potentially unsafe.".to_owned()),
+            permissions: ":workspace".to_owned(),
+            approval_policy: Some("on-request".to_owned()),
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            allowed: profile_allowed(":workspace")
+                && policy_allowed("on-request")
+                && reviewer_allowed(ApprovalsReviewer::AutoReview),
+        },
+        PermissionModeOption {
+            id: "preset:full-access".to_owned(),
+            label: "Full access".to_owned(),
+            description: Some(
+                "Codex can edit outside the workspace and access the internet without asking."
+                    .to_owned(),
+            ),
+            permissions: ":danger-full-access".to_owned(),
+            approval_policy: Some("never".to_owned()),
+            approvals_reviewer: Some(ApprovalsReviewer::User),
+            allowed: profile_allowed(":danger-full-access")
+                && policy_allowed("never")
+                && reviewer_allowed(ApprovalsReviewer::User),
+        },
+        PermissionModeOption {
+            id: "preset:read-only".to_owned(),
+            label: "Read only".to_owned(),
+            description: Some(
+                "Codex can read workspace files and asks before edits or network access."
+                    .to_owned(),
+            ),
+            permissions: ":read-only".to_owned(),
+            approval_policy: Some("on-request".to_owned()),
+            approvals_reviewer: Some(ApprovalsReviewer::User),
+            allowed: profile_allowed(":read-only")
+                && policy_allowed("on-request")
+                && reviewer_allowed(ApprovalsReviewer::User),
+        },
+    ];
+    modes.extend(
+        profiles
+            .iter()
+            .filter(|profile| {
+                !matches!(
+                    profile.id.as_str(),
+                    ":workspace" | ":danger-full-access" | ":read-only"
+                )
+            })
+            .map(|profile| PermissionModeOption {
+                id: format!("profile:{}", profile.id),
+                label: profile.id.trim_start_matches(':').replace(['-', '_'], " "),
+                description: profile.description.clone(),
+                permissions: profile.id.clone(),
+                approval_policy: None,
+                approvals_reviewer: None,
+                allowed: profile.allowed,
+            }),
+    );
+    modes.truncate(MAX_COMPOSER_OPTIONS);
+    modes
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComposerAttachmentKind {
+    Mention,
+    LocalImage,
+    Skill,
+    App,
+    Plugin,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComposerAttachment {
+    pub path: PathBuf,
+    pub name: String,
+    pub kind: ComposerAttachmentKind,
+}
+
+#[must_use]
+pub fn composer_plugin_display_name(plugin: &PluginCard) -> String {
+    match plugin.install_name.trim().to_ascii_lowercase().as_str() {
+        "browser" => "Browser".to_owned(),
+        "computer-use" => "Computer".to_owned(),
+        _ => plugin.name.trim().to_owned(),
+    }
+}
+
+#[must_use]
+pub fn composer_plugin_is_mentionable(plugin: &PluginCard) -> bool {
+    if plugin.enabled {
+        return true;
+    }
+    !plugin.installed
+        && matches!(
+            plugin.install_name.trim().to_ascii_lowercase().as_str(),
+            "browser" | "computer-use"
+        )
+}
+
+#[must_use]
+pub fn composer_app_uri(app_id: &str) -> String {
+    format!("app://{app_id}")
+}
+
+#[must_use]
+pub fn composer_plugin_uri(plugin_id: &str) -> String {
+    format!("plugin://{plugin_id}")
+}
+
+#[must_use]
+pub fn composer_desktop_app_uri(plugin_id: &str, application_id: &str) -> String {
+    let mut encoded = String::with_capacity(application_id.len());
+    for byte in application_id.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' => {
+                encoded.push(char::from(byte))
+            }
+            b' ' => encoded.push('+'),
+            _ => {
+                use std::fmt::Write as _;
+                let _ = write!(encoded, "%{byte:02X}");
+            }
+        }
+    }
+    format!("{}?app={encoded}", composer_plugin_uri(plugin_id))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FuzzyFileMatchType {
+    File,
+    Directory,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FuzzyFileResult {
+    pub name: String,
+    pub path: PathBuf,
+    pub detail: String,
+    pub match_type: FuzzyFileMatchType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FuzzyFileSearchState {
+    pub status: LoadStatus,
+    pub generation: u64,
+    pub session_id: Option<String>,
+    pub query: String,
+    pub roots: Vec<PathBuf>,
+    pub results: Vec<FuzzyFileResult>,
+    pub error: Option<String>,
+}
+
+impl Default for FuzzyFileSearchState {
+    fn default() -> Self {
+        Self {
+            status: LoadStatus::Idle,
+            generation: 0,
+            session_id: None,
+            query: String::new(),
+            roots: Vec::new(),
+            results: Vec::new(),
+            error: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComposerControlsState {
+    pub models_status: LoadStatus,
+    pub models: Vec<ModelOption>,
+    pub selected_model: Option<String>,
+    pub selected_effort: Option<String>,
+    pub selected_service_tier: Option<String>,
+    pub permission_profiles_status: LoadStatus,
+    pub permission_modes: Vec<PermissionModeOption>,
+    pub selected_permission_mode: Option<String>,
+    pub plan_mode: bool,
+    pub goal_mode: bool,
+    new_chat_defaults: ComposerSettings,
+    active_profile: Option<String>,
+    has_managed_new_thread_settings: bool,
+}
+
+impl Default for ComposerControlsState {
+    fn default() -> Self {
+        Self {
+            models_status: LoadStatus::Idle,
+            models: Vec::new(),
+            selected_model: None,
+            selected_effort: None,
+            selected_service_tier: None,
+            permission_profiles_status: LoadStatus::Idle,
+            permission_modes: Vec::new(),
+            selected_permission_mode: None,
+            plan_mode: false,
+            goal_mode: false,
+            new_chat_defaults: ComposerSettings::default(),
+            active_profile: None,
+            has_managed_new_thread_settings: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub connection: ConnectionStatus,
     pub route: MainRoute,
     pub inspector: InspectorPane,
+    pub last_side_panel: InspectorPane,
+    pub side_panel_full_width: bool,
+    pub terminal_dock_open: bool,
     pub task_status: LoadStatus,
     pub task_generation: u64,
     pub tasks: Vec<TaskSummary>,
     pub next_task_cursor: Option<String>,
+    pub task_search: TaskSearchState,
+    pub pending_worktree_fork: Option<PendingWorktreeFork>,
+    pub archived_tasks: ArchivedTasksState,
+    pub pinned_task_ids: Vec<String>,
     pub selected_task_id: Option<String>,
+    pub new_chat_cwd: Option<PathBuf>,
     pub timelines: HashMap<String, TimelineState>,
+    pub goals: HashMap<String, ThreadGoalState>,
     pub composer: String,
+    pub composer_attachments: Vec<ComposerAttachment>,
+    pub composer_desktop_apps: Vec<ComputerApplicationState>,
     pub composer_error: Option<String>,
+    pub fuzzy_file_search: FuzzyFileSearchState,
+    pub composer_controls: ComposerControlsState,
     pub approvals: VecDeque<ApprovalRequest>,
+    pub mcp_elicitations: VecDeque<McpElicitation>,
+    pub user_input_requests: VecDeque<UserInputRequest>,
     pub computer_use: HashMap<String, ComputerUseState>,
+    pub computer_use_settings: ComputerUseSettingsState,
+    pub browser: HashMap<String, BrowserState>,
+    pub browser_downloads: BrowserDownloadsState,
+    pub browser_download_preferences: BrowserDownloadPreferences,
+    pub browser_permissions: BrowserPermissionsState,
     pub marketplace: MarketplaceState,
+    pub hooks: HooksState,
+    pub pull_requests: PullRequestInboxState,
     pub git: GitState,
+    pub git_include_unstaged: bool,
+    pub git_preferences: GitPreferences,
+    pub process_manager: ProcessManagerState,
+    pub artifacts: ArtifactState,
     pub terminal: TerminalState,
+    pub appearance_theme: AppearanceTheme,
+    pub appearance_preferences: AppearancePreferences,
+    pub keyboard_shortcut_preferences: KeyboardShortcutPreferences,
     pub storage: StorageState,
     pub runtime: RuntimeState,
+    pub account: AccountState,
+    pub personalization: PersonalizationState,
+    pub agent_configuration: AgentConfigurationState,
+    pub feedback: FeedbackUploadState,
     pub status_message: Option<String>,
 }
 
@@ -303,22 +3509,55 @@ impl Default for AppState {
         Self {
             connection: ConnectionStatus::Offline,
             route: MainRoute::Tasks,
-            inspector: InspectorPane::Changes,
+            inspector: InspectorPane::Hidden,
+            last_side_panel: InspectorPane::Changes,
+            side_panel_full_width: false,
+            terminal_dock_open: false,
             task_status: LoadStatus::Idle,
             task_generation: 0,
             tasks: Vec::new(),
             next_task_cursor: None,
+            task_search: TaskSearchState::default(),
+            pending_worktree_fork: None,
+            archived_tasks: ArchivedTasksState::default(),
+            pinned_task_ids: Vec::new(),
             selected_task_id: None,
+            new_chat_cwd: None,
             timelines: HashMap::new(),
+            goals: HashMap::new(),
             composer: String::new(),
+            composer_attachments: Vec::new(),
+            composer_desktop_apps: Vec::new(),
             composer_error: None,
+            fuzzy_file_search: FuzzyFileSearchState::default(),
+            composer_controls: ComposerControlsState::default(),
             approvals: VecDeque::new(),
+            mcp_elicitations: VecDeque::new(),
+            user_input_requests: VecDeque::new(),
             computer_use: HashMap::new(),
+            computer_use_settings: ComputerUseSettingsState::default(),
+            browser: HashMap::new(),
+            browser_downloads: BrowserDownloadsState::default(),
+            browser_download_preferences: BrowserDownloadPreferences::default(),
+            browser_permissions: BrowserPermissionsState::default(),
             marketplace: MarketplaceState::default(),
+            hooks: HooksState::default(),
+            pull_requests: PullRequestInboxState::default(),
             git: GitState::default(),
+            git_include_unstaged: true,
+            git_preferences: GitPreferences::default(),
+            process_manager: ProcessManagerState::default(),
+            artifacts: ArtifactState::default(),
             terminal: TerminalState::default(),
+            appearance_theme: AppearanceTheme::default(),
+            appearance_preferences: AppearancePreferences::default(),
+            keyboard_shortcut_preferences: KeyboardShortcutPreferences::default(),
             storage: StorageState::default(),
             runtime: RuntimeState::default(),
+            account: AccountState::default(),
+            personalization: PersonalizationState::default(),
+            agent_configuration: AgentConfigurationState::default(),
+            feedback: FeedbackUploadState::default(),
             status_message: None,
         }
     }
@@ -335,6 +3574,13 @@ pub enum Action {
         path: PathBuf,
         route: Option<MainRoute>,
         inspector: Option<InspectorPane>,
+        appearance_theme: Option<AppearanceTheme>,
+        terminal_location: Option<TerminalDockLocation>,
+        terminal_bottom_height: Option<u32>,
+        terminal_right_width: Option<u32>,
+        git_include_unstaged: Option<bool>,
+        pinned_task_ids: Vec<String>,
+        recent_workspace: Option<PathBuf>,
     },
     StorageFailed(String),
     RuntimeResolved {
@@ -344,10 +3590,130 @@ pub enum Action {
     },
     Navigate(MainRoute),
     ShowInspector(InspectorPane),
+    OpenOutput(PathBuf),
+    OpenFuzzyFileResult(PathBuf),
+    CloseOutput,
+    OutputPreviewLoaded {
+        task_id: String,
+        requested_path: PathBuf,
+        preview: ArtifactPreview,
+    },
+    OutputPreviewFailed {
+        task_id: String,
+        requested_path: PathBuf,
+        message: String,
+    },
+    WorkspaceFilePreviewLoaded {
+        requested_path: PathBuf,
+        preview: ArtifactPreview,
+    },
+    WorkspaceFilePreviewFailed {
+        requested_path: PathBuf,
+        message: String,
+    },
+    RevealOutput(PathBuf),
+    RevealWorkspaceFile(PathBuf),
+    ToggleReviewTab,
+    ToggleReviewPanel,
+    ToggleMaximizeSidePanel,
+    ToggleBottomPanel,
+    ToggleTerminalDock,
+    SetTerminalDockLocation(TerminalDockLocation),
+    SetAppearanceTheme(AppearanceTheme),
+    AppearancePreferencesLoaded(AppearancePreferences),
+    SetAppearancePreferences(AppearancePreferences),
+    GitPreferencesLoaded(GitPreferences),
+    SetGitPreferences(GitPreferences),
+    KeyboardShortcutPreferencesLoaded(KeyboardShortcutPreferences),
+    SetKeyboardShortcutPreferences {
+        preferences: KeyboardShortcutPreferences,
+        target: KeyboardShortcutUpdateTarget,
+    },
+    KeyboardShortcutPreferencesPersisted(KeyboardShortcutUpdateTarget),
+    KeyboardShortcutPreferencesPersistFailed {
+        previous: KeyboardShortcutPreferences,
+        target: KeyboardShortcutUpdateTarget,
+    },
+    SetTerminalDockSize {
+        location: TerminalDockLocation,
+        size: u32,
+    },
+    TerminalShellsDetected {
+        available: Vec<IntegratedTerminalShell>,
+        preferred: Option<IntegratedTerminalShell>,
+    },
+    SetIntegratedTerminalShell(IntegratedTerminalShell),
     RefreshTasks,
     LoadMoreTasks,
-    NewTask,
+    TaskSearchQueryChanged(String),
+    TaskSearchDue {
+        generation: u64,
+        query: String,
+    },
+    LoadMoreTaskSearchResults,
+    TaskSearchResultsLoaded {
+        generation: u64,
+        results: Vec<TaskSearchResult>,
+        next_cursor: Option<String>,
+        append: bool,
+    },
+    TaskSearchFailed {
+        generation: u64,
+        message: String,
+    },
+    BeginNewChat,
+    BeginProjectlessChat,
+    SelectWorkspace(PathBuf),
+    SelectComposerWorkspace(PathBuf),
+    UseGitWorktree(PathBuf),
     ForkSelectedTask,
+    ForkSelectedTaskIntoWorktree,
+    ForkTaskInCurrentWorkspace(String),
+    ForkTaskIntoWorktree(String),
+    PendingWorktreeForkReady {
+        workspace_root: PathBuf,
+        git_root: PathBuf,
+    },
+    PendingWorktreeForkCreationFailed(String),
+    PendingWorktreeForkConversationFailed(String),
+    PendingWorktreeForkCompleted,
+    CancelPendingWorktreeFork,
+    RetryPendingWorktreeFork,
+    DismissPendingWorktreeFork,
+    ArchiveTask(String),
+    TaskArchived(String),
+    RenameTask {
+        task_id: String,
+        name: String,
+    },
+    TaskRenamed {
+        task_id: String,
+        name: String,
+    },
+    ToggleTaskPinned(String),
+    PinnedTasksLoaded(Vec<TaskSummary>),
+    RefreshArchivedTasks,
+    LoadMoreArchivedTasks,
+    ArchivedTasksLoaded {
+        generation: u64,
+        tasks: Vec<TaskSummary>,
+        next_cursor: Option<String>,
+        append: bool,
+    },
+    ArchivedTasksFailed {
+        generation: u64,
+        message: String,
+    },
+    UnarchiveTask(String),
+    TaskUnarchived(TaskSummary),
+    DeleteArchivedTasks {
+        task_ids: Vec<String>,
+        kind: ArchivedTaskDeleteKind,
+    },
+    ArchivedTasksDeleted {
+        task_ids: Vec<String>,
+        kind: ArchivedTaskDeleteKind,
+    },
     TaskCreated(TaskSummary),
     TasksLoaded {
         generation: u64,
@@ -355,11 +3721,35 @@ pub enum Action {
         next_cursor: Option<String>,
         append: bool,
     },
+    LoadedTasksRestored {
+        tasks: Vec<TaskSummary>,
+        truncated: bool,
+    },
+    LoadedTasksRestoreFailed(String),
     TasksFailed {
         generation: u64,
         message: String,
     },
     SelectTask(String),
+    TaskRuntimeLoaded {
+        task_id: String,
+        active_turn_id: Option<String>,
+        run_status: Option<TaskRunStatus>,
+    },
+    TaskSettingsLoaded {
+        task_id: String,
+        model: Option<String>,
+        effort: Option<String>,
+        service_tier: Option<String>,
+        permissions: Option<String>,
+        approval_policy: Option<String>,
+        approvals_reviewer: Option<ApprovalsReviewer>,
+    },
+    ThreadSettingsUpdateFailed {
+        task_id: String,
+        message: String,
+    },
+    LoadMoreTimeline,
     TimelineLoaded {
         task_id: String,
         generation: u64,
@@ -371,8 +3761,191 @@ pub enum Action {
         task_id: String,
         generation: u64,
     },
+    RefreshBackgroundTerminals,
+    LoadMoreBackgroundTerminals,
+    BackgroundTerminalsLoaded {
+        task_id: String,
+        terminals: Vec<BackgroundTerminal>,
+        next_cursor: Option<String>,
+        append: bool,
+    },
+    BackgroundTerminalsFailed {
+        task_id: String,
+        message: String,
+    },
+    TerminateBackgroundTerminal(String),
+    BackgroundTerminalTerminated {
+        task_id: String,
+        process_id: String,
+        terminated: bool,
+    },
+    BackgroundTerminalTerminateFailed {
+        task_id: String,
+        process_id: String,
+        message: String,
+    },
+    CleanBackgroundTerminals,
+    BackgroundTerminalsCleaned {
+        task_id: String,
+    },
+    BackgroundTerminalsCleanFailed {
+        task_id: String,
+        message: String,
+    },
+    EditLastUserMessage {
+        task_id: String,
+        turn_id: String,
+        text: String,
+    },
+    CancelLastUserMessageEdit {
+        task_id: String,
+        turn_id: String,
+    },
+    LastUserMessageRollbackApplied {
+        task_id: String,
+        turn_id: String,
+    },
+    LastUserMessageEditSucceeded {
+        task_id: String,
+        turn_id: String,
+    },
+    LastUserMessageEditFailed {
+        task_id: String,
+        turn_id: String,
+        rollback_applied: bool,
+        message: String,
+    },
+    CompactThreadFailed {
+        task_id: String,
+        message: String,
+    },
+    ThreadTokenUsageUpdated {
+        task_id: String,
+        last_total_tokens: i64,
+        model_context_window: Option<i64>,
+    },
+    GoalLoaded {
+        task_id: String,
+        goal: Option<ThreadGoal>,
+    },
+    GoalLoadFailed {
+        task_id: String,
+        message: String,
+    },
+    SetGoal {
+        objective: String,
+        token_budget: Option<Option<i64>>,
+    },
+    SetGoalStatus(ThreadGoalStatus),
+    ClearGoal,
+    GoalUpdated(ThreadGoal),
+    GoalCleared {
+        task_id: String,
+    },
+    MaybeContinueGoal {
+        task_id: String,
+    },
+    GoalContinuationDue {
+        task_id: String,
+    },
+    GoalContinuationFailed {
+        task_id: String,
+        message: String,
+    },
+    ModelsLoaded(Vec<ModelOption>),
+    ModelsFailed(String),
+    PermissionProfilesLoaded {
+        profiles: Vec<PermissionProfileOption>,
+        requirements: PermissionRequirements,
+    },
+    PermissionProfilesFailed(String),
+    ComposerDefaultsLoaded {
+        model: Option<String>,
+        effort: Option<String>,
+        service_tier: Option<String>,
+        profile: Option<String>,
+        has_managed_new_thread_settings: bool,
+        permissions: Option<String>,
+        approval_policy: Option<String>,
+        approvals_reviewer: Option<ApprovalsReviewer>,
+    },
+    ComposerDefaultsWriteFailed(String),
+    RefreshPersonalization,
+    PersonalizationLoaded {
+        personality: Personality,
+        memory_available: bool,
+        memories_enabled: bool,
+        allow_memory_generation_from_tool_assisted_chats: bool,
+    },
+    PersonalizationFailed(String),
+    SelectPersonality(Personality),
+    SetMemoriesEnabled(bool),
+    SetToolAssistedMemoriesEnabled(bool),
+    PersonalizationMutationFinished {
+        kind: PersonalizationMutationKind,
+        overridden: bool,
+    },
+    PersonalizationMutationFailed {
+        kind: PersonalizationMutationKind,
+        message: String,
+    },
+    RefreshAgentConfiguration {
+        cwd: Option<PathBuf>,
+    },
+    AgentConfigurationLoaded {
+        cwd: Option<PathBuf>,
+        scopes: Vec<AgentConfigScope>,
+        effective_approval_policy: String,
+        effective_sandbox_mode: String,
+        effective_network_access: bool,
+        allowed_approval_policies: Vec<String>,
+        allowed_sandbox_modes: Vec<String>,
+        approval_managed: bool,
+        sandbox_managed: bool,
+        network_managed: bool,
+    },
+    AgentConfigurationFailed(String),
+    SelectAgentConfigScope(String),
+    SetAgentApprovalPolicy(String),
+    SetAgentSandboxMode(String),
+    SetAgentNetworkAccess(bool),
+    AgentConfigurationMutationFinished {
+        kind: AgentConfigurationMutationKind,
+        overridden: bool,
+    },
+    AgentConfigurationMutationFailed {
+        kind: AgentConfigurationMutationKind,
+        message: String,
+    },
+    SelectModel(String),
+    SelectReasoningEffort(String),
+    SelectServiceTier(String),
+    SelectPermissionMode(String),
+    TogglePlanMode,
+    ToggleGoalMode,
     ComposerChanged(String),
+    ComposerFileSearchChanged(Option<String>),
+    FuzzyFileSearchUpdated {
+        session_id: String,
+        query: String,
+        results: Vec<FuzzyFileResult>,
+    },
+    FuzzyFileSearchCompleted {
+        session_id: String,
+    },
+    FuzzyFileSearchFailed {
+        session_id: String,
+        query: String,
+        message: String,
+    },
+    AddComposerAttachments(Vec<PathBuf>),
+    AddComposerSkill(PathBuf),
+    AddComposerApp(String),
+    AddComposerPlugin(String),
+    AddComposerDesktopApp(String),
+    RemoveComposerAttachment(usize),
     SubmitComposer,
+    InterruptActiveTurn,
     TurnStarted {
         task_id: String,
         turn_id: String,
@@ -385,6 +3958,16 @@ pub enum Action {
     TurnInterrupted {
         task_id: String,
         turn_id: String,
+    },
+    TurnDiffUpdated {
+        task_id: String,
+        turn_id: String,
+        diff: String,
+        truncated: bool,
+    },
+    TurnInterruptFailed {
+        task_id: String,
+        message: String,
     },
     TimelineDelta {
         task_id: String,
@@ -406,6 +3989,28 @@ pub enum Action {
         request_id: String,
         decision: ApprovalDecision,
     },
+    UserInputRequested(UserInputRequest),
+    ResolveUserInput {
+        request_id: String,
+        answers: UserInputAnswers,
+    },
+    McpElicitationRequested(McpElicitation),
+    MarkMcpUrlElicitationOpened {
+        request_id: String,
+    },
+    ResolveMcpElicitation {
+        request_id: String,
+        decision: McpElicitationDecision,
+        content: Option<McpElicitationContent>,
+    },
+    ResolveBrowserOriginElicitation {
+        request_id: String,
+        decision: BrowserOriginElicitationDecision,
+    },
+    ResolveBrowserResourceElicitation {
+        request_id: String,
+        decision: BrowserResourceElicitationDecision,
+    },
     ComputerUseAvailable {
         task_id: String,
     },
@@ -417,6 +4022,7 @@ pub enum Action {
         task_id: String,
         window_id: String,
         title: String,
+        application_id: String,
     },
     AuthorizeComputerInputForSession {
         task_id: String,
@@ -427,11 +4033,21 @@ pub enum Action {
     },
     ComputerWindowsLoaded {
         task_id: String,
+        applications: Vec<ComputerApplicationState>,
         windows: Vec<ComputerWindowState>,
     },
     ComputerWindowsFailed {
         task_id: String,
         message: String,
+    },
+    LaunchComputerApp {
+        task_id: String,
+        application_id: String,
+    },
+    ComputerAppLaunchFinished {
+        task_id: String,
+        application_id: String,
+        error: Option<String>,
     },
     CaptureComputerWindow {
         task_id: String,
@@ -440,12 +4056,317 @@ pub enum Action {
         task_id: String,
         label: String,
     },
+    ComputerUseAppAuthorized {
+        task_id: String,
+        application_id: String,
+        always_allowed: bool,
+    },
+    RefreshComputerUsePolicy,
+    ComputerUsePolicyLoaded(Vec<String>),
+    ComputerUsePolicyFailed(String),
+    RemoveComputerUseAllowedApp(String),
+    ComputerUseAllowedAppRemoved {
+        app_id: String,
+        overridden: bool,
+    },
+    ComputerUsePolicyMutationFailed {
+        app_id: String,
+        message: String,
+    },
+    OpenBrowserTab,
+    ToggleBrowserPanel,
+    NavigateBrowser(String),
+    NavigateBrowserBack,
+    NavigateBrowserForward,
+    ReloadBrowser,
+    StopBrowser,
+    SelectBrowserTab(String),
+    CloseBrowserTab(String),
+    ResizeBrowser {
+        width: u32,
+        height: u32,
+    },
+    ClickBrowser {
+        x: u32,
+        y: u32,
+        button: BrowserMouseButton,
+    },
+    ScrollBrowser {
+        x: u32,
+        y: u32,
+        delta_x: i32,
+        delta_y: i32,
+    },
+    BrowserKey(BrowserKeyInput),
+    BrowserDownloadPreferencesLoaded(BrowserDownloadPreferences),
+    BrowserPermissionsLoaded(BrowserPermissionsState),
+    SetBrowserApprovalMode(BrowserApprovalMode),
+    SetBrowserFullCdpAccessEnabled(bool),
+    UpsertBrowserSitePermission(BrowserSitePermission),
+    RemoveBrowserSitePermission(String),
+    SetBrowserDownloadDirectory(Option<PathBuf>),
+    SetPromptForBrowserDownloads(bool),
+    AcknowledgeBrowserDownloads,
+    CancelBrowserDownload(String),
+    PauseBrowserDownload(String),
+    ResumeBrowserDownload(String),
+    OpenBrowserDownload(String),
+    RemoveBrowserDownload(String),
+    ShowBrowserDownloadInFolder(String),
+    ShowBrowserDownloadsFolder,
+    SetBrowserDownloadDestination {
+        id: String,
+        path: Option<PathBuf>,
+    },
+    BrowserReady {
+        task_id: String,
+        executable: PathBuf,
+    },
+    BrowserTabsChanged {
+        task_id: String,
+        tabs: Vec<BrowserTabState>,
+        active_tab_id: String,
+    },
+    BrowserFrameReady {
+        task_id: String,
+        tab_id: String,
+        jpeg: Arc<[u8]>,
+        width: u32,
+        height: u32,
+    },
+    BrowserVisibilityRequested {
+        task_id: String,
+        visible: bool,
+    },
+    BrowserDownloadHistoryLoaded(Vec<BrowserDownloadState>),
+    BrowserDownloadChanged(BrowserDownloadState),
+    BrowserDownloadSaveRequested {
+        directory: PathBuf,
+        filename: String,
+        id: String,
+    },
+    BrowserDownloadRemoved {
+        id: String,
+    },
+    BrowserOperationFailed(String),
+    BrowserFailed {
+        task_id: Option<String>,
+        message: String,
+    },
+    BrowserExited,
+    RefreshAccount,
+    AccountLoaded {
+        profile: Option<AccountProfile>,
+        requires_openai_auth: bool,
+        usage_limits: Vec<UsageLimitWindow>,
+        credits: Option<AccountCredits>,
+        usage_error: Option<String>,
+    },
+    AccountLoadFailed(String),
+    StartAccountLogin,
+    AccountLoginStarted {
+        login_id: String,
+        authorization_url: String,
+    },
+    AccountLoginStartFailed(String),
+    AccountLoginAuthorizationUrlRejected,
+    CancelAccountLogin,
+    AccountLoginCanceled {
+        login_id: String,
+    },
+    AccountLoginCancelFailed(String),
+    AccountLoginCompleted {
+        login_id: Option<String>,
+        success: bool,
+    },
+    LogoutAccount,
+    AccountLoggedOut,
+    AccountLogoutFailed(String),
+    SubmitFeedback {
+        classification: FeedbackClassification,
+        reason: String,
+        include_logs: bool,
+    },
+    FeedbackSubmitted {
+        feedback_id: String,
+    },
+    FeedbackFailed(String),
+    ClearFeedbackError,
     RefreshMarketplace,
-    MarketplaceLoaded(Vec<PluginCard>),
+    MarketplaceLoaded {
+        plugins: Vec<PluginCard>,
+        sources: Vec<MarketplaceSourceCard>,
+    },
     MarketplaceFailed(String),
+    ComposerPluginsLoaded(Vec<PluginCard>),
+    ComposerDesktopAppsLoaded(Vec<ComputerApplicationState>),
+    SetMarketplaceManageMode(bool),
+    SelectMarketplaceManageTab(MarketplaceManageTab),
+    AddMarketplace {
+        source: String,
+        ref_name: Option<String>,
+        sparse_paths: Vec<String>,
+    },
+    MarketplaceAdded {
+        marketplace_name: String,
+        already_added: bool,
+    },
+    MarketplaceAddFailed(String),
+    ClearMarketplaceAddError,
+    RemoveMarketplace(String),
+    MarketplaceRemoved(String),
+    MarketplaceRemoveFailed {
+        marketplace_name: String,
+        message: String,
+    },
+    UpgradeMarketplaces(Option<String>),
+    MarketplacesUpgraded {
+        selected_marketplaces: Vec<String>,
+        upgraded_count: usize,
+        errors: Vec<MarketplaceUpgradeFailure>,
+    },
+    MarketplaceUpgradeFailed(String),
+    ClearMarketplaceMutationError,
     MarketplaceQueryChanged(String),
+    SelectMarketplaceSection(Option<MarketplaceSectionFilter>),
+    SelectPluginDirectoryTab(PluginDirectoryTab),
+    OpenPluginDetails {
+        plugin_id: String,
+    },
+    ClosePluginDetails,
+    PluginDetailLoaded {
+        plugin_id: String,
+        detail: PluginDetailView,
+    },
+    PluginDetailFailed {
+        plugin_id: String,
+        message: String,
+    },
+    SelectMarketplaceTab(MarketplaceTab),
+    RefreshApps,
+    AppsLoaded(Vec<AppCard>),
+    AppsFailed(String),
+    OpenAppDetails {
+        app_id: String,
+    },
+    CloseAppDetails,
+    AppDetailLoaded {
+        app_id: String,
+        detail: AppDetailView,
+    },
+    AppDetailFailed {
+        app_id: String,
+        message: String,
+    },
+    SetAppEnabled {
+        app_id: String,
+        enabled: bool,
+    },
+    AppEnabledChanged {
+        app_id: String,
+        enabled: bool,
+        overridden: bool,
+    },
+    AppMutationFailed {
+        app_id: String,
+        message: String,
+    },
+    RefreshMcpServers,
+    McpServersLoaded {
+        servers: Vec<McpServerCard>,
+        plugin_servers: Vec<McpServerCard>,
+        warnings: Vec<String>,
+    },
+    McpServersFailed(String),
+    ReadMcpResource {
+        server: String,
+        uri: String,
+    },
+    McpResourceLoaded {
+        server: String,
+        uri: String,
+        contents: Vec<McpResourceContentCard>,
+    },
+    McpResourceFailed {
+        server: String,
+        uri: String,
+        message: String,
+    },
+    SetMcpServerEnabled {
+        key: String,
+        enabled: bool,
+    },
+    SaveMcpServer {
+        existing_key: Option<String>,
+        draft: McpServerDraft,
+    },
+    McpServerSaved {
+        key: String,
+        overridden: bool,
+    },
+    RemoveMcpServer {
+        key: String,
+    },
+    McpServerRemoved {
+        key: String,
+        overridden: bool,
+    },
+    ClearMcpServerMutationError,
+    McpServerEnabledChanged {
+        key: String,
+        enabled: bool,
+        overridden: bool,
+    },
+    McpServerMutationFailed {
+        key: String,
+        message: String,
+    },
+    AuthenticateMcpServer {
+        name: String,
+    },
+    McpServerAuthenticationStarted {
+        name: String,
+        authorization_url: String,
+    },
+    McpServerAuthenticationCompleted {
+        name: String,
+        success: bool,
+        error: Option<String>,
+    },
+    McpServerStartupStatusUpdated {
+        name: String,
+        status: McpServerStartupState,
+        error: Option<String>,
+        failure_reason: Option<McpServerStartupFailureReason>,
+    },
+    RefreshSkills,
+    SkillsInvalidated,
+    SkillsLoaded {
+        skills: Vec<SkillCard>,
+        errors: Vec<String>,
+    },
+    SkillsFailed(String),
+    RefreshHooks,
+    HooksLoaded(Vec<HookProjectEntry>),
+    HooksFailed(String),
+    SetHookEnabled {
+        key: String,
+        enabled: bool,
+    },
+    TrustHook {
+        key: String,
+    },
+    HookMutationFinished {
+        key: String,
+        overridden: bool,
+    },
+    HookMutationFailed {
+        key: String,
+        message: String,
+    },
     InstallPlugin {
         plugin_id: String,
+        plugin_name: String,
         marketplace: String,
     },
     UninstallPlugin {
@@ -455,12 +4376,171 @@ pub enum Action {
         plugin_id: String,
         installed: bool,
     },
+    SetPluginEnabled {
+        plugin_id: String,
+        enabled: bool,
+    },
+    PluginEnabledChanged {
+        plugin_id: String,
+        enabled: bool,
+        overridden: bool,
+    },
+    SetPluginSkillEnabled {
+        plugin_id: String,
+        skill_name: String,
+        enabled: bool,
+    },
+    PluginSkillEnabledChanged {
+        plugin_id: String,
+        skill_name: String,
+        requested_enabled: bool,
+        effective_enabled: bool,
+    },
+    PluginSkillMutationFailed {
+        plugin_id: String,
+        skill_name: String,
+        message: String,
+    },
+    PluginMutationFailed {
+        plugin_id: String,
+        message: String,
+    },
+    SetSkillEnabled {
+        path: PathBuf,
+        enabled: bool,
+    },
+    SkillEnabledChanged {
+        path: PathBuf,
+        requested_enabled: bool,
+        effective_enabled: bool,
+    },
+    SkillMutationFailed {
+        path: PathBuf,
+        message: String,
+    },
+    RefreshPullRequests,
+    PullRequestQueryChanged(String),
+    SetPullRequestRelationship(PullRequestRelationship),
+    SetPullRequestLifecycle(PullRequestLifecycle),
+    PullRequestSearchDue {
+        generation: u64,
+    },
+    PullRequestsLoaded {
+        generation: u64,
+        account_login: String,
+        account_avatar_url: Option<String>,
+        items: Vec<PullRequestSummary>,
+        total_count: u64,
+        next_cursor: Option<String>,
+        truncated: bool,
+        append: bool,
+    },
+    PullRequestsFailed {
+        generation: u64,
+        message: String,
+        append: bool,
+    },
+    LoadMorePullRequests,
+    SelectPullRequest(PullRequestIdentity),
+    PullRequestDetailLoaded {
+        generation: u64,
+        detail: PullRequestDetail,
+    },
+    PullRequestDetailFailed {
+        generation: u64,
+        message: String,
+    },
+    SelectPullRequestDetailTab(PullRequestDetailTab),
+    RefreshPullRequestDiff,
+    PullRequestDiffLoaded {
+        generation: u64,
+        identity: PullRequestIdentity,
+        head_revision: String,
+        unified_diff: String,
+    },
+    PullRequestDiffFailed {
+        generation: u64,
+        identity: PullRequestIdentity,
+        message: String,
+    },
+    SubmitPullRequestMutation(PullRequestMutation),
+    ClearPullRequestMutationError,
+    PullRequestMutationCompleted {
+        generation: u64,
+        identity: PullRequestIdentity,
+    },
+    PullRequestMutationFailed {
+        generation: u64,
+        identity: PullRequestIdentity,
+        message: String,
+    },
+    ClosePullRequestDetail,
     RefreshGit,
     GitSnapshotLoaded(GitState),
-    SelectDiffPath(PathBuf),
+    SelectGitDiffScope(GitDiffScope),
+    SelectDiffPath {
+        path: PathBuf,
+        scope: GitDiffScope,
+    },
     StagePath(PathBuf),
+    StageAll,
     UnstagePath(PathBuf),
+    UnstageAll,
+    SetGitIncludeUnstaged(bool),
+    ClearGitCommitError,
+    CommitGit {
+        message: String,
+        include_unstaged: bool,
+        next_step: GitCommitNextStep,
+    },
+    GitCommitMessageGenerated,
+    GitPushStarted,
+    GitCommitCompleted {
+        branch: Option<String>,
+        pushed: bool,
+    },
+    GitCommitFailed {
+        message: String,
+    },
+    ClearGitPullRequestError,
+    GitPullRequestStatusLoaded {
+        branch: String,
+        provider: GitPullRequestProvider,
+        pull_request: Option<GitPullRequestState>,
+    },
+    CreateGitPullRequest {
+        title: String,
+        body: String,
+        include_local_changes: bool,
+        is_draft: bool,
+        open_in_browser: bool,
+    },
+    GitPullRequestCommitStarted,
+    GitPullRequestPushStarted,
+    GitPullRequestCreateStarted,
+    GitPullRequestCompleted {
+        pull_request: GitPullRequestState,
+        open_in_browser: bool,
+    },
+    GitPullRequestFailed {
+        message: String,
+    },
     SwitchGitBranch(String),
+    CreateGitBranch(String),
+    GitBranchMutationCompleted {
+        message: String,
+    },
+    GitBranchMutationFailed {
+        message: String,
+    },
+    GitBranchSwitchBlocked {
+        branch: String,
+        create_branch: bool,
+        paths: Vec<PathBuf>,
+        truncated: bool,
+    },
+    DismissGitBranchConflict,
+    ClearGitBranchMutationError,
     CreateGitWorktree {
         path: PathBuf,
         branch: String,
@@ -472,15 +4552,30 @@ pub enum Action {
         truncated: bool,
     },
     SpawnTerminal,
+    SelectTerminalTab(u64),
+    CloseTerminalTab(u64),
+    RestartTerminal,
     TerminalStarted {
+        tab_id: u64,
         process_id: String,
+    },
+    TerminalStartFailed {
+        tab_id: u64,
+        message: String,
+    },
+    TerminalTitleChanged {
+        tab_id: u64,
         title: String,
     },
-    TerminalScreen(String),
-    TerminalOutputTruncated,
+    TerminalScreen {
+        tab_id: u64,
+        screen: String,
+    },
+    TerminalOutputTruncated(u64),
     SubmitTerminalInput(String),
     StopTerminal,
     TerminalExited {
+        tab_id: u64,
         code: u32,
     },
     SetStatus(String),
@@ -490,43 +4585,488 @@ pub enum Action {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
     ConnectAppServer,
+    LoadModels,
+    LoadPermissionProfiles {
+        cwd: Option<PathBuf>,
+    },
+    LoadPersonalization,
+    SetPersonality(Personality),
+    SetMemoriesEnabled(bool),
+    SetToolAssistedMemoriesEnabled(bool),
+    LoadAgentConfiguration {
+        cwd: Option<PathBuf>,
+    },
+    SetAgentApprovalPolicy {
+        value: String,
+        file_path: Option<PathBuf>,
+        expected_version: Option<String>,
+    },
+    SetAgentSandboxMode {
+        value: String,
+        file_path: Option<PathBuf>,
+        expected_version: Option<String>,
+    },
+    SetAgentNetworkAccess {
+        value: bool,
+        file_path: Option<PathBuf>,
+        expected_version: Option<String>,
+    },
     LoadTasks {
         generation: u64,
         cursor: Option<String>,
     },
-    CreateTask,
+    LoadLoadedTasks,
+    LoadPinnedTasks {
+        task_ids: Vec<String>,
+    },
+    ScheduleTaskSearch {
+        generation: u64,
+        query: String,
+    },
+    SearchTasks {
+        generation: u64,
+        query: String,
+        cursor: Option<String>,
+    },
+    CreateTask {
+        cwd: Option<PathBuf>,
+        model: Option<String>,
+        effort: Option<String>,
+        service_tier: Option<String>,
+        permissions: Option<String>,
+        approval_policy: Option<String>,
+        approvals_reviewer: Option<ApprovalsReviewer>,
+        initial_message: String,
+        attachments: Vec<ComposerAttachment>,
+        plan_mode: bool,
+        goal_objective: Option<String>,
+    },
     ForkTask {
         task_id: String,
+        cwd: Option<PathBuf>,
+        title: String,
+    },
+    ForkTaskIntoWorktree {
+        task_id: String,
+        cwd: PathBuf,
+        title: String,
+        worktrees_root: Option<PathBuf>,
+    },
+    RetryPendingWorktreeFork {
+        task_id: String,
+        cwd: PathBuf,
+        title: String,
+    },
+    CancelPendingWorktreeFork,
+    ArchiveTask {
+        task_id: String,
+    },
+    RenameTask {
+        task_id: String,
+        name: String,
+    },
+    LoadArchivedTasks {
+        generation: u64,
+        cursor: Option<String>,
+    },
+    UnarchiveTask {
+        task_id: String,
+    },
+    DeleteArchivedTasks {
+        task_ids: Vec<String>,
+        kind: ArchivedTaskDeleteKind,
     },
     LoadTimeline {
         task_id: String,
         generation: u64,
         cursor: Option<String>,
     },
+    LoadBackgroundTerminals {
+        task_id: String,
+        cursor: Option<String>,
+    },
+    TerminateBackgroundTerminal {
+        task_id: String,
+        process_id: String,
+    },
+    CleanBackgroundTerminals {
+        task_id: String,
+    },
+    LoadOutputPreview {
+        task_id: String,
+        root: PathBuf,
+        path: PathBuf,
+    },
+    LoadWorkspaceFilePreview {
+        root: PathBuf,
+        path: PathBuf,
+    },
+    RevealOutput {
+        root: PathBuf,
+        path: PathBuf,
+    },
+    OpenWorkspacePath {
+        root: PathBuf,
+        path: PathBuf,
+    },
+    EditLastUserMessage {
+        task_id: String,
+        turn_id: String,
+        text: String,
+        attachments: Vec<ComposerAttachment>,
+        rollback_required: bool,
+        model: Option<String>,
+        effort: Option<String>,
+        service_tier: Option<String>,
+        permissions: Option<String>,
+        approval_policy: Option<String>,
+        approvals_reviewer: Option<ApprovalsReviewer>,
+        plan_mode: bool,
+    },
+    CompactThread {
+        task_id: String,
+    },
+    ResumeTask {
+        task_id: String,
+    },
+    UpdateThreadSettings {
+        task_id: String,
+        model: Option<String>,
+        effort: Option<String>,
+        service_tier: Option<Option<String>>,
+        permissions: Option<String>,
+        approval_policy: Option<String>,
+        approvals_reviewer: Option<ApprovalsReviewer>,
+    },
+    PersistComposerModelDefaults {
+        model: String,
+        effort: String,
+        profile: Option<String>,
+    },
+    PersistComposerServiceTierDefault {
+        service_tier: Option<String>,
+        profile: Option<String>,
+    },
+    LoadGoal {
+        task_id: String,
+    },
+    SetGoal {
+        task_id: String,
+        objective: Option<String>,
+        status: Option<ThreadGoalStatus>,
+        token_budget: Option<Option<i64>>,
+    },
+    ScheduleGoalContinuation {
+        task_id: String,
+    },
+    ContinueGoal {
+        task_id: String,
+    },
+    ClearGoal {
+        task_id: String,
+    },
     StartTurn {
         task_id: String,
         text: String,
+        model: Option<String>,
+        effort: Option<String>,
+        service_tier: Option<String>,
+        permissions: Option<String>,
+        approval_policy: Option<String>,
+        approvals_reviewer: Option<ApprovalsReviewer>,
+        attachments: Vec<ComposerAttachment>,
+        plan_mode: bool,
+    },
+    SteerTurn {
+        task_id: String,
+        expected_turn_id: String,
+        text: String,
+        attachments: Vec<ComposerAttachment>,
+    },
+    SearchFuzzyFiles {
+        session_id: String,
+        roots: Vec<PathBuf>,
+        query: String,
+        start_session: bool,
+    },
+    StopFuzzyFileSearch {
+        session_id: String,
+    },
+    InterruptTurn {
+        task_id: String,
+        turn_id: String,
     },
     RespondApproval {
         request_id: String,
         decision: ApprovalDecision,
     },
-    RefreshMarketplace,
+    RespondUserInput {
+        request_id: String,
+        answers: UserInputAnswers,
+    },
+    RespondMcpElicitation {
+        request_id: String,
+        decision: McpElicitationDecision,
+        content: Option<McpElicitationContent>,
+    },
+    RespondBrowserOriginElicitation {
+        request_id: String,
+        decision: BrowserOriginElicitationDecision,
+    },
+    RespondBrowserResourceElicitation {
+        request_id: String,
+        decision: BrowserResourceElicitationDecision,
+    },
+    RefreshMarketplace {
+        cwds: Vec<PathBuf>,
+        directory_tab: PluginDirectoryTab,
+        force_refetch: bool,
+        include_all_marketplaces: bool,
+    },
+    RefreshComposerPlugins {
+        cwds: Vec<PathBuf>,
+        force_refetch: bool,
+    },
+    LoadComposerDesktopApps,
+    AddMarketplace {
+        source: String,
+        ref_name: Option<String>,
+        sparse_paths: Option<Vec<String>>,
+    },
+    RemoveMarketplace {
+        marketplace_name: String,
+    },
+    UpgradeMarketplaces {
+        marketplace_name: Option<String>,
+    },
+    ReadPlugin {
+        plugin_id: String,
+        plugin_name: String,
+        marketplace: String,
+    },
+    RefreshSkills {
+        cwds: Vec<PathBuf>,
+        force_reload: bool,
+    },
+    RefreshHooks {
+        cwds: Vec<PathBuf>,
+    },
+    SetHookEnabled {
+        key: String,
+        enabled: bool,
+    },
+    TrustHook {
+        key: String,
+        current_hash: String,
+    },
+    RefreshApps {
+        force_refetch: bool,
+    },
+    ReadApp {
+        app_id: String,
+    },
+    SetAppEnabled {
+        app_id: String,
+        enabled: bool,
+    },
+    RefreshMcpServers {
+        cwd: Option<PathBuf>,
+    },
+    ReadMcpResource {
+        server: String,
+        uri: String,
+    },
+    SetMcpServerEnabled {
+        key: String,
+        enabled: bool,
+    },
+    SaveMcpServer {
+        existing_key: Option<String>,
+        key: String,
+        draft: Box<McpServerDraft>,
+        cwd: Option<PathBuf>,
+    },
+    RemoveMcpServer {
+        key: String,
+    },
+    AuthenticateMcpServer {
+        name: String,
+    },
+    ReloadMcpServers {
+        cwd: Option<PathBuf>,
+    },
     InstallPlugin {
         plugin_id: String,
+        plugin_name: String,
         marketplace: String,
     },
     UninstallPlugin {
         plugin_id: String,
     },
+    SetPluginEnabled {
+        plugin_id: String,
+        enabled: bool,
+    },
+    SetPluginSkillEnabled {
+        plugin_id: String,
+        skill_name: String,
+        enabled: bool,
+    },
+    SetSkillEnabled {
+        path: PathBuf,
+        enabled: bool,
+    },
+    SchedulePullRequestSearch {
+        generation: u64,
+    },
+    SearchPullRequests {
+        generation: u64,
+        cwd: PathBuf,
+        relationship: PullRequestRelationship,
+        lifecycle: PullRequestLifecycle,
+        query: String,
+        cursor: Option<String>,
+        append: bool,
+    },
+    LoadPullRequestDetail {
+        generation: u64,
+        cwd: PathBuf,
+        identity: PullRequestIdentity,
+        account_login: String,
+    },
+    LoadPullRequestDiff {
+        generation: u64,
+        cwd: PathBuf,
+        identity: PullRequestIdentity,
+    },
+    MutatePullRequest {
+        generation: u64,
+        cwd: PathBuf,
+        identity: PullRequestIdentity,
+        expected_head_revision: String,
+        mutation: PullRequestMutation,
+    },
     ConfigureComputerUse {
         task_id: String,
         enabled: bool,
         selected_window_id: Option<String>,
+        selected_application_id: Option<String>,
         input_authorized: bool,
+    },
+    StartBrowser {
+        task_id: String,
+    },
+    ActivateBrowser {
+        task_id: String,
+    },
+    BrowserNavigate {
+        task_id: String,
+        url: String,
+    },
+    BrowserBack {
+        task_id: String,
+    },
+    BrowserForward {
+        task_id: String,
+    },
+    BrowserReload {
+        task_id: String,
+    },
+    BrowserStop {
+        task_id: String,
+    },
+    BrowserOpenTab {
+        task_id: String,
+        url: Option<String>,
+    },
+    BrowserSelectTab {
+        task_id: String,
+        tab_id: String,
+    },
+    BrowserCloseTab {
+        task_id: String,
+        tab_id: String,
+    },
+    BrowserResize {
+        task_id: String,
+        width: u32,
+        height: u32,
+    },
+    BrowserSurfaceState {
+        task_id: Option<String>,
+        visible: bool,
+    },
+    BrowserClick {
+        task_id: String,
+        x: u32,
+        y: u32,
+        button: BrowserMouseButton,
+    },
+    BrowserScroll {
+        task_id: String,
+        x: u32,
+        y: u32,
+        delta_x: i32,
+        delta_y: i32,
+    },
+    BrowserKey {
+        task_id: String,
+        input: BrowserKeyInput,
+    },
+    ConfigureBrowserDownloads(BrowserDownloadPreferences),
+    PersistBrowserDownloadPreferences(BrowserDownloadPreferences),
+    ConfigureBrowserPermissions(BrowserPermissionsState),
+    PersistBrowserPermissions(BrowserPermissionsState),
+    BrowserCancelDownload {
+        id: String,
+    },
+    BrowserPauseDownload {
+        id: String,
+    },
+    BrowserResumeDownload {
+        id: String,
+    },
+    BrowserOpenDownload {
+        id: String,
+    },
+    BrowserRemoveDownload {
+        id: String,
+    },
+    BrowserShowDownloadInFolder {
+        id: String,
+    },
+    BrowserShowDownloadsFolder,
+    BrowserSetDownloadDestination {
+        id: String,
+        path: Option<PathBuf>,
+    },
+    PersistBrowserDownload(BrowserDownloadState),
+    DeletePersistedBrowserDownload {
+        id: String,
+    },
+    LoadComputerUsePolicy,
+    LoadAccount,
+    StartAccountLogin,
+    CancelAccountLogin {
+        login_id: String,
+    },
+    LogoutAccount,
+    SubmitFeedback {
+        classification: FeedbackClassification,
+        reason: String,
+        include_logs: bool,
+        thread_id: Option<String>,
+    },
+    RemoveComputerUseAllowedApp {
+        app_id: String,
+        remaining_app_ids: Vec<String>,
     },
     LoadComputerWindows {
         task_id: String,
+    },
+    LaunchComputerApp {
+        task_id: String,
+        application_id: String,
     },
     CaptureComputerWindow {
         task_id: String,
@@ -539,16 +5079,54 @@ pub enum Effect {
         generation: u64,
         root: PathBuf,
         path: PathBuf,
+        staged: bool,
     },
     StagePath {
         root: PathBuf,
         path: PathBuf,
     },
+    StageAll {
+        root: PathBuf,
+    },
     UnstagePath {
         root: PathBuf,
         path: PathBuf,
     },
+    UnstageAll {
+        root: PathBuf,
+    },
+    CommitGit {
+        root: PathBuf,
+        branch: Option<String>,
+        message: String,
+        include_unstaged: bool,
+        next_step: GitCommitNextStep,
+        force_push: bool,
+        commit_instructions: String,
+    },
+    LoadGitPullRequest {
+        root: PathBuf,
+        branch: String,
+    },
+    CreateGitPullRequest {
+        root: PathBuf,
+        branch: String,
+        base_branch: String,
+        title: String,
+        body: String,
+        include_local_changes: bool,
+        next_step: GitPullRequestNextStep,
+        is_draft: bool,
+        open_in_browser: bool,
+        force_push: bool,
+        commit_instructions: String,
+        pull_request_instructions: String,
+    },
     SwitchGitBranch {
+        root: PathBuf,
+        branch: String,
+    },
+    CreateGitBranch {
         root: PathBuf,
         branch: String,
     },
@@ -559,19 +5137,836 @@ pub enum Effect {
         create_branch: bool,
     },
     SpawnTerminal {
+        tab_id: u64,
         cwd: PathBuf,
+        shell: Option<IntegratedTerminalShell>,
+    },
+    RestartTerminal {
+        tab_id: u64,
+        cwd: PathBuf,
+        shell: Option<IntegratedTerminalShell>,
     },
     WriteTerminal {
+        tab_id: u64,
         input: String,
     },
-    StopTerminal,
+    StopTerminal {
+        tab_id: u64,
+    },
     PersistUiState {
         route: MainRoute,
         inspector: InspectorPane,
     },
+    PersistPrimaryWindowPlacement(PrimaryWindowPlacement),
+    PersistTerminalDockLocation(TerminalDockLocation),
+    PersistAppearanceTheme(AppearanceTheme),
+    PersistAppearancePreferences(AppearancePreferences),
+    PersistGitPreferences(GitPreferences),
+    PersistKeyboardShortcutPreferences {
+        preferences: KeyboardShortcutPreferences,
+        previous: KeyboardShortcutPreferences,
+        target: KeyboardShortcutUpdateTarget,
+    },
+    PersistTerminalDockSize {
+        location: TerminalDockLocation,
+        size: u32,
+    },
+    PersistIntegratedTerminalShell(IntegratedTerminalShell),
+    PersistGitIncludeUnstaged(bool),
+    PersistPinnedTasks {
+        task_ids: Vec<String>,
+    },
     RememberWorkspace {
         path: PathBuf,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrimaryWindowPlacement {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    maximized: bool,
+}
+
+impl PrimaryWindowPlacement {
+    pub fn new(x: i32, y: i32, width: u32, height: u32, maximized: bool) -> Option<Self> {
+        const MAX_COORDINATE: u32 = 1_000_000;
+        const MAX_EXTENT: u32 = 100_000;
+
+        (x.unsigned_abs() <= MAX_COORDINATE
+            && y.unsigned_abs() <= MAX_COORDINATE
+            && width <= MAX_EXTENT
+            && height <= MAX_EXTENT)
+            .then_some(Self {
+                x,
+                y,
+                width: width.max(480),
+                height: height.max(600),
+                maximized,
+            })
+    }
+
+    pub const fn x(self) -> i32 {
+        self.x
+    }
+
+    pub const fn y(self) -> i32 {
+        self.y
+    }
+
+    pub const fn width(self) -> u32 {
+        self.width
+    }
+
+    pub const fn height(self) -> u32 {
+        self.height
+    }
+
+    pub const fn is_maximized(self) -> bool {
+        self.maximized
+    }
+}
+
+fn can_continue_active_goal(state: &AppState, task_id: &str) -> bool {
+    matches!(state.connection, ConnectionStatus::Online)
+        && state.goals.get(task_id).is_some_and(|goal_state| {
+            goal_state.status == LoadStatus::Ready
+                && goal_state
+                    .goal
+                    .as_ref()
+                    .is_some_and(|goal| goal.status == ThreadGoalStatus::Active)
+        })
+        && state.timelines.get(task_id).is_some_and(|timeline| {
+            timeline.active_turn_id.is_none() && !timeline.interrupt_pending
+        })
+        && state.tasks.iter().any(|task| {
+            task.id == task_id
+                && !matches!(
+                    task.status,
+                    TaskRunStatus::Running | TaskRunStatus::WaitingForApproval
+                )
+        })
+        && !state
+            .approvals
+            .iter()
+            .any(|approval| approval.task_id == task_id)
+}
+
+fn schedule_goal_continuation(state: &mut AppState, task_id: String) -> Vec<Effect> {
+    if !can_continue_active_goal(state, &task_id) {
+        return Vec::new();
+    }
+    let timeline = state.timelines.entry(task_id.clone()).or_default();
+    if timeline.goal_continuation_pending {
+        return Vec::new();
+    }
+    timeline.goal_continuation_pending = true;
+    vec![Effect::ScheduleGoalContinuation { task_id }]
+}
+
+fn goal_completion_turn_id(state: &AppState, task_id: &str) -> Option<String> {
+    let timeline = state.timelines.get(task_id)?;
+    timeline.active_turn_id.clone().or_else(|| {
+        timeline
+            .items
+            .iter()
+            .rev()
+            .find(|item| item.kind == TimelineKind::Agent)
+            .map(|item| item.turn_id.clone())
+    })
+}
+
+fn apply_thread_goal_snapshot(state: &mut AppState, goal: ThreadGoal) -> Vec<Effect> {
+    let task_id = goal.task_id.clone();
+    let is_complete = goal.status == ThreadGoalStatus::Complete;
+    let completion_turn_id = is_complete
+        .then(|| goal_completion_turn_id(state, &task_id))
+        .flatten();
+    let goal_state = state.goals.entry(task_id.clone()).or_default();
+
+    if is_complete {
+        let is_new_completion = goal_state
+            .completed_goal
+            .as_ref()
+            .is_none_or(|completed| completed.updated_at != goal.updated_at);
+        if is_new_completion {
+            goal_state.completed_goal = Some(goal.clone());
+            goal_state.completed_goal_turn_id = completion_turn_id;
+        }
+        if is_new_completion || goal_state.goal.is_some() {
+            goal_state.goal = Some(goal);
+        }
+        goal_state.status = LoadStatus::Ready;
+        state
+            .timelines
+            .entry(task_id.clone())
+            .or_default()
+            .goal_continuation_pending = false;
+        return is_new_completion
+            .then_some(Effect::ClearGoal { task_id })
+            .into_iter()
+            .collect();
+    }
+
+    goal_state.status = LoadStatus::Ready;
+    goal_state.goal = Some(goal);
+    goal_state.completed_goal = None;
+    goal_state.completed_goal_turn_id = None;
+    Vec::new()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct ComposerSettings {
+    model: Option<String>,
+    effort: Option<String>,
+    service_tier: Option<String>,
+    use_model_default_service_tier: bool,
+    permissions: Option<String>,
+    approval_policy: Option<String>,
+    approvals_reviewer: Option<ApprovalsReviewer>,
+}
+
+fn apply_composer_settings(state: &mut AppState, settings: ComposerSettings) {
+    let ComposerSettings {
+        model,
+        effort,
+        service_tier,
+        use_model_default_service_tier,
+        permissions,
+        approval_policy,
+        approvals_reviewer,
+    } = settings;
+    if let Some(model) = model.filter(|model| {
+        state
+            .composer_controls
+            .models
+            .iter()
+            .any(|option| option.id == model.as_str())
+    }) {
+        state.composer_controls.selected_model = Some(model);
+    }
+    if let Some(effort) = effort.filter(|effort| {
+        state
+            .composer_controls
+            .selected_model
+            .as_deref()
+            .and_then(|model_id| {
+                state
+                    .composer_controls
+                    .models
+                    .iter()
+                    .find(|model| model.id == model_id)
+            })
+            .is_some_and(|model| {
+                model
+                    .supported_efforts
+                    .iter()
+                    .any(|option| option.id == effort.as_str())
+            })
+    }) {
+        state.composer_controls.selected_effort = Some(effort);
+    }
+    state.composer_controls.selected_service_tier =
+        if use_model_default_service_tier && service_tier.is_none() {
+            state
+                .composer_controls
+                .selected_model
+                .as_deref()
+                .and_then(|model_id| {
+                    state
+                        .composer_controls
+                        .models
+                        .iter()
+                        .find(|model| model.id == model_id)
+                })
+                .and_then(|model| {
+                    model.default_service_tier.as_ref().and_then(|default| {
+                        model
+                            .service_tiers
+                            .iter()
+                            .any(|tier| tier.id == default.as_str())
+                            .then(|| default.clone())
+                    })
+                })
+        } else {
+            service_tier
+        };
+    if let Some(permissions) = permissions {
+        state.composer_controls.selected_permission_mode = state
+            .composer_controls
+            .permission_modes
+            .iter()
+            .find(|mode| {
+                mode.allowed
+                    && mode.permissions == permissions
+                    && (mode.id.starts_with("profile:")
+                        || (mode.approval_policy.as_deref() == approval_policy.as_deref()
+                            && mode.approvals_reviewer == approvals_reviewer))
+            })
+            .map(|mode| mode.id.clone());
+    }
+}
+
+fn normalize_pinned_task_ids(task_ids: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::with_capacity(task_ids.len().min(MAX_PINNED_TASKS));
+    for task_id in task_ids {
+        if task_id.is_empty()
+            || task_id.len() > MAX_PINNED_TASK_ID_BYTES
+            || normalized.iter().any(|existing| existing == &task_id)
+        {
+            continue;
+        }
+        normalized.push(task_id);
+        if normalized.len() == MAX_PINNED_TASKS {
+            break;
+        }
+    }
+    normalized
+}
+
+fn normalize_computer_app_id(app_id: String) -> String {
+    let app_id = app_id.trim().to_lowercase();
+    if app_id.len() > MAX_COMPUTER_APP_ID_BYTES {
+        String::new()
+    } else {
+        app_id
+    }
+}
+
+fn normalize_computer_app_ids(app_ids: Vec<String>) -> Vec<String> {
+    let mut app_ids = app_ids
+        .into_iter()
+        .map(normalize_computer_app_id)
+        .filter(|app_id| !app_id.is_empty())
+        .collect::<Vec<_>>();
+    app_ids.sort();
+    app_ids.dedup();
+    app_ids.truncate(MAX_COMPUTER_ALLOWED_APPS);
+    app_ids
+}
+
+#[must_use]
+pub fn computer_app_id_matches(configured_app_id: &str, actual_app_id: &str) -> bool {
+    fn without_process_prefix(app_id: &str) -> &str {
+        app_id
+            .get(.."process:".len())
+            .filter(|prefix| prefix.eq_ignore_ascii_case("process:"))
+            .and_then(|_| app_id.get("process:".len()..))
+            .unwrap_or(app_id)
+    }
+
+    let configured_app_id = configured_app_id.trim();
+    let actual_app_id = actual_app_id.trim();
+    if configured_app_id.eq_ignore_ascii_case(actual_app_id) {
+        return true;
+    }
+
+    let configured_process_id = without_process_prefix(configured_app_id);
+    let actual_process_id = without_process_prefix(actual_app_id);
+    if configured_process_id.eq_ignore_ascii_case(actual_process_id) {
+        return true;
+    }
+
+    actual_process_id
+        .rsplit(['\\', '/'])
+        .next()
+        .is_some_and(|actual_name| actual_name.eq_ignore_ascii_case(configured_process_id))
+}
+
+fn load_pinned_tasks_effect(state: &AppState) -> Option<Effect> {
+    let task_ids = state
+        .pinned_task_ids
+        .iter()
+        .filter(|task_id| !state.tasks.iter().any(|task| task.id == task_id.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    (!task_ids.is_empty()).then_some(Effect::LoadPinnedTasks { task_ids })
+}
+
+fn selected_task_cwds(state: &AppState) -> Vec<PathBuf> {
+    state
+        .selected_task_id
+        .as_deref()
+        .and_then(|task_id| state.tasks.iter().find(|task| task.id == task_id))
+        .map(|task| vec![task.cwd.clone()])
+        .unwrap_or_default()
+}
+
+fn composer_workspace_roots(state: &AppState) -> Vec<PathBuf> {
+    let mut roots = selected_task_cwds(state);
+    if roots.is_empty()
+        && let Some(cwd) = state.new_chat_cwd.clone()
+    {
+        roots.push(cwd);
+    }
+    roots.retain(|root| root.is_absolute());
+    roots.dedup();
+    roots.truncate(MAX_FUZZY_FILE_ROOTS);
+    roots
+}
+
+fn hook_workspace_roots(state: &AppState) -> Vec<PathBuf> {
+    let mut roots = composer_workspace_roots(state);
+    for task in &state.tasks {
+        if task.cwd.is_absolute() && !roots.contains(&task.cwd) {
+            roots.push(task.cwd.clone());
+            if roots.len() == MAX_HOOK_PROJECTS {
+                break;
+            }
+        }
+    }
+    roots
+}
+
+fn clear_fuzzy_file_search(state: &mut AppState) -> Vec<Effect> {
+    let stop = state
+        .fuzzy_file_search
+        .session_id
+        .take()
+        .map(|session_id| Effect::StopFuzzyFileSearch { session_id });
+    state.fuzzy_file_search.status = LoadStatus::Idle;
+    state.fuzzy_file_search.query.clear();
+    state.fuzzy_file_search.roots.clear();
+    state.fuzzy_file_search.results.clear();
+    state.fuzzy_file_search.error = None;
+    stop.into_iter().collect()
+}
+
+fn change_fuzzy_file_search(state: &mut AppState, query: Option<String>) -> Vec<Effect> {
+    let query = query
+        .map(|query| bounded_string(query.trim().to_owned(), MAX_FUZZY_FILE_QUERY_BYTES))
+        .unwrap_or_default();
+    let roots = composer_workspace_roots(state);
+    if query.is_empty() || roots.is_empty() {
+        return clear_fuzzy_file_search(state);
+    }
+
+    let same_roots = state.fuzzy_file_search.roots == roots;
+    let same_query = state.fuzzy_file_search.query == query;
+    if same_roots
+        && same_query
+        && state.fuzzy_file_search.session_id.is_some()
+        && state.fuzzy_file_search.status != LoadStatus::Failed
+    {
+        return Vec::new();
+    }
+
+    let mut effects = Vec::with_capacity(2);
+    let (session_id, start_session) = if same_roots {
+        match state.fuzzy_file_search.session_id.clone() {
+            Some(session_id) => (session_id, false),
+            None => {
+                state.fuzzy_file_search.generation =
+                    state.fuzzy_file_search.generation.saturating_add(1);
+                (
+                    format!(
+                        "codexrs-fuzzy-file-search-{}",
+                        state.fuzzy_file_search.generation
+                    ),
+                    true,
+                )
+            }
+        }
+    } else {
+        if let Some(session_id) = state.fuzzy_file_search.session_id.take() {
+            effects.push(Effect::StopFuzzyFileSearch { session_id });
+        }
+        state.fuzzy_file_search.generation = state.fuzzy_file_search.generation.saturating_add(1);
+        (
+            format!(
+                "codexrs-fuzzy-file-search-{}",
+                state.fuzzy_file_search.generation
+            ),
+            true,
+        )
+    };
+
+    state.fuzzy_file_search.status = LoadStatus::Loading;
+    state.fuzzy_file_search.session_id = Some(session_id.clone());
+    state.fuzzy_file_search.query = query.clone();
+    state.fuzzy_file_search.roots = roots.clone();
+    state.fuzzy_file_search.results.clear();
+    state.fuzzy_file_search.error = None;
+    effects.push(Effect::SearchFuzzyFiles {
+        session_id,
+        roots,
+        query,
+        start_session,
+    });
+    effects
+}
+
+fn prepare_new_chat(state: &mut AppState, cwd: Option<PathBuf>) -> Vec<Effect> {
+    let mut effects = clear_fuzzy_file_search(state);
+    state.route = MainRoute::Tasks;
+    state.selected_task_id = None;
+    state.new_chat_cwd = cwd;
+    state.process_manager = ProcessManagerState::default();
+    state.artifacts = ArtifactState::default();
+    let defaults = state.composer_controls.new_chat_defaults.clone();
+    apply_composer_settings(state, defaults);
+    state.composer.clear();
+    state.composer_attachments.clear();
+    state.composer_error = None;
+    state.composer_controls.plan_mode = false;
+    state.composer_controls.goal_mode = false;
+    state.marketplace.skills_status = Some(LoadStatus::Loading);
+    effects.push(Effect::RefreshSkills {
+        cwds: composer_workspace_roots(state),
+        force_reload: false,
+    });
+    effects.push(Effect::RefreshComposerPlugins {
+        cwds: composer_workspace_roots(state),
+        force_refetch: false,
+    });
+    effects.push(Effect::PersistUiState {
+        route: state.route,
+        inspector: state.inspector,
+    });
+    effects
+}
+
+fn fork_task(state: &mut AppState, task_id: &str, new_worktree: bool) -> Vec<Effect> {
+    let Some(task) = state.tasks.iter().find(|task| task.id == task_id) else {
+        return Vec::new();
+    };
+    let cwd = task.cwd.is_absolute().then(|| task.cwd.clone());
+    let title = task.title.clone();
+    if new_worktree {
+        if state.pending_worktree_fork.is_some() {
+            return Vec::new();
+        }
+        let Some(cwd) = cwd else {
+            state.status_message =
+                Some("A Git repository is required to continue in a new worktree".to_owned());
+            return Vec::new();
+        };
+        state.pending_worktree_fork = Some(PendingWorktreeFork {
+            source_task_id: task_id.to_owned(),
+            source_cwd: cwd.clone(),
+            source_title: title.clone(),
+            workspace_root: None,
+            git_root: None,
+            phase: PendingWorktreeForkPhase::CreatingWorktree,
+            error_message: None,
+            attempt: 1,
+        });
+        state.status_message = Some("Creating worktree…".to_owned());
+        vec![Effect::ForkTaskIntoWorktree {
+            task_id: task_id.to_owned(),
+            cwd,
+            title,
+            worktrees_root: state.git_preferences.worktree_root.clone(),
+        }]
+    } else {
+        state.status_message = Some("Creating chat…".to_owned());
+        vec![Effect::ForkTask {
+            task_id: task_id.to_owned(),
+            cwd,
+            title,
+        }]
+    }
+}
+
+fn marketplace_section_exists(
+    plugins: &[PluginCard],
+    section: Option<&MarketplaceSectionFilter>,
+) -> bool {
+    match section {
+        None => true,
+        Some(MarketplaceSectionFilter::Featured) => plugins.iter().any(|plugin| plugin.featured),
+        Some(MarketplaceSectionFilter::Category(category)) => plugins.iter().any(|plugin| {
+            plugin
+                .category
+                .as_deref()
+                .unwrap_or("Other")
+                .eq_ignore_ascii_case(category)
+        }),
+    }
+}
+
+fn load_marketplace_route_effect(state: &mut AppState) -> Option<Effect> {
+    if state.route != MainRoute::Marketplace {
+        return None;
+    }
+    match state.marketplace.selected_tab {
+        MarketplaceTab::Plugins if state.marketplace.status != Some(LoadStatus::Ready) => {
+            state.marketplace.status = Some(LoadStatus::Loading);
+            Some(Effect::RefreshMarketplace {
+                cwds: selected_task_cwds(state),
+                directory_tab: state.marketplace.selected_directory_tab,
+                force_refetch: false,
+                include_all_marketplaces: false,
+            })
+        }
+        MarketplaceTab::Skills
+            if !matches!(
+                state.marketplace.skills_status,
+                Some(LoadStatus::Loading | LoadStatus::Ready)
+            ) =>
+        {
+            state.marketplace.skills_status = Some(LoadStatus::Loading);
+            Some(Effect::RefreshSkills {
+                cwds: composer_workspace_roots(state),
+                force_reload: false,
+            })
+        }
+        MarketplaceTab::Plugins | MarketplaceTab::Skills => None,
+    }
+}
+
+fn pull_request_cwd(state: &AppState) -> PathBuf {
+    state
+        .selected_task_id
+        .as_deref()
+        .and_then(|task_id| state.tasks.iter().find(|task| task.id == task_id))
+        .map(|task| task.cwd.clone())
+        .or_else(|| state.git.repository_root.clone())
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn pull_request_search_effect(state: &AppState, cursor: Option<String>, append: bool) -> Effect {
+    Effect::SearchPullRequests {
+        generation: state.pull_requests.generation,
+        cwd: pull_request_cwd(state),
+        relationship: state.pull_requests.relationship,
+        lifecycle: state.pull_requests.lifecycle,
+        query: state.pull_requests.query.clone(),
+        cursor,
+        append,
+    }
+}
+
+fn begin_pull_request_search(state: &mut AppState, debounced: bool) -> Effect {
+    state.pull_requests.generation = state.pull_requests.generation.saturating_add(1);
+    state.pull_requests.status = LoadStatus::Loading;
+    state.pull_requests.loading_more = false;
+    state.pull_requests.next_cursor = None;
+    state.pull_requests.error = None;
+    state.pull_requests.selected = None;
+    state.pull_requests.detail = None;
+    state.pull_requests.detail_status = LoadStatus::Idle;
+    state.pull_requests.detail_error = None;
+    state.pull_requests.detail_tab = PullRequestDetailTab::Summary;
+    state.pull_requests.mutation_error = None;
+    clear_pull_request_diff(state);
+    if debounced {
+        Effect::SchedulePullRequestSearch {
+            generation: state.pull_requests.generation,
+        }
+    } else {
+        pull_request_search_effect(state, None, false)
+    }
+}
+
+fn clear_pull_request_diff(state: &mut AppState) {
+    state.pull_requests.diff_status = LoadStatus::Idle;
+    state.pull_requests.diff_head_revision = None;
+    state.pull_requests.unified_diff.clear();
+    state.pull_requests.diff_error = None;
+}
+
+fn begin_pull_request_diff(state: &mut AppState) -> Vec<Effect> {
+    let Some(identity) = state.pull_requests.selected.clone() else {
+        return Vec::new();
+    };
+    state.pull_requests.diff_generation = state.pull_requests.diff_generation.saturating_add(1);
+    state.pull_requests.diff_status = LoadStatus::Loading;
+    state.pull_requests.diff_head_revision = None;
+    state.pull_requests.unified_diff.clear();
+    state.pull_requests.diff_error = None;
+    vec![Effect::LoadPullRequestDiff {
+        generation: state.pull_requests.diff_generation,
+        cwd: pull_request_cwd(state),
+        identity,
+    }]
+}
+
+fn begin_pull_request_mutation(state: &mut AppState, mutation: PullRequestMutation) -> Vec<Effect> {
+    if state.pull_requests.pending_mutation.is_some() {
+        return Vec::new();
+    }
+    let Some(identity) = state.pull_requests.selected.clone() else {
+        state.pull_requests.mutation_error = Some("Select a pull request first.".to_owned());
+        return Vec::new();
+    };
+    let Some(detail) = state.pull_requests.detail.as_ref() else {
+        state.pull_requests.mutation_error =
+            Some("Pull request details are not available.".to_owned());
+        return Vec::new();
+    };
+    if detail.summary.identity != identity {
+        return Vec::new();
+    }
+    let body = match &mutation {
+        PullRequestMutation::Comment { body } | PullRequestMutation::Review { body, .. } => {
+            Some(body.trim())
+        }
+        PullRequestMutation::Merge { .. } => None,
+    };
+    let invalid_body = body.is_some_and(|body| {
+        body.chars().count() > MAX_GIT_PULL_REQUEST_BODY_CHARS || body.contains('\0')
+    });
+    let body_required = matches!(
+        &mutation,
+        PullRequestMutation::Comment { .. }
+            | PullRequestMutation::Review {
+                event: PullRequestReviewEvent::Comment | PullRequestReviewEvent::RequestChanges,
+                ..
+            }
+    ) && body.is_none_or(str::is_empty);
+    if invalid_body || body_required {
+        state.pull_requests.mutation_error =
+            Some("A valid pull request comment is required.".to_owned());
+        return Vec::new();
+    }
+    if matches!(mutation, PullRequestMutation::Review { .. }) && detail.summary.is_author {
+        state.pull_requests.mutation_error =
+            Some("You cannot review your own pull request.".to_owned());
+        return Vec::new();
+    }
+    if matches!(mutation, PullRequestMutation::Merge { .. }) {
+        let mergeable = detail
+            .mergeable
+            .as_deref()
+            .is_some_and(|value| value.eq_ignore_ascii_case("MERGEABLE"));
+        let clean = detail.merge_state_status.as_deref().is_some_and(|value| {
+            matches!(value.to_ascii_uppercase().as_str(), "CLEAN" | "HAS_HOOKS")
+        });
+        if detail.summary.state != PullRequestState::Open
+            || detail.summary.is_draft
+            || !mergeable
+            || !clean
+        {
+            state.pull_requests.mutation_error =
+                Some("This pull request is not ready to merge.".to_owned());
+            return Vec::new();
+        }
+    }
+    let expected_head_revision = detail.head_revision.trim().to_owned();
+    if expected_head_revision.is_empty()
+        || expected_head_revision.len() > 256
+        || expected_head_revision.chars().any(char::is_control)
+    {
+        state.pull_requests.mutation_error =
+            Some("Pull request head revision is unavailable; refresh and try again.".to_owned());
+        return Vec::new();
+    }
+    state.pull_requests.mutation_generation =
+        state.pull_requests.mutation_generation.saturating_add(1);
+    state.pull_requests.pending_mutation = Some(mutation.kind());
+    state.pull_requests.mutation_error = None;
+    vec![Effect::MutatePullRequest {
+        generation: state.pull_requests.mutation_generation,
+        cwd: pull_request_cwd(state),
+        identity,
+        expected_head_revision,
+        mutation,
+    }]
+}
+
+fn load_pull_requests_route_effect(state: &mut AppState) -> Option<Effect> {
+    if state.route != MainRoute::PullRequests
+        || matches!(
+            state.pull_requests.status,
+            LoadStatus::Loading | LoadStatus::Ready
+        )
+    {
+        return None;
+    }
+    Some(begin_pull_request_search(state, false))
+}
+
+fn normalized_terminal_dock_size(location: TerminalDockLocation, size: u32) -> u32 {
+    let minimum = match location {
+        TerminalDockLocation::Bottom => TERMINAL_BOTTOM_MIN_SIZE,
+        TerminalDockLocation::Right => TERMINAL_RIGHT_MIN_SIZE,
+    };
+    size.clamp(minimum, TERMINAL_PERSISTED_MAX_SIZE)
+}
+
+fn spawn_terminal_tab(state: &mut AppState) -> Vec<Effect> {
+    let Some(task) = state
+        .selected_task_id
+        .as_deref()
+        .and_then(|task_id| state.tasks.iter().find(|task| task.id == task_id))
+    else {
+        state.status_message = Some("Select a task before opening a terminal.".to_owned());
+        return Vec::new();
+    };
+    if state.terminal.tabs.len() >= MAX_TERMINAL_TABS {
+        state.status_message = Some(format!(
+            "Close a terminal before opening another one (maximum {MAX_TERMINAL_TABS})."
+        ));
+        return Vec::new();
+    }
+    if state.terminal.tabs_for(&task.id).count() >= MAX_TERMINAL_TABS_PER_TASK {
+        state.status_message = Some(format!(
+            "Close a terminal for this chat before opening another one (maximum {MAX_TERMINAL_TABS_PER_TASK})."
+        ));
+        return Vec::new();
+    }
+
+    let tab_id = state.terminal.next_tab_id;
+    let shell = state.terminal.shell;
+    state.terminal.next_tab_id = state.terminal.next_tab_id.saturating_add(1);
+    state.terminal.tabs.push(TerminalTabState {
+        id: tab_id,
+        task_id: task.id.clone(),
+        cwd: task.cwd.clone(),
+        shell,
+        process_id: None,
+        title: String::new(),
+        output: String::new(),
+        starting: true,
+        running: false,
+        stopping: false,
+        truncated: false,
+        exit_code: None,
+        error: None,
+    });
+    state
+        .terminal
+        .active_tab_ids
+        .insert(task.id.clone(), tab_id);
+    vec![Effect::SpawnTerminal {
+        tab_id,
+        cwd: task.cwd.clone(),
+        shell,
+    }]
+}
+
+fn prepare_browser_effect(
+    state: &mut AppState,
+    task_id: String,
+    open_new_tab: bool,
+) -> Option<Effect> {
+    let browser = state.browser.entry(task_id.clone()).or_default();
+    match browser.status {
+        LoadStatus::Idle | LoadStatus::Failed => {
+            browser.status = LoadStatus::Loading;
+            browser.error = None;
+            Some(Effect::StartBrowser { task_id })
+        }
+        LoadStatus::Loading => None,
+        LoadStatus::Ready if open_new_tab => Some(Effect::BrowserOpenTab { task_id, url: None }),
+        LoadStatus::Ready => Some(Effect::ActivateBrowser { task_id }),
+    }
+}
+
+fn editable_agent_config_scope(
+    configuration: &AgentConfigurationState,
+) -> Option<(Option<PathBuf>, Option<String>)> {
+    let scope = configuration.selected_scope()?;
+    if scope.kind == AgentConfigScopeKind::Managed
+        || scope.disabled_reason.is_some()
+        || (scope.kind == AgentConfigScopeKind::Project && scope.file_path.is_none())
+    {
+        return None;
+    }
+    Some((scope.file_path.clone(), scope.expected_version.clone()))
 }
 
 pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
@@ -584,15 +5979,80 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.connection = ConnectionStatus::Online;
             state.task_generation = state.task_generation.saturating_add(1);
             state.task_status = LoadStatus::Loading;
-            vec![Effect::LoadTasks {
-                generation: state.task_generation,
-                cursor: None,
-            }]
+            state.composer_controls.models_status = LoadStatus::Loading;
+            state.composer_controls.permission_profiles_status = LoadStatus::Loading;
+            state.personalization.status = LoadStatus::Loading;
+            state.personalization.pending = false;
+            state.personalization.error = None;
+            state.marketplace.skills_status = Some(LoadStatus::Loading);
+            state.marketplace.apps_status = Some(LoadStatus::Loading);
+            state.computer_use_settings.status = LoadStatus::Loading;
+            state.computer_use_settings.error = None;
+            let mut effects = vec![
+                Effect::LoadTasks {
+                    generation: state.task_generation,
+                    cursor: None,
+                },
+                Effect::LoadLoadedTasks,
+                Effect::LoadModels,
+                Effect::LoadPermissionProfiles { cwd: None },
+                Effect::LoadPersonalization,
+                Effect::RefreshSkills {
+                    cwds: composer_workspace_roots(state),
+                    force_reload: false,
+                },
+                Effect::RefreshComposerPlugins {
+                    cwds: composer_workspace_roots(state),
+                    force_refetch: false,
+                },
+                Effect::RefreshApps {
+                    force_refetch: false,
+                },
+                Effect::LoadComposerDesktopApps,
+                Effect::LoadComputerUsePolicy,
+            ];
+            if let Some(effect) = load_pinned_tasks_effect(state) {
+                effects.push(effect);
+            }
+            if !state.task_search.query.is_empty() {
+                state.task_search.status = LoadStatus::Loading;
+                effects.push(Effect::ScheduleTaskSearch {
+                    generation: state.task_search.generation,
+                    query: state.task_search.query.clone(),
+                });
+            }
+            if let Some(task_id) = state.selected_task_id.clone() {
+                effects.push(Effect::ResumeTask { task_id });
+            }
+            if let Some(effect) = load_marketplace_route_effect(state) {
+                effects.push(effect);
+            }
+            if let Some(effect) = load_pull_requests_route_effect(state) {
+                effects.push(effect);
+            }
+            effects
         }
         Action::ConnectionLost => {
+            let reconnect = !matches!(
+                state.connection,
+                ConnectionStatus::Connecting | ConnectionStatus::Recovering
+            );
             state.connection = ConnectionStatus::Recovering;
             state.status_message = Some("Connection lost. Reconnecting…".to_owned());
-            vec![Effect::ConnectAppServer]
+            state.personalization.pending = false;
+            state.mcp_elicitations.clear();
+            let generation = state.fuzzy_file_search.generation;
+            state.fuzzy_file_search = FuzzyFileSearchState {
+                generation,
+                ..FuzzyFileSearchState::default()
+            };
+            for timeline in state.timelines.values_mut() {
+                timeline.goal_continuation_pending = false;
+            }
+            reconnect
+                .then_some(Effect::ConnectAppServer)
+                .into_iter()
+                .collect()
         }
         Action::ConnectionFailed(message) => {
             state.connection = ConnectionStatus::Failed(message);
@@ -602,12 +6062,24 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             path,
             route,
             inspector,
+            appearance_theme,
+            terminal_location,
+            terminal_bottom_height,
+            terminal_right_width,
+            git_include_unstaged,
+            pinned_task_ids,
+            recent_workspace,
         } => {
             state.storage = StorageState {
                 path: Some(path),
                 ready: true,
                 error: None,
             };
+            state.pinned_task_ids = normalize_pinned_task_ids(pinned_task_ids);
+            state.new_chat_cwd = recent_workspace.filter(|path| path.is_absolute());
+            if let Some(appearance_theme) = appearance_theme {
+                state.appearance_theme = appearance_theme;
+            }
             if let Some(route) = route {
                 state.route = if route == MainRoute::Repository && state.selected_task_id.is_none()
                 {
@@ -617,9 +6089,45 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 };
             }
             if let Some(inspector) = inspector {
-                state.inspector = inspector;
+                if inspector == InspectorPane::Terminal {
+                    state.inspector = InspectorPane::Hidden;
+                    state.last_side_panel = InspectorPane::Terminal;
+                    state.terminal_dock_open = true;
+                } else {
+                    state.inspector = inspector;
+                    if inspector != InspectorPane::Hidden {
+                        state.last_side_panel = inspector;
+                    }
+                }
             }
-            Vec::new()
+            if let Some(location) = terminal_location {
+                state.terminal.location = location;
+            }
+            if let Some(height) = terminal_bottom_height {
+                state.terminal.bottom_panel_height =
+                    normalized_terminal_dock_size(TerminalDockLocation::Bottom, height);
+            }
+            if let Some(width) = terminal_right_width {
+                state.terminal.right_panel_width =
+                    normalized_terminal_dock_size(TerminalDockLocation::Right, width);
+            }
+            if let Some(include_unstaged) = git_include_unstaged {
+                state.git_include_unstaged = include_unstaged;
+            }
+            if matches!(state.connection, ConnectionStatus::Online) {
+                let mut effects = load_pinned_tasks_effect(state)
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                if let Some(effect) = load_marketplace_route_effect(state) {
+                    effects.push(effect);
+                }
+                if let Some(effect) = load_pull_requests_route_effect(state) {
+                    effects.push(effect);
+                }
+                effects
+            } else {
+                Vec::new()
+            }
         }
         Action::StorageFailed(message) => {
             state.storage.ready = false;
@@ -643,20 +6151,548 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 route: state.route,
                 inspector: state.inspector,
             }];
-            if route == MainRoute::Marketplace
-                && state.marketplace.status != Some(LoadStatus::Ready)
+            if let Some(effect) = load_marketplace_route_effect(state) {
+                effects.push(effect);
+            }
+            if let Some(effect) = load_pull_requests_route_effect(state) {
+                effects.push(effect);
+            }
+            if route == MainRoute::Settings
+                && matches!(
+                    state.archived_tasks.status,
+                    LoadStatus::Idle | LoadStatus::Failed
+                )
             {
-                state.marketplace.status = Some(LoadStatus::Loading);
-                effects.push(Effect::RefreshMarketplace);
+                state.archived_tasks.generation = state.archived_tasks.generation.saturating_add(1);
+                state.archived_tasks.status = LoadStatus::Loading;
+                effects.push(Effect::LoadArchivedTasks {
+                    generation: state.archived_tasks.generation,
+                    cursor: None,
+                });
+            }
+            if route == MainRoute::Settings
+                && matches!(
+                    state.computer_use_settings.status,
+                    LoadStatus::Idle | LoadStatus::Failed
+                )
+            {
+                state.computer_use_settings.status = LoadStatus::Loading;
+                state.computer_use_settings.error = None;
+                effects.push(Effect::LoadComputerUsePolicy);
             }
             effects
         }
         Action::ShowInspector(pane) => {
-            state.inspector = pane;
+            let mut effects = Vec::new();
+            if state.inspector == InspectorPane::Files && pane != InspectorPane::Files {
+                state.artifacts = ArtifactState::default();
+            }
+            if pane == InspectorPane::Terminal {
+                state.inspector = InspectorPane::Hidden;
+                state.last_side_panel = InspectorPane::Terminal;
+                state.side_panel_full_width = false;
+                state.terminal_dock_open = true;
+                let has_tab = state
+                    .selected_task_id
+                    .as_deref()
+                    .is_some_and(|task_id| state.terminal.tabs_for(task_id).next().is_some());
+                if !has_tab {
+                    effects.extend(spawn_terminal_tab(state));
+                }
+            } else {
+                if pane != InspectorPane::Hidden
+                    && state.terminal.location == TerminalDockLocation::Right
+                {
+                    state.terminal_dock_open = false;
+                }
+                state.inspector = pane;
+                if pane == InspectorPane::Hidden {
+                    state.side_panel_full_width = false;
+                }
+                if pane != InspectorPane::Hidden {
+                    state.last_side_panel = pane;
+                }
+            }
+            if pane == InspectorPane::Browser {
+                if let Some(task_id) = state.selected_task_id.clone() {
+                    if let Some(effect) = prepare_browser_effect(state, task_id, false) {
+                        effects.push(effect);
+                    }
+                } else {
+                    state.status_message =
+                        Some("Open a chat before opening the Browser.".to_owned());
+                }
+            }
+            effects.push(Effect::PersistUiState {
+                route: state.route,
+                inspector: state.inspector,
+            });
+            effects
+        }
+        Action::OpenOutput(path) => {
+            let Some(task_id) = state.selected_task_id.clone() else {
+                state.status_message = Some("Open a chat before opening an output.".to_owned());
+                return Vec::new();
+            };
+            let Some(root) = state
+                .tasks
+                .iter()
+                .find(|task| task.id == task_id)
+                .map(|task| task.cwd.clone())
+            else {
+                state.status_message = Some("The selected chat has no workspace.".to_owned());
+                return Vec::new();
+            };
+            let known_output = state.timelines.get(&task_id).is_some_and(|timeline| {
+                timeline
+                    .output_artifacts()
+                    .iter()
+                    .any(|artifact| artifact.path == path)
+            });
+            if !known_output {
+                state.status_message =
+                    Some("This output is no longer attached to the selected chat.".to_owned());
+                return Vec::new();
+            }
+            state.inspector = InspectorPane::Outputs;
+            state.last_side_panel = InspectorPane::Outputs;
+            if state.terminal.location == TerminalDockLocation::Right {
+                state.terminal_dock_open = false;
+            }
+            state.artifacts.selected_path = Some(path.clone());
+            state.artifacts.status = LoadStatus::Loading;
+            state.artifacts.preview = None;
+            state.artifacts.error = None;
+            vec![
+                Effect::PersistUiState {
+                    route: state.route,
+                    inspector: state.inspector,
+                },
+                Effect::LoadOutputPreview {
+                    task_id,
+                    root,
+                    path,
+                },
+            ]
+        }
+        Action::OpenFuzzyFileResult(path) => {
+            let Some(result) = state
+                .fuzzy_file_search
+                .results
+                .iter()
+                .find(|result| result.path == path)
+                .cloned()
+            else {
+                state.status_message =
+                    Some("This file is no longer in the search results.".to_owned());
+                return Vec::new();
+            };
+            let Some(root) = state
+                .fuzzy_file_search
+                .roots
+                .iter()
+                .find(|root| result.path.starts_with(root))
+                .cloned()
+            else {
+                state.status_message =
+                    Some("The file is outside the selected workspace.".to_owned());
+                return Vec::new();
+            };
+            if result.match_type == FuzzyFileMatchType::Directory {
+                return vec![Effect::OpenWorkspacePath {
+                    root,
+                    path: result.path,
+                }];
+            }
+            state.inspector = InspectorPane::Files;
+            state.last_side_panel = InspectorPane::Files;
+            if state.terminal.location == TerminalDockLocation::Right {
+                state.terminal_dock_open = false;
+            }
+            state.artifacts.selected_path = Some(result.path.clone());
+            state.artifacts.status = LoadStatus::Loading;
+            state.artifacts.preview = None;
+            state.artifacts.error = None;
+            vec![
+                Effect::PersistUiState {
+                    route: state.route,
+                    inspector: state.inspector,
+                },
+                Effect::LoadWorkspaceFilePreview {
+                    root,
+                    path: result.path,
+                },
+            ]
+        }
+        Action::CloseOutput => {
+            state.artifacts = ArtifactState::default();
+            Vec::new()
+        }
+        Action::OutputPreviewLoaded {
+            task_id,
+            requested_path,
+            preview,
+        } => {
+            if state.selected_task_id.as_deref() == Some(task_id.as_str())
+                && state.artifacts.selected_path.as_ref() == Some(&requested_path)
+            {
+                state.artifacts.status = LoadStatus::Ready;
+                state.artifacts.preview = Some(preview);
+                state.artifacts.error = None;
+            }
+            Vec::new()
+        }
+        Action::OutputPreviewFailed {
+            task_id,
+            requested_path,
+            message,
+        } => {
+            if state.selected_task_id.as_deref() == Some(task_id.as_str())
+                && state.artifacts.selected_path.as_ref() == Some(&requested_path)
+            {
+                state.artifacts.status = LoadStatus::Failed;
+                state.artifacts.preview = None;
+                state.artifacts.error = Some(message);
+            }
+            Vec::new()
+        }
+        Action::WorkspaceFilePreviewLoaded {
+            requested_path,
+            preview,
+        } => {
+            if state.inspector == InspectorPane::Files
+                && state.artifacts.selected_path.as_ref() == Some(&requested_path)
+            {
+                state.artifacts.status = LoadStatus::Ready;
+                state.artifacts.preview = Some(preview);
+                state.artifacts.error = None;
+            }
+            Vec::new()
+        }
+        Action::WorkspaceFilePreviewFailed {
+            requested_path,
+            message,
+        } => {
+            if state.inspector == InspectorPane::Files
+                && state.artifacts.selected_path.as_ref() == Some(&requested_path)
+            {
+                state.artifacts.status = LoadStatus::Failed;
+                state.artifacts.preview = None;
+                state.artifacts.error = Some(message);
+            }
+            Vec::new()
+        }
+        Action::RevealOutput(path) => {
+            let Some(task_id) = state.selected_task_id.as_deref() else {
+                return Vec::new();
+            };
+            let Some(root) = state
+                .tasks
+                .iter()
+                .find(|task| task.id == task_id)
+                .map(|task| task.cwd.clone())
+            else {
+                return Vec::new();
+            };
+            let known_output = state.timelines.get(task_id).is_some_and(|timeline| {
+                timeline
+                    .output_artifacts()
+                    .iter()
+                    .any(|artifact| artifact.path == path)
+            });
+            if !known_output {
+                state.status_message =
+                    Some("This output is no longer attached to the selected chat.".to_owned());
+                return Vec::new();
+            }
+            vec![Effect::RevealOutput { root, path }]
+        }
+        Action::RevealWorkspaceFile(path) => {
+            if state.inspector != InspectorPane::Files
+                || state.artifacts.selected_path.as_ref() != Some(&path)
+            {
+                return Vec::new();
+            }
+            let Some(root) = composer_workspace_roots(state)
+                .into_iter()
+                .find(|root| path.starts_with(root))
+            else {
+                state.status_message =
+                    Some("The file is outside the selected workspace.".to_owned());
+                return Vec::new();
+            };
+            vec![Effect::OpenWorkspacePath { root, path }]
+        }
+        Action::ToggleReviewTab => {
+            if state.route != MainRoute::Tasks
+                || state.selected_task_id.is_none()
+                || state.git.repository_root.is_none()
+            {
+                return Vec::new();
+            }
+            if state.inspector == InspectorPane::Files {
+                state.artifacts = ArtifactState::default();
+            }
+            if state.inspector == InspectorPane::Changes {
+                state.inspector = InspectorPane::Hidden;
+                state.side_panel_full_width = false;
+            } else {
+                if state.terminal.location == TerminalDockLocation::Right {
+                    state.terminal_dock_open = false;
+                }
+                state.inspector = InspectorPane::Changes;
+                state.last_side_panel = InspectorPane::Changes;
+            }
             vec![Effect::PersistUiState {
                 route: state.route,
                 inspector: state.inspector,
             }]
+        }
+        Action::ToggleReviewPanel => {
+            if state.selected_task_id.is_none() {
+                return Vec::new();
+            }
+            if state.terminal.location == TerminalDockLocation::Right && state.terminal_dock_open {
+                state.last_side_panel = InspectorPane::Terminal;
+                state.side_panel_full_width = false;
+                state.terminal_dock_open = false;
+                return Vec::new();
+            }
+            if !matches!(
+                state.inspector,
+                InspectorPane::Hidden | InspectorPane::Terminal
+            ) {
+                state.last_side_panel = state.inspector;
+                state.inspector = InspectorPane::Hidden;
+                state.side_panel_full_width = false;
+                return vec![Effect::PersistUiState {
+                    route: state.route,
+                    inspector: state.inspector,
+                }];
+            }
+
+            if state.last_side_panel == InspectorPane::Terminal
+                && state.terminal.location == TerminalDockLocation::Right
+                && state
+                    .selected_task_id
+                    .as_deref()
+                    .is_some_and(|task_id| state.terminal.tabs_for(task_id).next().is_some())
+            {
+                state.inspector = InspectorPane::Hidden;
+                state.side_panel_full_width = false;
+                state.terminal_dock_open = true;
+                return Vec::new();
+            }
+
+            state.inspector = match state.last_side_panel {
+                InspectorPane::Changes
+                | InspectorPane::Outputs
+                | InspectorPane::Files
+                | InspectorPane::ComputerUse
+                | InspectorPane::Browser => state.last_side_panel,
+                InspectorPane::Hidden | InspectorPane::Terminal => InspectorPane::Changes,
+            };
+            state.last_side_panel = state.inspector;
+            let mut effects = vec![Effect::PersistUiState {
+                route: state.route,
+                inspector: state.inspector,
+            }];
+            if state.inspector == InspectorPane::Browser
+                && let Some(task_id) = state.selected_task_id.clone()
+                && let Some(effect) = prepare_browser_effect(state, task_id, false)
+            {
+                effects.push(effect);
+            }
+            effects
+        }
+        Action::ToggleMaximizeSidePanel => {
+            if state.route != MainRoute::Tasks
+                || state.selected_task_id.is_none()
+                || matches!(
+                    state.inspector,
+                    InspectorPane::Hidden | InspectorPane::Terminal
+                )
+            {
+                return Vec::new();
+            }
+            state.side_panel_full_width = !state.side_panel_full_width;
+            Vec::new()
+        }
+        Action::ToggleBottomPanel => {
+            if state.terminal.location != TerminalDockLocation::Bottom {
+                return Vec::new();
+            }
+            let has_tab = state
+                .selected_task_id
+                .as_deref()
+                .is_some_and(|task_id| state.terminal.tabs_for(task_id).next().is_some());
+            if !has_tab {
+                return Vec::new();
+            }
+            state.terminal_dock_open = !state.terminal_dock_open;
+            Vec::new()
+        }
+        Action::ToggleTerminalDock => {
+            state.terminal_dock_open = !state.terminal_dock_open;
+            if state.terminal.location == TerminalDockLocation::Right {
+                state.last_side_panel = InspectorPane::Terminal;
+            }
+            if !state.terminal_dock_open {
+                return Vec::new();
+            }
+            let mut effects = Vec::new();
+            if state.terminal.location == TerminalDockLocation::Right
+                && state.inspector != InspectorPane::Hidden
+            {
+                state.inspector = InspectorPane::Hidden;
+                state.side_panel_full_width = false;
+                effects.push(Effect::PersistUiState {
+                    route: state.route,
+                    inspector: state.inspector,
+                });
+            }
+            let has_tab = state
+                .selected_task_id
+                .as_deref()
+                .is_some_and(|task_id| state.terminal.tabs_for(task_id).next().is_some());
+            if !has_tab {
+                effects.extend(spawn_terminal_tab(state));
+            }
+            effects
+        }
+        Action::SetTerminalDockLocation(location) => {
+            if state.terminal.location == location {
+                return Vec::new();
+            }
+            state.terminal.location = location;
+            let mut effects = vec![Effect::PersistTerminalDockLocation(location)];
+            if location == TerminalDockLocation::Right && state.terminal_dock_open {
+                state.last_side_panel = InspectorPane::Terminal;
+                if state.inspector != InspectorPane::Hidden {
+                    state.inspector = InspectorPane::Hidden;
+                    state.side_panel_full_width = false;
+                    effects.push(Effect::PersistUiState {
+                        route: state.route,
+                        inspector: state.inspector,
+                    });
+                }
+            }
+            effects
+        }
+        Action::SetAppearanceTheme(appearance_theme) => {
+            if state.appearance_theme == appearance_theme {
+                return Vec::new();
+            }
+            state.appearance_theme = appearance_theme;
+            vec![Effect::PersistAppearanceTheme(appearance_theme)]
+        }
+        Action::AppearancePreferencesLoaded(preferences) => {
+            state.appearance_preferences = preferences.normalized();
+            Vec::new()
+        }
+        Action::SetAppearancePreferences(preferences) => {
+            let preferences = preferences.normalized();
+            if state.appearance_preferences == preferences {
+                return Vec::new();
+            }
+            state.appearance_preferences = preferences.clone();
+            vec![Effect::PersistAppearancePreferences(preferences)]
+        }
+        Action::GitPreferencesLoaded(preferences) => {
+            state.git_preferences = preferences.normalized();
+            if state.git_preferences.review_mode == GitReviewMode::LastTurnOnly {
+                state.git.selected_scope = GitDiffScope::LastTurn;
+                state.git.selected_path = None;
+                state.git.unified_diff.clear();
+            }
+            Vec::new()
+        }
+        Action::SetGitPreferences(preferences) => {
+            let preferences = preferences.normalized();
+            if state.git_preferences == preferences {
+                return Vec::new();
+            }
+            state.git_preferences = preferences.clone();
+            if preferences.review_mode == GitReviewMode::LastTurnOnly {
+                state.git.selected_scope = GitDiffScope::LastTurn;
+                state.git.selected_path = None;
+                state.git.unified_diff.clear();
+            }
+            vec![Effect::PersistGitPreferences(preferences)]
+        }
+        Action::KeyboardShortcutPreferencesLoaded(preferences) => {
+            state.keyboard_shortcut_preferences = preferences.normalized();
+            Vec::new()
+        }
+        Action::SetKeyboardShortcutPreferences {
+            preferences,
+            target,
+        } => {
+            let preferences = preferences.normalized();
+            if state.keyboard_shortcut_preferences == preferences {
+                return Vec::new();
+            }
+            let previous = state.keyboard_shortcut_preferences.clone();
+            state.keyboard_shortcut_preferences = preferences.clone();
+            vec![Effect::PersistKeyboardShortcutPreferences {
+                preferences,
+                previous,
+                target,
+            }]
+        }
+        Action::KeyboardShortcutPreferencesPersisted(_) => Vec::new(),
+        Action::KeyboardShortcutPreferencesPersistFailed { previous, target } => {
+            state.keyboard_shortcut_preferences = previous.normalized();
+            state.status_message = Some(match target {
+                KeyboardShortcutUpdateTarget::Command(_) => "Failed to update shortcut".to_owned(),
+                KeyboardShortcutUpdateTarget::ResetAll => {
+                    "Failed to reset keyboard shortcuts".to_owned()
+                }
+            });
+            Vec::new()
+        }
+        Action::SetTerminalDockSize { location, size } => {
+            let size = normalized_terminal_dock_size(location, size);
+            let current_size = match location {
+                TerminalDockLocation::Bottom => &mut state.terminal.bottom_panel_height,
+                TerminalDockLocation::Right => &mut state.terminal.right_panel_width,
+            };
+            if *current_size == size {
+                return Vec::new();
+            }
+            *current_size = size;
+            vec![Effect::PersistTerminalDockSize { location, size }]
+        }
+        Action::TerminalShellsDetected {
+            available,
+            preferred,
+        } => {
+            let mut normalized = Vec::with_capacity(available.len());
+            for shell in available {
+                if !normalized.contains(&shell) {
+                    normalized.push(shell);
+                }
+            }
+            state.terminal.available_shells = normalized;
+            state.terminal.shell = preferred
+                .filter(|shell| state.terminal.available_shells.contains(shell))
+                .or_else(|| {
+                    state
+                        .terminal
+                        .shell
+                        .filter(|shell| state.terminal.available_shells.contains(shell))
+                })
+                .or_else(|| state.terminal.available_shells.first().copied());
+            Vec::new()
+        }
+        Action::SetIntegratedTerminalShell(shell) => {
+            if !state.terminal.available_shells.contains(&shell)
+                || state.terminal.shell == Some(shell)
+            {
+                return Vec::new();
+            }
+            state.terminal.shell = Some(shell);
+            vec![Effect::PersistIntegratedTerminalShell(shell)]
         }
         Action::RefreshTasks => {
             state.task_generation = state.task_generation.saturating_add(1);
@@ -666,26 +6702,538 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 cursor: None,
             }]
         }
-        Action::NewTask => vec![Effect::CreateTask],
+        Action::TaskSearchQueryChanged(query) => {
+            let query = bounded_string(query.trim().to_owned(), MAX_TASK_SEARCH_QUERY_BYTES);
+            state.task_search.generation = state.task_search.generation.saturating_add(1);
+            state.task_search.query = query.clone();
+            state.task_search.results.clear();
+            state.task_search.next_cursor = None;
+            if query.is_empty() {
+                state.task_search.status = LoadStatus::Idle;
+                Vec::new()
+            } else {
+                state.task_search.status = LoadStatus::Loading;
+                vec![Effect::ScheduleTaskSearch {
+                    generation: state.task_search.generation,
+                    query,
+                }]
+            }
+        }
+        Action::TaskSearchDue { generation, query } => {
+            if generation != state.task_search.generation || query != state.task_search.query {
+                Vec::new()
+            } else {
+                vec![Effect::SearchTasks {
+                    generation,
+                    query,
+                    cursor: None,
+                }]
+            }
+        }
+        Action::LoadMoreTaskSearchResults => {
+            if state.task_search.status == LoadStatus::Loading
+                || state.task_search.query.is_empty()
+                || state.task_search.next_cursor.is_none()
+                || state.task_search.results.len() >= MAX_TASK_SEARCH_RESULTS
+            {
+                Vec::new()
+            } else {
+                state.task_search.status = LoadStatus::Loading;
+                vec![Effect::SearchTasks {
+                    generation: state.task_search.generation,
+                    query: state.task_search.query.clone(),
+                    cursor: state.task_search.next_cursor.clone(),
+                }]
+            }
+        }
+        Action::TaskSearchResultsLoaded {
+            generation,
+            results,
+            next_cursor,
+            append,
+        } => {
+            if generation != state.task_search.generation {
+                return Vec::new();
+            }
+            if !append {
+                state.task_search.results.clear();
+            }
+            for result in results {
+                if let Some(existing) = state
+                    .task_search
+                    .results
+                    .iter_mut()
+                    .find(|existing| existing.task.id == result.task.id)
+                {
+                    *existing = result;
+                } else {
+                    state.task_search.results.push(result);
+                }
+            }
+            state.task_search.results.truncate(MAX_TASK_SEARCH_RESULTS);
+            state.task_search.next_cursor = (state.task_search.results.len()
+                < MAX_TASK_SEARCH_RESULTS)
+                .then_some(next_cursor)
+                .flatten();
+            state.task_search.status = LoadStatus::Ready;
+            Vec::new()
+        }
+        Action::TaskSearchFailed {
+            generation,
+            message,
+        } => {
+            if generation == state.task_search.generation {
+                state.task_search.status = LoadStatus::Failed;
+                state.status_message = Some(message);
+            }
+            Vec::new()
+        }
+        Action::BeginNewChat => {
+            let cwd = state
+                .selected_task_id
+                .as_deref()
+                .and_then(|task_id| state.tasks.iter().find(|task| task.id == task_id))
+                .map(|task| task.cwd.clone())
+                .or_else(|| state.new_chat_cwd.clone());
+            prepare_new_chat(state, cwd)
+        }
+        Action::BeginProjectlessChat => prepare_new_chat(state, None),
+        Action::SelectWorkspace(path) => {
+            if !path.is_absolute() {
+                state.status_message =
+                    Some("The selected project folder is unavailable.".to_owned());
+                Vec::new()
+            } else {
+                let mut effects = prepare_new_chat(state, Some(path.clone()));
+                effects.push(Effect::RememberWorkspace { path });
+                effects
+            }
+        }
+        Action::SelectComposerWorkspace(path) => {
+            if state.selected_task_id.is_some() {
+                Vec::new()
+            } else if !path.is_absolute() {
+                state.status_message =
+                    Some("The selected project folder is unavailable.".to_owned());
+                Vec::new()
+            } else {
+                let mut effects = clear_fuzzy_file_search(state);
+                state.route = MainRoute::Tasks;
+                state.new_chat_cwd = Some(path.clone());
+                state.marketplace.skills_status = Some(LoadStatus::Loading);
+                effects.push(Effect::RefreshSkills {
+                    cwds: composer_workspace_roots(state),
+                    force_reload: false,
+                });
+                effects.push(Effect::RefreshComposerPlugins {
+                    cwds: composer_workspace_roots(state),
+                    force_refetch: false,
+                });
+                effects.push(Effect::PersistUiState {
+                    route: state.route,
+                    inspector: state.inspector,
+                });
+                effects.push(Effect::RememberWorkspace { path });
+                effects
+            }
+        }
+        Action::UseGitWorktree(path) => {
+            let known_worktree = state
+                .git
+                .worktrees
+                .iter()
+                .any(|worktree| worktree.path == path && !worktree.bare);
+            if !known_worktree {
+                state.status_message = Some("The selected Git worktree is unavailable.".to_owned());
+                Vec::new()
+            } else {
+                prepare_new_chat(state, Some(path))
+            }
+        }
         Action::ForkSelectedTask => state
             .selected_task_id
             .clone()
-            .map(|task_id| vec![Effect::ForkTask { task_id }])
+            .map(|task_id| fork_task(state, &task_id, false))
             .unwrap_or_default(),
+        Action::ForkSelectedTaskIntoWorktree => state
+            .selected_task_id
+            .clone()
+            .map(|task_id| fork_task(state, &task_id, true))
+            .unwrap_or_default(),
+        Action::ForkTaskInCurrentWorkspace(task_id) => fork_task(state, &task_id, false),
+        Action::ForkTaskIntoWorktree(task_id) => fork_task(state, &task_id, true),
+        Action::PendingWorktreeForkReady {
+            workspace_root,
+            git_root,
+        } => {
+            let Some(pending) = state.pending_worktree_fork.as_mut() else {
+                return Vec::new();
+            };
+            if pending.phase != PendingWorktreeForkPhase::CreatingWorktree {
+                return Vec::new();
+            }
+            pending.workspace_root = Some(workspace_root.clone());
+            pending.git_root = Some(git_root);
+            pending.phase = PendingWorktreeForkPhase::StartingConversation;
+            pending.error_message = None;
+            state.status_message = Some("Starting the conversation…".to_owned());
+            vec![Effect::RetryPendingWorktreeFork {
+                task_id: pending.source_task_id.clone(),
+                cwd: workspace_root,
+                title: pending.source_title.clone(),
+            }]
+        }
+        Action::PendingWorktreeForkCreationFailed(message) => {
+            let Some(pending) = state.pending_worktree_fork.as_mut() else {
+                return Vec::new();
+            };
+            if pending.phase != PendingWorktreeForkPhase::CreatingWorktree {
+                return Vec::new();
+            }
+            let message = bounded_string(message, MAX_PENDING_WORKTREE_FORK_ERROR_BYTES);
+            pending.phase = PendingWorktreeForkPhase::FailedCreatingWorktree;
+            pending.error_message = Some(message.clone());
+            state.status_message = Some(message);
+            Vec::new()
+        }
+        Action::PendingWorktreeForkConversationFailed(message) => {
+            let Some(pending) = state.pending_worktree_fork.as_mut() else {
+                return Vec::new();
+            };
+            if pending.phase != PendingWorktreeForkPhase::StartingConversation {
+                return Vec::new();
+            }
+            let message = bounded_string(message, MAX_PENDING_WORKTREE_FORK_ERROR_BYTES);
+            pending.phase = PendingWorktreeForkPhase::FailedStartingConversation;
+            pending.error_message = Some(message.clone());
+            state.status_message = Some(bounded_string(
+                format!("Error starting chat\n{message}"),
+                MAX_PENDING_WORKTREE_FORK_ERROR_BYTES,
+            ));
+            Vec::new()
+        }
+        Action::PendingWorktreeForkCompleted => {
+            state.pending_worktree_fork = None;
+            Vec::new()
+        }
+        Action::CancelPendingWorktreeFork => {
+            let Some(pending) = state.pending_worktree_fork.as_ref() else {
+                return Vec::new();
+            };
+            if pending.phase != PendingWorktreeForkPhase::CreatingWorktree {
+                return Vec::new();
+            }
+            state.pending_worktree_fork = None;
+            state.status_message = None;
+            vec![Effect::CancelPendingWorktreeFork]
+        }
+        Action::RetryPendingWorktreeFork => {
+            let Some(pending) = state.pending_worktree_fork.as_mut() else {
+                return Vec::new();
+            };
+            if !pending.phase.failed() {
+                return Vec::new();
+            }
+            pending.attempt = pending.attempt.saturating_add(1);
+            pending.error_message = None;
+            if let Some(cwd) = pending.workspace_root.clone() {
+                pending.phase = PendingWorktreeForkPhase::StartingConversation;
+                state.status_message = Some("Starting the conversation…".to_owned());
+                vec![Effect::RetryPendingWorktreeFork {
+                    task_id: pending.source_task_id.clone(),
+                    cwd,
+                    title: pending.source_title.clone(),
+                }]
+            } else {
+                pending.phase = PendingWorktreeForkPhase::CreatingWorktree;
+                pending.git_root = None;
+                state.status_message = Some("Creating worktree…".to_owned());
+                vec![Effect::ForkTaskIntoWorktree {
+                    task_id: pending.source_task_id.clone(),
+                    cwd: pending.source_cwd.clone(),
+                    title: pending.source_title.clone(),
+                    worktrees_root: state.git_preferences.worktree_root.clone(),
+                }]
+            }
+        }
+        Action::DismissPendingWorktreeFork => {
+            let Some(pending) = state.pending_worktree_fork.as_ref() else {
+                return Vec::new();
+            };
+            if !pending.phase.failed() {
+                return Vec::new();
+            }
+            let kept_worktree = pending.git_root.clone();
+            state.pending_worktree_fork = None;
+            state.status_message = kept_worktree.map(|root| {
+                bounded_string(
+                    format!("Worktree kept at {}", root.display()),
+                    MAX_PENDING_WORKTREE_FORK_ERROR_BYTES,
+                )
+            });
+            Vec::new()
+        }
+        Action::ArchiveTask(task_id) => {
+            if state.tasks.iter().any(|task| task.id == task_id) {
+                vec![Effect::ArchiveTask { task_id }]
+            } else {
+                Vec::new()
+            }
+        }
+        Action::TaskArchived(task_id) => {
+            let pinned_before = state.pinned_task_ids.len();
+            state
+                .pinned_task_ids
+                .retain(|pinned_task_id| pinned_task_id != &task_id);
+            let archived_task = state
+                .tasks
+                .iter()
+                .position(|task| task.id == task_id)
+                .map(|index| state.tasks.remove(index));
+            state
+                .task_search
+                .results
+                .retain(|result| result.task.id != task_id);
+            if state.archived_tasks.status == LoadStatus::Ready
+                && let Some(task) = archived_task
+            {
+                state
+                    .archived_tasks
+                    .tasks
+                    .retain(|existing| existing.id != task.id);
+                state.archived_tasks.tasks.insert(0, task);
+                state.archived_tasks.tasks.truncate(MAX_VISIBLE_THREADS);
+            }
+            state.timelines.remove(&task_id);
+            state.goals.remove(&task_id);
+            state.computer_use.remove(&task_id);
+            if state.process_manager.task_id.as_deref() == Some(task_id.as_str()) {
+                state.process_manager = ProcessManagerState::default();
+            }
+            state
+                .approvals
+                .retain(|approval| approval.task_id != task_id);
+            if state.selected_task_id.as_deref() == Some(task_id.as_str()) {
+                state.selected_task_id = None;
+                state.artifacts = ArtifactState::default();
+            }
+            state.status_message = Some("Chat archived".to_owned());
+            if state.pinned_task_ids.len() != pinned_before {
+                vec![Effect::PersistPinnedTasks {
+                    task_ids: state.pinned_task_ids.clone(),
+                }]
+            } else {
+                Vec::new()
+            }
+        }
+        Action::RenameTask { task_id, name } => {
+            let name = name.trim().to_owned();
+            if name.is_empty() {
+                state.status_message = Some("Chat name cannot be empty".to_owned());
+                Vec::new()
+            } else if name.len() > MAX_TASK_TITLE_BYTES {
+                state.status_message = Some(format!(
+                    "Chat name is longer than {MAX_TASK_TITLE_BYTES} bytes"
+                ));
+                Vec::new()
+            } else if state.tasks.iter().any(|task| task.id == task_id) {
+                vec![Effect::RenameTask { task_id, name }]
+            } else {
+                Vec::new()
+            }
+        }
+        Action::TaskRenamed { task_id, name } => {
+            let mut renamed = false;
+            if let Some(task) = state.tasks.iter_mut().find(|task| task.id == task_id) {
+                task.title.clone_from(&name);
+                renamed = true;
+            }
+            if let Some(result) = state
+                .task_search
+                .results
+                .iter_mut()
+                .find(|result| result.task.id == task_id)
+            {
+                result.task.title = name;
+                renamed = true;
+            }
+            if renamed {
+                state.status_message = Some("Chat renamed".to_owned());
+            }
+            Vec::new()
+        }
+        Action::ToggleTaskPinned(task_id) => {
+            if let Some(index) = state
+                .pinned_task_ids
+                .iter()
+                .position(|pinned_task_id| pinned_task_id == &task_id)
+            {
+                state.pinned_task_ids.remove(index);
+                state.status_message = Some("Chat unpinned".to_owned());
+            } else {
+                let can_pin = task_id.len() <= MAX_PINNED_TASK_ID_BYTES
+                    && state.tasks.iter().any(|task| task.id == task_id);
+                if !can_pin {
+                    return Vec::new();
+                }
+                if state.pinned_task_ids.len() == MAX_PINNED_TASKS {
+                    state.status_message =
+                        Some(format!("Up to {MAX_PINNED_TASKS} chats can be pinned"));
+                    return Vec::new();
+                }
+                state.pinned_task_ids.insert(0, task_id);
+                state.status_message = Some("Chat pinned".to_owned());
+            }
+            vec![Effect::PersistPinnedTasks {
+                task_ids: state.pinned_task_ids.clone(),
+            }]
+        }
+        Action::PinnedTasksLoaded(tasks) => {
+            for task in tasks {
+                if !state
+                    .pinned_task_ids
+                    .iter()
+                    .any(|task_id| task_id == &task.id)
+                {
+                    continue;
+                }
+                if let Some(existing) = state
+                    .tasks
+                    .iter_mut()
+                    .find(|existing| existing.id == task.id)
+                {
+                    *existing = task;
+                } else {
+                    state.tasks.push(task);
+                }
+            }
+            state.tasks.truncate(MAX_VISIBLE_THREADS);
+            Vec::new()
+        }
+        Action::RefreshArchivedTasks => {
+            state.archived_tasks.generation = state.archived_tasks.generation.saturating_add(1);
+            state.archived_tasks.status = LoadStatus::Loading;
+            vec![Effect::LoadArchivedTasks {
+                generation: state.archived_tasks.generation,
+                cursor: None,
+            }]
+        }
+        Action::LoadMoreArchivedTasks => {
+            if state.archived_tasks.status == LoadStatus::Loading
+                || state.archived_tasks.next_cursor.is_none()
+            {
+                Vec::new()
+            } else {
+                state.archived_tasks.status = LoadStatus::Loading;
+                vec![Effect::LoadArchivedTasks {
+                    generation: state.archived_tasks.generation,
+                    cursor: state.archived_tasks.next_cursor.clone(),
+                }]
+            }
+        }
+        Action::ArchivedTasksLoaded {
+            generation,
+            mut tasks,
+            next_cursor,
+            append,
+        } => {
+            if generation != state.archived_tasks.generation {
+                return Vec::new();
+            }
+            if append {
+                state.archived_tasks.tasks.append(&mut tasks);
+            } else {
+                state.archived_tasks.tasks = tasks;
+            }
+            state.archived_tasks.tasks.truncate(MAX_VISIBLE_THREADS);
+            state.archived_tasks.next_cursor = next_cursor;
+            state.archived_tasks.status = LoadStatus::Ready;
+            Vec::new()
+        }
+        Action::ArchivedTasksFailed {
+            generation,
+            message,
+        } => {
+            if generation == state.archived_tasks.generation {
+                state.archived_tasks.status = LoadStatus::Failed;
+                state.status_message = Some(message);
+            }
+            Vec::new()
+        }
+        Action::UnarchiveTask(task_id) => {
+            if state
+                .archived_tasks
+                .tasks
+                .iter()
+                .any(|task| task.id == task_id)
+            {
+                vec![Effect::UnarchiveTask { task_id }]
+            } else {
+                Vec::new()
+            }
+        }
+        Action::TaskUnarchived(task) => {
+            state
+                .archived_tasks
+                .tasks
+                .retain(|archived| archived.id != task.id);
+            state.tasks.retain(|active| active.id != task.id);
+            state.tasks.insert(0, task);
+            state.tasks.truncate(MAX_VISIBLE_THREADS);
+            state.status_message = Some("Chat unarchived".to_owned());
+            Vec::new()
+        }
+        Action::DeleteArchivedTasks { task_ids, kind } => {
+            let mut seen = HashSet::new();
+            let all_known = !task_ids.is_empty()
+                && task_ids.len() <= state.archived_tasks.tasks.len()
+                && task_ids.iter().all(|task_id| {
+                    seen.insert(task_id.as_str())
+                        && state
+                            .archived_tasks
+                            .tasks
+                            .iter()
+                            .any(|task| task.id == *task_id)
+                });
+            if all_known {
+                vec![Effect::DeleteArchivedTasks { task_ids, kind }]
+            } else {
+                Vec::new()
+            }
+        }
+        Action::ArchivedTasksDeleted { task_ids, kind } => {
+            let deleted_count = task_ids.len();
+            let deleted_ids: HashSet<_> = task_ids.into_iter().collect();
+            state
+                .archived_tasks
+                .tasks
+                .retain(|archived| !deleted_ids.contains(&archived.id));
+            state.status_message = Some(match kind {
+                ArchivedTaskDeleteKind::Single => "Deleted archived chat".to_owned(),
+                ArchivedTaskDeleteKind::Project | ArchivedTaskDeleteKind::All
+                    if deleted_count == 1 =>
+                {
+                    "Deleted 1 archived chat".to_owned()
+                }
+                ArchivedTaskDeleteKind::Project | ArchivedTaskDeleteKind::All => {
+                    format!("Deleted {deleted_count} archived chats")
+                }
+            });
+            Vec::new()
+        }
         Action::TaskCreated(task) => {
             let task_id = task.id.clone();
             let cwd = task.cwd.clone();
+            state.new_chat_cwd = None;
             state.tasks.retain(|existing| existing.id != task_id);
             state.tasks.insert(0, task);
             state.tasks.truncate(MAX_VISIBLE_THREADS);
             state.selected_task_id = Some(task_id.clone());
-            state.timelines.insert(
-                task_id.clone(),
-                TimelineState {
-                    status: LoadStatus::Ready,
-                    ..TimelineState::default()
-                },
-            );
+            state.artifacts = ArtifactState::default();
+            state
+                .timelines
+                .insert(task_id.clone(), TimelineState::default());
+            state.goals.insert(task_id, ThreadGoalState::default());
             vec![
                 Effect::RememberWorkspace { path: cwd.clone() },
                 Effect::RefreshGit { cwd },
@@ -734,6 +7282,38 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.task_status = LoadStatus::Ready;
             Vec::new()
         }
+        Action::LoadedTasksRestored {
+            mut tasks,
+            truncated,
+        } => {
+            tasks.truncate(MAX_LOADED_THREADS);
+            let mut resume_ids = Vec::with_capacity(tasks.len());
+            for task in &tasks {
+                if state.selected_task_id.as_deref() != Some(task.id.as_str())
+                    && !resume_ids.contains(&task.id)
+                {
+                    resume_ids.push(task.id.clone());
+                }
+            }
+            for task in tasks.into_iter().rev() {
+                state.tasks.retain(|existing| existing.id != task.id);
+                state.tasks.insert(0, task);
+            }
+            state.tasks.truncate(MAX_VISIBLE_THREADS);
+            if truncated {
+                state.status_message = Some(format!(
+                    "Restored the first {MAX_LOADED_THREADS} loaded chats."
+                ));
+            }
+            resume_ids
+                .into_iter()
+                .map(|task_id| Effect::ResumeTask { task_id })
+                .collect()
+        }
+        Action::LoadedTasksRestoreFailed(message) => {
+            state.status_message = Some(bounded_string(message, MAX_COMPOSER_BYTES));
+            Vec::new()
+        }
         Action::TasksFailed {
             generation,
             message,
@@ -745,7 +7325,28 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::SelectTask(task_id) => {
+            let previous_cwds = composer_workspace_roots(state);
+            if !state.tasks.iter().any(|task| task.id == task_id)
+                && let Some(task) = state
+                    .task_search
+                    .results
+                    .iter()
+                    .find(|result| result.task.id == task_id)
+                    .map(|result| result.task.clone())
+            {
+                state.tasks.insert(0, task);
+                state.tasks.truncate(MAX_VISIBLE_THREADS);
+            }
+            if state.selected_task_id.as_deref() != Some(task_id.as_str()) {
+                state.artifacts = ArtifactState::default();
+            }
             state.selected_task_id = Some(task_id.clone());
+            if state.process_manager.task_id.as_deref() != Some(task_id.as_str()) {
+                state.process_manager = ProcessManagerState {
+                    task_id: Some(task_id.clone()),
+                    ..ProcessManagerState::default()
+                };
+            }
             let mut effects = state
                 .tasks
                 .iter()
@@ -763,6 +7364,28 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 .into_iter()
                 .flatten()
                 .collect::<Vec<_>>();
+            let selected_cwds = composer_workspace_roots(state);
+            if selected_cwds != previous_cwds {
+                state.marketplace.skills_status = Some(LoadStatus::Loading);
+                effects.push(Effect::RefreshSkills {
+                    cwds: selected_cwds.clone(),
+                    force_reload: false,
+                });
+                effects.push(Effect::RefreshComposerPlugins {
+                    cwds: selected_cwds,
+                    force_refetch: false,
+                });
+            }
+            let goal = state.goals.entry(task_id.clone()).or_default();
+            if matches!(goal.status, LoadStatus::Idle | LoadStatus::Failed) {
+                goal.status = LoadStatus::Loading;
+                effects.insert(
+                    0,
+                    Effect::LoadGoal {
+                        task_id: task_id.clone(),
+                    },
+                );
+            }
             let timeline = state.timelines.entry(task_id.clone()).or_default();
             if matches!(timeline.status, LoadStatus::Idle | LoadStatus::Failed) {
                 timeline.generation = timeline.generation.saturating_add(1);
@@ -770,13 +7393,91 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 effects.insert(
                     0,
                     Effect::LoadTimeline {
-                        task_id,
+                        task_id: task_id.clone(),
                         generation: timeline.generation,
                         cursor: None,
                     },
                 );
             }
+            if state.inspector == InspectorPane::Browser
+                && let Some(effect) = prepare_browser_effect(state, task_id.clone(), false)
+            {
+                effects.push(effect);
+            }
+            effects.insert(0, Effect::ResumeTask { task_id });
             effects
+        }
+        Action::TaskSettingsLoaded {
+            task_id,
+            model,
+            effort,
+            service_tier,
+            permissions,
+            approval_policy,
+            approvals_reviewer,
+        } => {
+            if state.selected_task_id.as_deref() != Some(task_id.as_str()) {
+                return Vec::new();
+            }
+            apply_composer_settings(
+                state,
+                ComposerSettings {
+                    model,
+                    effort,
+                    service_tier,
+                    use_model_default_service_tier: false,
+                    permissions,
+                    approval_policy,
+                    approvals_reviewer,
+                },
+            );
+            Vec::new()
+        }
+        Action::ThreadSettingsUpdateFailed { task_id, message } => {
+            state.status_message = Some(message);
+            if state.selected_task_id.as_deref() == Some(task_id.as_str()) {
+                vec![Effect::ResumeTask { task_id }]
+            } else {
+                Vec::new()
+            }
+        }
+        Action::TaskRuntimeLoaded {
+            task_id,
+            active_turn_id,
+            run_status,
+        } => {
+            let is_idle = active_turn_id.is_none();
+            let timeline = state.timelines.entry(task_id.clone()).or_default();
+            timeline.active_turn_id = active_turn_id;
+            timeline.interrupt_pending = false;
+            if !is_idle {
+                timeline.goal_continuation_pending = false;
+            }
+            if let Some(status) = run_status
+                && let Some(task) = state.tasks.iter_mut().find(|task| task.id == task_id)
+            {
+                task.status = status;
+            }
+            if is_idle {
+                schedule_goal_continuation(state, task_id)
+            } else {
+                Vec::new()
+            }
+        }
+        Action::LoadMoreTimeline => {
+            let Some(task_id) = state.selected_task_id.clone() else {
+                return Vec::new();
+            };
+            let timeline = state.timelines.entry(task_id.clone()).or_default();
+            if timeline.status == LoadStatus::Loading || timeline.next_cursor.is_none() {
+                return Vec::new();
+            }
+            timeline.status = LoadStatus::Loading;
+            vec![Effect::LoadTimeline {
+                task_id,
+                generation: timeline.generation,
+                cursor: timeline.next_cursor.clone(),
+            }]
         }
         Action::TimelineLoaded {
             task_id,
@@ -809,6 +7510,1166 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
+        Action::RefreshBackgroundTerminals => {
+            let Some(task_id) = state.selected_task_id.clone() else {
+                state.status_message =
+                    Some("Open a chat before opening Process Manager.".to_owned());
+                return Vec::new();
+            };
+            if state.process_manager.status == LoadStatus::Loading {
+                return Vec::new();
+            }
+            if state.process_manager.task_id.as_deref() != Some(task_id.as_str()) {
+                state.process_manager = ProcessManagerState {
+                    task_id: Some(task_id.clone()),
+                    ..ProcessManagerState::default()
+                };
+            }
+            state.process_manager.status = LoadStatus::Loading;
+            state.process_manager.next_cursor = None;
+            state.process_manager.error = None;
+            vec![Effect::LoadBackgroundTerminals {
+                task_id,
+                cursor: None,
+            }]
+        }
+        Action::LoadMoreBackgroundTerminals => {
+            let manager = &mut state.process_manager;
+            let Some(task_id) = manager.task_id.clone() else {
+                return Vec::new();
+            };
+            if state.selected_task_id.as_deref() != Some(task_id.as_str())
+                || manager.status == LoadStatus::Loading
+                || manager.next_cursor.is_none()
+                || manager.terminals.len() >= MAX_BACKGROUND_TERMINALS
+            {
+                return Vec::new();
+            }
+            manager.status = LoadStatus::Loading;
+            manager.error = None;
+            vec![Effect::LoadBackgroundTerminals {
+                task_id,
+                cursor: manager.next_cursor.clone(),
+            }]
+        }
+        Action::BackgroundTerminalsLoaded {
+            task_id,
+            terminals,
+            next_cursor,
+            append,
+        } => {
+            let manager = &mut state.process_manager;
+            if manager.task_id.as_deref() != Some(task_id.as_str()) {
+                return Vec::new();
+            }
+            if !append {
+                manager.terminals.clear();
+            }
+            for terminal in terminals.into_iter().take(MAX_BACKGROUND_TERMINALS) {
+                if let Some(existing) = manager
+                    .terminals
+                    .iter_mut()
+                    .find(|existing| existing.process_id == terminal.process_id)
+                {
+                    *existing = terminal;
+                } else if manager.terminals.len() < MAX_BACKGROUND_TERMINALS {
+                    manager.terminals.push(terminal);
+                }
+            }
+            manager.next_cursor = (manager.terminals.len() < MAX_BACKGROUND_TERMINALS)
+                .then_some(next_cursor)
+                .flatten();
+            manager.status = LoadStatus::Ready;
+            manager.error = None;
+            Vec::new()
+        }
+        Action::BackgroundTerminalsFailed { task_id, message } => {
+            let manager = &mut state.process_manager;
+            if manager.task_id.as_deref() == Some(task_id.as_str()) {
+                manager.status = LoadStatus::Failed;
+                manager.error = Some(bounded_string(message, 16 * 1024));
+            }
+            Vec::new()
+        }
+        Action::TerminateBackgroundTerminal(process_id) => {
+            let manager = &mut state.process_manager;
+            let Some(task_id) = manager.task_id.clone() else {
+                return Vec::new();
+            };
+            if state.selected_task_id.as_deref() != Some(task_id.as_str())
+                || manager.cleaning
+                || manager
+                    .terminating_process_ids
+                    .iter()
+                    .any(|pending| pending == &process_id)
+                || !manager
+                    .terminals
+                    .iter()
+                    .any(|terminal| terminal.process_id == process_id)
+            {
+                return Vec::new();
+            }
+            manager.terminating_process_ids.push(process_id.clone());
+            manager.error = None;
+            vec![Effect::TerminateBackgroundTerminal {
+                task_id,
+                process_id,
+            }]
+        }
+        Action::BackgroundTerminalTerminated {
+            task_id,
+            process_id,
+            terminated,
+        } => {
+            let manager = &mut state.process_manager;
+            if manager.task_id.as_deref() != Some(task_id.as_str()) {
+                return Vec::new();
+            }
+            manager
+                .terminating_process_ids
+                .retain(|pending| pending != &process_id);
+            if terminated {
+                manager
+                    .terminals
+                    .retain(|terminal| terminal.process_id != process_id);
+                state.status_message = Some("Process stopped".to_owned());
+            } else {
+                manager.error = Some("Process is no longer running".to_owned());
+            }
+            Vec::new()
+        }
+        Action::BackgroundTerminalTerminateFailed {
+            task_id,
+            process_id,
+            message,
+        } => {
+            let manager = &mut state.process_manager;
+            if manager.task_id.as_deref() == Some(task_id.as_str()) {
+                manager
+                    .terminating_process_ids
+                    .retain(|pending| pending != &process_id);
+                manager.error = Some(bounded_string(message, 16 * 1024));
+            }
+            Vec::new()
+        }
+        Action::CleanBackgroundTerminals => {
+            let manager = &mut state.process_manager;
+            let Some(task_id) = manager.task_id.clone() else {
+                return Vec::new();
+            };
+            if state.selected_task_id.as_deref() != Some(task_id.as_str())
+                || manager.cleaning
+                || manager.terminals.is_empty()
+            {
+                return Vec::new();
+            }
+            manager.cleaning = true;
+            manager.error = None;
+            vec![Effect::CleanBackgroundTerminals { task_id }]
+        }
+        Action::BackgroundTerminalsCleaned { task_id } => {
+            let manager = &mut state.process_manager;
+            if manager.task_id.as_deref() == Some(task_id.as_str()) {
+                manager.cleaning = false;
+                manager.terminals.clear();
+                manager.next_cursor = None;
+                manager.terminating_process_ids.clear();
+                manager.status = LoadStatus::Ready;
+                manager.error = None;
+                state.status_message = Some("Background terminals stopped".to_owned());
+            }
+            Vec::new()
+        }
+        Action::BackgroundTerminalsCleanFailed { task_id, message } => {
+            let manager = &mut state.process_manager;
+            if manager.task_id.as_deref() == Some(task_id.as_str()) {
+                manager.cleaning = false;
+                manager.error = Some(bounded_string(message, 16 * 1024));
+            }
+            Vec::new()
+        }
+        Action::EditLastUserMessage {
+            task_id,
+            turn_id,
+            text,
+        } => {
+            if state.selected_task_id.as_deref() != Some(task_id.as_str()) {
+                return Vec::new();
+            }
+            let text = text.trim().to_owned();
+            if text.len() > MAX_COMPOSER_BYTES {
+                state.status_message = Some(format!(
+                    "Edited message is longer than {MAX_COMPOSER_BYTES} bytes."
+                ));
+                return Vec::new();
+            }
+            let permission_mode = state
+                .composer_controls
+                .selected_permission_mode
+                .as_deref()
+                .and_then(|selected| {
+                    state
+                        .composer_controls
+                        .permission_modes
+                        .iter()
+                        .find(|mode| mode.id == selected && mode.allowed)
+                })
+                .cloned();
+            let model = state.composer_controls.selected_model.clone();
+            let effort = state.composer_controls.selected_effort.clone();
+            let service_tier = state.composer_controls.selected_service_tier.clone();
+            let plan_mode = state.composer_controls.plan_mode;
+            let timeline = state.timelines.entry(task_id.clone()).or_default();
+            if timeline.active_turn_id.is_some() {
+                state.status_message =
+                    Some("Stop the active turn before editing its message.".to_owned());
+                return Vec::new();
+            }
+            let (mut attachments, rollback_required) = if let Some(edit) =
+                timeline.message_edit.as_mut()
+            {
+                if edit.turn_id != turn_id || edit.in_flight {
+                    return Vec::new();
+                }
+                edit.draft = text.clone();
+                edit.in_flight = true;
+                edit.error = None;
+                (edit.attachments.clone(), !edit.rollback_applied)
+            } else {
+                let Some(message) = timeline
+                    .items
+                    .iter()
+                    .rev()
+                    .find(|item| item.kind == TimelineKind::User)
+                else {
+                    return Vec::new();
+                };
+                if message.turn_id != turn_id {
+                    state.status_message =
+                        Some("Only the most recent message can be edited.".to_owned());
+                    return Vec::new();
+                }
+                if !message.edit_supported {
+                    state.status_message =
+                        Some("This message contains attachments that cannot be edited.".to_owned());
+                    return Vec::new();
+                }
+                let attachments = message.attachments.clone();
+                if text.is_empty() && attachments.is_empty() {
+                    state.status_message = Some("Message cannot be empty.".to_owned());
+                    return Vec::new();
+                }
+                timeline.message_edit = Some(MessageEditState {
+                    turn_id: turn_id.clone(),
+                    draft: text.clone(),
+                    attachments: attachments.clone(),
+                    rollback_applied: false,
+                    in_flight: true,
+                    error: None,
+                });
+                (attachments, true)
+            };
+            attachments.truncate(MAX_COMPOSER_ATTACHMENTS);
+            vec![Effect::EditLastUserMessage {
+                task_id,
+                turn_id,
+                text,
+                attachments,
+                rollback_required,
+                model,
+                effort,
+                service_tier,
+                permissions: permission_mode
+                    .as_ref()
+                    .map(|mode| mode.permissions.clone()),
+                approval_policy: permission_mode
+                    .as_ref()
+                    .and_then(|mode| mode.approval_policy.clone()),
+                approvals_reviewer: permission_mode
+                    .as_ref()
+                    .and_then(|mode| mode.approvals_reviewer),
+                plan_mode,
+            }]
+        }
+        Action::CancelLastUserMessageEdit { task_id, turn_id } => {
+            let timeline = state.timelines.entry(task_id.clone()).or_default();
+            let Some(edit) = timeline.message_edit.as_ref() else {
+                return Vec::new();
+            };
+            if edit.turn_id != turn_id || edit.in_flight {
+                return Vec::new();
+            }
+            let refresh = edit.rollback_applied;
+            timeline.message_edit = None;
+            if refresh {
+                timeline.generation = timeline.generation.saturating_add(1);
+                timeline.status = LoadStatus::Loading;
+                vec![Effect::LoadTimeline {
+                    task_id,
+                    generation: timeline.generation,
+                    cursor: None,
+                }]
+            } else {
+                Vec::new()
+            }
+        }
+        Action::LastUserMessageRollbackApplied { task_id, turn_id } => {
+            if let Some(edit) = state
+                .timelines
+                .entry(task_id)
+                .or_default()
+                .message_edit
+                .as_mut()
+                .filter(|edit| edit.turn_id == turn_id)
+            {
+                edit.rollback_applied = true;
+            }
+            Vec::new()
+        }
+        Action::LastUserMessageEditSucceeded { task_id, turn_id } => {
+            let timeline = state.timelines.entry(task_id).or_default();
+            if timeline
+                .message_edit
+                .as_ref()
+                .is_some_and(|edit| edit.turn_id == turn_id)
+            {
+                timeline.items.retain(|item| item.turn_id != turn_id);
+                timeline.message_edit = None;
+            }
+            Vec::new()
+        }
+        Action::LastUserMessageEditFailed {
+            task_id,
+            turn_id,
+            rollback_applied,
+            message,
+        } => {
+            let message = bounded_string(message, MAX_COMPOSER_BYTES);
+            if let Some(edit) = state
+                .timelines
+                .entry(task_id)
+                .or_default()
+                .message_edit
+                .as_mut()
+                .filter(|edit| edit.turn_id == turn_id)
+            {
+                edit.rollback_applied |= rollback_applied;
+                edit.in_flight = false;
+                edit.error = Some(message.clone());
+            }
+            state.status_message = Some(message);
+            Vec::new()
+        }
+        Action::CompactThreadFailed { task_id, message } => {
+            state
+                .timelines
+                .entry(task_id)
+                .or_default()
+                .compaction_in_flight = false;
+            state.status_message = Some(bounded_string(message, MAX_COMPOSER_BYTES));
+            Vec::new()
+        }
+        Action::ThreadTokenUsageUpdated {
+            task_id,
+            last_total_tokens,
+            model_context_window,
+        } => {
+            state
+                .timelines
+                .entry(task_id)
+                .or_default()
+                .context_window_usage =
+                ContextWindowUsage::from_last_turn(last_total_tokens, model_context_window);
+            Vec::new()
+        }
+        Action::GoalLoaded { task_id, goal } => {
+            if let Some(goal) = goal {
+                let complete = goal.status == ThreadGoalStatus::Complete;
+                let effects = apply_thread_goal_snapshot(state, goal);
+                if complete {
+                    effects
+                } else {
+                    schedule_goal_continuation(state, task_id)
+                }
+            } else {
+                let goal_state = state.goals.entry(task_id.clone()).or_default();
+                goal_state.status = LoadStatus::Ready;
+                goal_state.goal = None;
+                state
+                    .timelines
+                    .entry(task_id)
+                    .or_default()
+                    .goal_continuation_pending = false;
+                Vec::new()
+            }
+        }
+        Action::GoalLoadFailed { task_id, message } => {
+            state.goals.entry(task_id.clone()).or_default().status = LoadStatus::Failed;
+            state
+                .timelines
+                .entry(task_id)
+                .or_default()
+                .goal_continuation_pending = false;
+            state.status_message = Some(message);
+            Vec::new()
+        }
+        Action::SetGoal {
+            objective,
+            token_budget,
+        } => {
+            let Some(task_id) = state.selected_task_id.clone() else {
+                state.status_message = Some("Open a chat before setting a goal.".to_owned());
+                return Vec::new();
+            };
+            let objective = objective.trim().to_owned();
+            if objective.is_empty() {
+                state.status_message = Some("Goal objective cannot be empty.".to_owned());
+                return Vec::new();
+            }
+            if objective.len() > MAX_GOAL_OBJECTIVE_BYTES {
+                state.status_message = Some(format!(
+                    "Goal objective is longer than {MAX_GOAL_OBJECTIVE_BYTES} bytes."
+                ));
+                return Vec::new();
+            }
+            if token_budget.flatten().is_some_and(|budget| budget <= 0) {
+                state.status_message = Some("Goal token budget must be positive.".to_owned());
+                return Vec::new();
+            }
+            state.goals.entry(task_id.clone()).or_default().status = LoadStatus::Loading;
+            state
+                .timelines
+                .entry(task_id.clone())
+                .or_default()
+                .goal_continuation_pending = false;
+            vec![Effect::SetGoal {
+                task_id,
+                objective: Some(objective),
+                status: Some(ThreadGoalStatus::Active),
+                token_budget,
+            }]
+        }
+        Action::SetGoalStatus(status) => {
+            let Some(task_id) = state.selected_task_id.clone() else {
+                return Vec::new();
+            };
+            let goal = state.goals.entry(task_id.clone()).or_default();
+            if goal.goal.as_ref().is_none_or(|goal| goal.status == status) {
+                return Vec::new();
+            }
+            goal.status = LoadStatus::Loading;
+            state
+                .timelines
+                .entry(task_id.clone())
+                .or_default()
+                .goal_continuation_pending = false;
+            vec![Effect::SetGoal {
+                task_id,
+                objective: None,
+                status: Some(status),
+                token_budget: None,
+            }]
+        }
+        Action::ClearGoal => {
+            let Some(task_id) = state.selected_task_id.clone() else {
+                return Vec::new();
+            };
+            let goal = state.goals.entry(task_id.clone()).or_default();
+            if goal.goal.is_none() {
+                return Vec::new();
+            }
+            goal.status = LoadStatus::Loading;
+            state
+                .timelines
+                .entry(task_id.clone())
+                .or_default()
+                .goal_continuation_pending = false;
+            vec![Effect::ClearGoal { task_id }]
+        }
+        Action::GoalUpdated(goal) => apply_thread_goal_snapshot(state, goal),
+        Action::GoalCleared { task_id } => {
+            let goal = state.goals.entry(task_id.clone()).or_default();
+            goal.status = LoadStatus::Ready;
+            goal.goal = None;
+            state
+                .timelines
+                .entry(task_id)
+                .or_default()
+                .goal_continuation_pending = false;
+            Vec::new()
+        }
+        Action::MaybeContinueGoal { task_id } => schedule_goal_continuation(state, task_id),
+        Action::GoalContinuationDue { task_id } => {
+            let Some(timeline) = state.timelines.get_mut(&task_id) else {
+                return Vec::new();
+            };
+            if !timeline.goal_continuation_pending {
+                return Vec::new();
+            }
+            timeline.goal_continuation_pending = false;
+            if can_continue_active_goal(state, &task_id) {
+                vec![Effect::ContinueGoal { task_id }]
+            } else {
+                Vec::new()
+            }
+        }
+        Action::GoalContinuationFailed { task_id, message } => {
+            if let Some(timeline) = state.timelines.get_mut(&task_id) {
+                timeline.goal_continuation_pending = false;
+            }
+            state.status_message = Some(message);
+            Vec::new()
+        }
+        Action::ModelsLoaded(mut models) => {
+            models.truncate(MAX_COMPOSER_OPTIONS);
+            let selected_model = state
+                .composer_controls
+                .selected_model
+                .as_deref()
+                .and_then(|selected| {
+                    models
+                        .iter()
+                        .find(|model| model.id == selected)
+                        .map(|model| model.id.clone())
+                })
+                .or_else(|| {
+                    models
+                        .iter()
+                        .find(|model| model.is_default)
+                        .or_else(|| models.first())
+                        .map(|model| model.id.clone())
+                });
+            let selected_effort = selected_model
+                .as_deref()
+                .and_then(|model_id| models.iter().find(|model| model.id == model_id))
+                .and_then(|model| {
+                    state
+                        .composer_controls
+                        .selected_effort
+                        .as_deref()
+                        .filter(|effort| {
+                            model
+                                .supported_efforts
+                                .iter()
+                                .any(|option| option.id == *effort)
+                        })
+                        .map(str::to_owned)
+                        .or_else(|| {
+                            model
+                                .supported_efforts
+                                .iter()
+                                .find(|option| option.id == model.default_effort)
+                                .or_else(|| model.supported_efforts.first())
+                                .map(|option| option.id.clone())
+                        })
+                });
+            let selected_service_tier = selected_model
+                .as_deref()
+                .and_then(|model_id| models.iter().find(|model| model.id == model_id))
+                .and_then(|model| {
+                    state
+                        .composer_controls
+                        .selected_service_tier
+                        .as_ref()
+                        .filter(|selected| {
+                            model
+                                .service_tiers
+                                .iter()
+                                .any(|tier| tier.id == selected.as_str())
+                        })
+                        .cloned()
+                        .or_else(|| {
+                            model.default_service_tier.as_ref().and_then(|default| {
+                                model
+                                    .service_tiers
+                                    .iter()
+                                    .any(|tier| tier.id == default.as_str())
+                                    .then(|| default.clone())
+                            })
+                        })
+                });
+            state.composer_controls.models = models;
+            state.composer_controls.selected_model = selected_model;
+            state.composer_controls.selected_effort = selected_effort;
+            state.composer_controls.selected_service_tier = selected_service_tier;
+            state.composer_controls.models_status = LoadStatus::Ready;
+            Vec::new()
+        }
+        Action::ModelsFailed(message) => {
+            state.composer_controls.models_status = LoadStatus::Failed;
+            state.status_message = Some(message);
+            Vec::new()
+        }
+        Action::PermissionProfilesLoaded {
+            mut profiles,
+            requirements,
+        } => {
+            profiles.truncate(MAX_COMPOSER_OPTIONS);
+            let modes = permission_mode_options(&profiles, &requirements);
+            let selected = state
+                .composer_controls
+                .selected_permission_mode
+                .as_deref()
+                .and_then(|selected| {
+                    modes
+                        .iter()
+                        .find(|mode| mode.id == selected && mode.allowed)
+                        .map(|mode| mode.id.clone())
+                })
+                .or_else(|| {
+                    requirements
+                        .default_permissions
+                        .as_deref()
+                        .and_then(|default_permissions| {
+                            modes
+                                .iter()
+                                .find(|mode| {
+                                    mode.allowed && mode.permissions == default_permissions
+                                })
+                                .map(|mode| mode.id.clone())
+                        })
+                })
+                .or_else(|| {
+                    modes
+                        .iter()
+                        .find(|mode| mode.allowed && mode.id == "preset:ask-for-approval")
+                        .or_else(|| modes.iter().find(|mode| mode.allowed))
+                        .map(|mode| mode.id.clone())
+                });
+            state.composer_controls.permission_modes = modes;
+            state.composer_controls.selected_permission_mode = selected;
+            state.composer_controls.permission_profiles_status = LoadStatus::Ready;
+            Vec::new()
+        }
+        Action::PermissionProfilesFailed(message) => {
+            state.composer_controls.permission_profiles_status = LoadStatus::Failed;
+            state.status_message = Some(message);
+            Vec::new()
+        }
+        Action::ComposerDefaultsLoaded {
+            model,
+            effort,
+            service_tier,
+            profile,
+            has_managed_new_thread_settings,
+            permissions,
+            approval_policy,
+            approvals_reviewer,
+        } => {
+            let defaults = ComposerSettings {
+                model,
+                effort,
+                service_tier,
+                use_model_default_service_tier: true,
+                permissions,
+                approval_policy,
+                approvals_reviewer,
+            };
+            state.composer_controls.new_chat_defaults = defaults.clone();
+            state.composer_controls.active_profile = profile;
+            state.composer_controls.has_managed_new_thread_settings =
+                has_managed_new_thread_settings;
+            if state.selected_task_id.is_none() {
+                apply_composer_settings(state, defaults);
+            }
+            Vec::new()
+        }
+        Action::ComposerDefaultsWriteFailed(message) => {
+            state.status_message = Some(message);
+            vec![Effect::LoadPermissionProfiles { cwd: None }]
+        }
+        Action::RefreshPersonalization => {
+            if state.personalization.pending || state.personalization.status == LoadStatus::Loading
+            {
+                return Vec::new();
+            }
+            state.personalization.status = LoadStatus::Loading;
+            state.personalization.error = None;
+            vec![Effect::LoadPersonalization]
+        }
+        Action::PersonalizationLoaded {
+            personality,
+            memory_available,
+            memories_enabled,
+            allow_memory_generation_from_tool_assisted_chats,
+        } => {
+            state.personalization = PersonalizationState {
+                status: LoadStatus::Ready,
+                personality,
+                memory_available,
+                memories_enabled,
+                allow_memory_generation_from_tool_assisted_chats,
+                pending: false,
+                error: None,
+            };
+            Vec::new()
+        }
+        Action::PersonalizationFailed(message) => {
+            state.personalization.status = LoadStatus::Failed;
+            state.personalization.pending = false;
+            state.personalization.error = Some(message);
+            Vec::new()
+        }
+        Action::SelectPersonality(personality) => {
+            if state.personalization.pending
+                || state.personalization.personality == personality
+                || state.connection != ConnectionStatus::Online
+            {
+                return Vec::new();
+            }
+            state.personalization.personality = personality;
+            state.personalization.pending = true;
+            state.personalization.error = None;
+            vec![Effect::SetPersonality(personality)]
+        }
+        Action::SetMemoriesEnabled(enabled) => {
+            if state.personalization.pending
+                || !state.personalization.memory_available
+                || state.personalization.memories_enabled == enabled
+                || state.connection != ConnectionStatus::Online
+            {
+                return Vec::new();
+            }
+            state.personalization.memories_enabled = enabled;
+            state.personalization.pending = true;
+            state.personalization.error = None;
+            vec![Effect::SetMemoriesEnabled(enabled)]
+        }
+        Action::SetToolAssistedMemoriesEnabled(enabled) => {
+            if state.personalization.pending
+                || !state.personalization.memory_available
+                || !state.personalization.memories_enabled
+                || state
+                    .personalization
+                    .allow_memory_generation_from_tool_assisted_chats
+                    == enabled
+                || state.connection != ConnectionStatus::Online
+            {
+                return Vec::new();
+            }
+            state
+                .personalization
+                .allow_memory_generation_from_tool_assisted_chats = enabled;
+            state.personalization.pending = true;
+            state.personalization.error = None;
+            vec![Effect::SetToolAssistedMemoriesEnabled(enabled)]
+        }
+        Action::PersonalizationMutationFinished { kind, overridden } => {
+            state.personalization.pending = false;
+            state.personalization.status = LoadStatus::Loading;
+            state.personalization.error = None;
+            if overridden {
+                let setting = match kind {
+                    PersonalizationMutationKind::Personality => "Personality",
+                    PersonalizationMutationKind::Memories => "Memory",
+                    PersonalizationMutationKind::ToolAssistedMemories => "Tool-assisted memory",
+                };
+                state.status_message = Some(format!(
+                    "{setting} is overridden by higher-priority configuration."
+                ));
+            }
+            vec![Effect::LoadPersonalization]
+        }
+        Action::PersonalizationMutationFailed { kind, message } => {
+            state.personalization.pending = false;
+            state.personalization.status = LoadStatus::Loading;
+            let setting = match kind {
+                PersonalizationMutationKind::Personality => "personality",
+                PersonalizationMutationKind::Memories => "memory",
+                PersonalizationMutationKind::ToolAssistedMemories => "tool-assisted memory",
+            };
+            state.status_message = Some(format!("Unable to update {setting}: {message}"));
+            vec![Effect::LoadPersonalization]
+        }
+        Action::RefreshAgentConfiguration { cwd } => {
+            if state.agent_configuration.pending.is_some()
+                || state.agent_configuration.status == LoadStatus::Loading
+            {
+                return Vec::new();
+            }
+            state.agent_configuration.status = LoadStatus::Loading;
+            state.agent_configuration.cwd = cwd.clone();
+            state.agent_configuration.error = None;
+            vec![Effect::LoadAgentConfiguration { cwd }]
+        }
+        Action::AgentConfigurationLoaded {
+            cwd,
+            scopes,
+            effective_approval_policy,
+            effective_sandbox_mode,
+            effective_network_access,
+            allowed_approval_policies,
+            allowed_sandbox_modes,
+            approval_managed,
+            sandbox_managed,
+            network_managed,
+        } => {
+            let selected_scope_id = state
+                .agent_configuration
+                .selected_scope_id
+                .as_ref()
+                .filter(|selected| scopes.iter().any(|scope| &scope.id == *selected))
+                .cloned()
+                .or_else(|| scopes.first().map(|scope| scope.id.clone()));
+            state.agent_configuration = AgentConfigurationState {
+                status: LoadStatus::Ready,
+                cwd,
+                scopes,
+                selected_scope_id,
+                effective_approval_policy,
+                effective_sandbox_mode,
+                effective_network_access,
+                allowed_approval_policies,
+                allowed_sandbox_modes,
+                approval_managed,
+                sandbox_managed,
+                network_managed,
+                pending: None,
+                error: None,
+            };
+            Vec::new()
+        }
+        Action::AgentConfigurationFailed(message) => {
+            state.agent_configuration.status = LoadStatus::Failed;
+            state.agent_configuration.pending = None;
+            state.agent_configuration.error = Some(message);
+            Vec::new()
+        }
+        Action::SelectAgentConfigScope(scope_id) => {
+            if state
+                .agent_configuration
+                .scopes
+                .iter()
+                .any(|scope| scope.id == scope_id)
+            {
+                state.agent_configuration.selected_scope_id = Some(scope_id);
+                state.agent_configuration.error = None;
+            }
+            Vec::new()
+        }
+        Action::SetAgentApprovalPolicy(value) => {
+            if state.connection != ConnectionStatus::Online
+                || state.agent_configuration.status != LoadStatus::Ready
+                || state.agent_configuration.pending.is_some()
+                || state.agent_configuration.approval_managed
+                || state.agent_configuration.displayed_approval_policy() == value
+                || !state
+                    .agent_configuration
+                    .allowed_approval_policies
+                    .iter()
+                    .any(|allowed| allowed == &value)
+            {
+                return Vec::new();
+            }
+            let Some((file_path, expected_version)) =
+                editable_agent_config_scope(&state.agent_configuration)
+            else {
+                return Vec::new();
+            };
+            state.agent_configuration.pending =
+                Some(AgentConfigurationMutationKind::ApprovalPolicy);
+            state.agent_configuration.error = None;
+            vec![Effect::SetAgentApprovalPolicy {
+                value,
+                file_path,
+                expected_version,
+            }]
+        }
+        Action::SetAgentSandboxMode(value) => {
+            if state.connection != ConnectionStatus::Online
+                || state.agent_configuration.status != LoadStatus::Ready
+                || state.agent_configuration.pending.is_some()
+                || state.agent_configuration.sandbox_managed
+                || state.agent_configuration.displayed_sandbox_mode() == value
+                || !state
+                    .agent_configuration
+                    .allowed_sandbox_modes
+                    .iter()
+                    .any(|allowed| allowed == &value)
+            {
+                return Vec::new();
+            }
+            let Some((file_path, expected_version)) =
+                editable_agent_config_scope(&state.agent_configuration)
+            else {
+                return Vec::new();
+            };
+            state.agent_configuration.pending = Some(AgentConfigurationMutationKind::SandboxMode);
+            state.agent_configuration.error = None;
+            vec![Effect::SetAgentSandboxMode {
+                value,
+                file_path,
+                expected_version,
+            }]
+        }
+        Action::SetAgentNetworkAccess(value) => {
+            if state.connection != ConnectionStatus::Online
+                || state.agent_configuration.status != LoadStatus::Ready
+                || state.agent_configuration.pending.is_some()
+                || state.agent_configuration.network_managed
+                || state.agent_configuration.displayed_sandbox_mode() != "workspace-write"
+                || state.agent_configuration.displayed_network_access() == value
+            {
+                return Vec::new();
+            }
+            let Some((file_path, expected_version)) =
+                editable_agent_config_scope(&state.agent_configuration)
+            else {
+                return Vec::new();
+            };
+            state.agent_configuration.pending = Some(AgentConfigurationMutationKind::NetworkAccess);
+            state.agent_configuration.error = None;
+            vec![Effect::SetAgentNetworkAccess {
+                value,
+                file_path,
+                expected_version,
+            }]
+        }
+        Action::AgentConfigurationMutationFinished { kind, overridden } => {
+            state.agent_configuration.pending = None;
+            state.agent_configuration.status = LoadStatus::Loading;
+            state.agent_configuration.error = None;
+            if overridden {
+                let setting = match kind {
+                    AgentConfigurationMutationKind::ApprovalPolicy => "Approval policy",
+                    AgentConfigurationMutationKind::SandboxMode => "Sandbox mode",
+                    AgentConfigurationMutationKind::NetworkAccess => "Network access",
+                };
+                state.status_message = Some(format!(
+                    "{setting} is overridden by higher-priority configuration."
+                ));
+            }
+            vec![Effect::LoadAgentConfiguration {
+                cwd: state.agent_configuration.cwd.clone(),
+            }]
+        }
+        Action::AgentConfigurationMutationFailed { kind, message } => {
+            state.agent_configuration.pending = None;
+            state.agent_configuration.status = LoadStatus::Loading;
+            let setting = match kind {
+                AgentConfigurationMutationKind::ApprovalPolicy => "approval policy",
+                AgentConfigurationMutationKind::SandboxMode => "sandbox mode",
+                AgentConfigurationMutationKind::NetworkAccess => "network access",
+            };
+            state.status_message = Some(format!("Unable to update {setting}: {message}"));
+            vec![Effect::LoadAgentConfiguration {
+                cwd: state.agent_configuration.cwd.clone(),
+            }]
+        }
+        Action::SelectModel(model_id) => {
+            let Some(model) = state
+                .composer_controls
+                .models
+                .iter()
+                .find(|model| model.id == model_id)
+            else {
+                return Vec::new();
+            };
+            let selected_model = model.id.clone();
+            state.composer_controls.selected_model = Some(selected_model.clone());
+            if !state
+                .composer_controls
+                .selected_effort
+                .as_deref()
+                .is_some_and(|selected| {
+                    model
+                        .supported_efforts
+                        .iter()
+                        .any(|effort| effort.id == selected)
+                })
+            {
+                state.composer_controls.selected_effort = model
+                    .supported_efforts
+                    .iter()
+                    .find(|effort| effort.id == model.default_effort)
+                    .or_else(|| model.supported_efforts.first())
+                    .map(|effort| effort.id.clone());
+            }
+            let selected_service_tier = match state.composer_controls.selected_service_tier.clone()
+            {
+                Some(tier) if model.service_tiers.iter().any(|option| option.id == tier) => {
+                    Some(tier)
+                }
+                Some(_) => model.default_service_tier.as_ref().and_then(|default| {
+                    model
+                        .service_tiers
+                        .iter()
+                        .any(|tier| tier.id == default.as_str())
+                        .then(|| default.clone())
+                }),
+                None => None,
+            };
+            state.composer_controls.selected_service_tier = selected_service_tier.clone();
+            if let Some(task_id) = state.selected_task_id.clone() {
+                return vec![Effect::UpdateThreadSettings {
+                    task_id,
+                    model: Some(selected_model),
+                    effort: state.composer_controls.selected_effort.clone(),
+                    service_tier: Some(selected_service_tier),
+                    permissions: None,
+                    approval_policy: None,
+                    approvals_reviewer: None,
+                }];
+            }
+            if state.composer_controls.has_managed_new_thread_settings {
+                return Vec::new();
+            }
+            let Some(effort) = state.composer_controls.selected_effort.clone() else {
+                return Vec::new();
+            };
+            state.composer_controls.new_chat_defaults.model = Some(selected_model.clone());
+            state.composer_controls.new_chat_defaults.effort = Some(effort.clone());
+            vec![Effect::PersistComposerModelDefaults {
+                model: selected_model,
+                effort,
+                profile: state.composer_controls.active_profile.clone(),
+            }]
+        }
+        Action::SelectReasoningEffort(effort_id) => {
+            let valid = state
+                .composer_controls
+                .selected_model
+                .as_deref()
+                .and_then(|model_id| {
+                    state
+                        .composer_controls
+                        .models
+                        .iter()
+                        .find(|model| model.id == model_id)
+                })
+                .is_some_and(|model| {
+                    model
+                        .supported_efforts
+                        .iter()
+                        .any(|effort| effort.id == effort_id)
+                });
+            if valid {
+                state.composer_controls.selected_effort = Some(effort_id.clone());
+                if let Some(task_id) = state.selected_task_id.clone() {
+                    return vec![Effect::UpdateThreadSettings {
+                        task_id,
+                        model: None,
+                        effort: Some(effort_id),
+                        service_tier: None,
+                        permissions: None,
+                        approval_policy: None,
+                        approvals_reviewer: None,
+                    }];
+                }
+                if state.composer_controls.has_managed_new_thread_settings {
+                    return Vec::new();
+                }
+                let Some(model) = state.composer_controls.selected_model.clone() else {
+                    return Vec::new();
+                };
+                state.composer_controls.new_chat_defaults.model = Some(model.clone());
+                state.composer_controls.new_chat_defaults.effort = Some(effort_id.clone());
+                return vec![Effect::PersistComposerModelDefaults {
+                    model,
+                    effort: effort_id,
+                    profile: state.composer_controls.active_profile.clone(),
+                }];
+            }
+            Vec::new()
+        }
+        Action::SelectServiceTier(service_tier_id) => {
+            let selected = if service_tier_id == STANDARD_SERVICE_TIER_ID {
+                None
+            } else {
+                let valid = state
+                    .composer_controls
+                    .selected_model
+                    .as_deref()
+                    .and_then(|model_id| {
+                        state
+                            .composer_controls
+                            .models
+                            .iter()
+                            .find(|model| model.id == model_id)
+                    })
+                    .is_some_and(|model| {
+                        model
+                            .service_tiers
+                            .iter()
+                            .any(|tier| tier.id == service_tier_id)
+                    });
+                if !valid {
+                    return Vec::new();
+                }
+                Some(service_tier_id)
+            };
+            state.composer_controls.selected_service_tier = selected.clone();
+            if let Some(task_id) = state.selected_task_id.clone() {
+                return vec![Effect::UpdateThreadSettings {
+                    task_id,
+                    model: None,
+                    effort: None,
+                    service_tier: Some(selected),
+                    permissions: None,
+                    approval_policy: None,
+                    approvals_reviewer: None,
+                }];
+            }
+            if state.composer_controls.has_managed_new_thread_settings {
+                return Vec::new();
+            }
+            state.composer_controls.new_chat_defaults.service_tier = selected.clone();
+            vec![Effect::PersistComposerServiceTierDefault {
+                service_tier: selected,
+                profile: state.composer_controls.active_profile.clone(),
+            }]
+        }
+        Action::SelectPermissionMode(mode_id) => {
+            let mode = state
+                .composer_controls
+                .permission_modes
+                .iter()
+                .find(|mode| mode.id == mode_id && mode.allowed)
+                .cloned();
+            let Some(mode) = mode else {
+                return Vec::new();
+            };
+            state.composer_controls.selected_permission_mode = Some(mode_id);
+            state
+                .selected_task_id
+                .clone()
+                .map(|task_id| Effect::UpdateThreadSettings {
+                    task_id,
+                    model: None,
+                    effort: None,
+                    service_tier: None,
+                    permissions: Some(mode.permissions),
+                    approval_policy: mode.approval_policy,
+                    approvals_reviewer: mode.approvals_reviewer,
+                })
+                .into_iter()
+                .collect()
+        }
+        Action::TogglePlanMode => {
+            if state.composer_controls.selected_model.is_some() {
+                state.composer_controls.plan_mode = !state.composer_controls.plan_mode;
+                if state.composer_controls.plan_mode {
+                    state.composer_controls.goal_mode = false;
+                }
+                state.composer_error = None;
+            } else {
+                state.composer_error = Some("Choose a model before enabling Plan mode.".to_owned());
+            }
+            Vec::new()
+        }
+        Action::ToggleGoalMode => {
+            if state.selected_task_id.is_none() && state.composer_controls.selected_model.is_none()
+            {
+                state.composer_error = Some("Choose a model before setting a goal.".to_owned());
+            } else {
+                state.composer_controls.goal_mode = !state.composer_controls.goal_mode;
+                if state.composer_controls.goal_mode {
+                    state.composer_controls.plan_mode = false;
+                }
+                state.composer_error = None;
+            }
+            Vec::new()
+        }
         Action::ComposerChanged(text) => {
             if text.len() <= MAX_COMPOSER_BYTES {
                 state.composer = text;
@@ -818,22 +8679,453 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
-        Action::SubmitComposer => {
-            let Some(task_id) = state.selected_task_id.clone() else {
-                state.composer_error = Some("Select a task first.".to_owned());
-                return Vec::new();
-            };
-            let text = state.composer.trim().to_owned();
-            if text.is_empty() {
+        Action::ComposerFileSearchChanged(query) => change_fuzzy_file_search(state, query),
+        Action::FuzzyFileSearchUpdated {
+            session_id,
+            query,
+            mut results,
+        } => {
+            if state.fuzzy_file_search.session_id.as_deref() != Some(session_id.as_str())
+                || state.fuzzy_file_search.query != query
+            {
                 return Vec::new();
             }
+            results.truncate(MAX_FUZZY_FILE_RESULTS);
+            state.fuzzy_file_search.results = results;
+            state.fuzzy_file_search.error = None;
+            Vec::new()
+        }
+        Action::FuzzyFileSearchCompleted { session_id } => {
+            if state.fuzzy_file_search.session_id.as_deref() == Some(session_id.as_str()) {
+                state.fuzzy_file_search.status = LoadStatus::Ready;
+                state.fuzzy_file_search.error = None;
+            }
+            Vec::new()
+        }
+        Action::FuzzyFileSearchFailed {
+            session_id,
+            query,
+            message,
+        } => {
+            if state.fuzzy_file_search.session_id.as_deref() == Some(session_id.as_str())
+                && state.fuzzy_file_search.query == query
+            {
+                state.fuzzy_file_search.status = LoadStatus::Failed;
+                state.fuzzy_file_search.results.clear();
+                state.fuzzy_file_search.error = Some(bounded_string(message, MAX_COMPOSER_BYTES));
+            }
+            Vec::new()
+        }
+        Action::AddComposerAttachments(paths) => {
+            for path in paths {
+                if state.composer_attachments.len() >= MAX_COMPOSER_ATTACHMENTS {
+                    state.composer_error = Some(format!(
+                        "A message can include at most {MAX_COMPOSER_ATTACHMENTS} attachments."
+                    ));
+                    break;
+                }
+                let Some(attachment) = composer_attachment(path) else {
+                    continue;
+                };
+                if !state
+                    .composer_attachments
+                    .iter()
+                    .any(|existing| existing.path == attachment.path)
+                {
+                    state.composer_attachments.push(attachment);
+                }
+            }
+            Vec::new()
+        }
+        Action::AddComposerSkill(path) => {
+            if state.composer_attachments.len() >= MAX_COMPOSER_ATTACHMENTS {
+                state.composer_error = Some(format!(
+                    "A message can include at most {MAX_COMPOSER_ATTACHMENTS} attachments."
+                ));
+                return Vec::new();
+            }
+            let Some(skill) = state
+                .marketplace
+                .skills
+                .iter()
+                .find(|skill| skill.enabled && skill.path == path && skill.path.is_absolute())
+            else {
+                return Vec::new();
+            };
+            if !state.composer_attachments.iter().any(|attachment| {
+                attachment.kind == ComposerAttachmentKind::Skill && attachment.path == skill.path
+            }) {
+                state.composer_attachments.push(ComposerAttachment {
+                    path: skill.path.clone(),
+                    name: bounded_string(skill.name.clone(), MAX_ATTACHMENT_LABEL_BYTES),
+                    kind: ComposerAttachmentKind::Skill,
+                });
+                state.composer_error = None;
+            }
+            Vec::new()
+        }
+        Action::AddComposerApp(app_id) => {
+            if state.composer_attachments.len() >= MAX_COMPOSER_ATTACHMENTS {
+                state.composer_error = Some(format!(
+                    "A message can include at most {MAX_COMPOSER_ATTACHMENTS} attachments."
+                ));
+                return Vec::new();
+            }
+            let Some(app) = state
+                .marketplace
+                .apps
+                .iter()
+                .find(|app| app.id == app_id && app.is_accessible && app.enabled)
+                .cloned()
+            else {
+                return Vec::new();
+            };
+            let path = PathBuf::from(composer_app_uri(&app.id));
+            if !state.composer_attachments.iter().any(|attachment| {
+                attachment.kind == ComposerAttachmentKind::App && attachment.path == path
+            }) {
+                state.composer_attachments.push(ComposerAttachment {
+                    path,
+                    name: bounded_string(app.name, MAX_ATTACHMENT_LABEL_BYTES),
+                    kind: ComposerAttachmentKind::App,
+                });
+                state.composer_error = None;
+            }
+            Vec::new()
+        }
+        Action::AddComposerPlugin(plugin_id) => {
+            if state.composer_attachments.len() >= MAX_COMPOSER_ATTACHMENTS {
+                state.composer_error = Some(format!(
+                    "A message can include at most {MAX_COMPOSER_ATTACHMENTS} attachments."
+                ));
+                return Vec::new();
+            }
+            let Some(plugin) = state
+                .marketplace
+                .composer_plugins
+                .iter()
+                .find(|plugin| plugin.id == plugin_id && composer_plugin_is_mentionable(plugin))
+                .cloned()
+            else {
+                return Vec::new();
+            };
+            if !plugin.installed
+                && (!plugin.installable || state.marketplace.pending_plugin_id.is_some())
+            {
+                return Vec::new();
+            }
+            let path = PathBuf::from(composer_plugin_uri(&plugin.id));
+            if !state.composer_attachments.iter().any(|attachment| {
+                attachment.kind == ComposerAttachmentKind::Plugin && attachment.path == path
+            }) {
+                state.composer_attachments.push(ComposerAttachment {
+                    path,
+                    name: bounded_string(
+                        composer_plugin_display_name(&plugin),
+                        MAX_ATTACHMENT_LABEL_BYTES,
+                    ),
+                    kind: ComposerAttachmentKind::Plugin,
+                });
+                state.composer_error = None;
+            }
+            if plugin.installed {
+                Vec::new()
+            } else {
+                reduce(
+                    state,
+                    Action::InstallPlugin {
+                        plugin_id: plugin.id,
+                        plugin_name: plugin.install_name,
+                        marketplace: plugin.marketplace,
+                    },
+                )
+            }
+        }
+        Action::AddComposerDesktopApp(application_id) => {
+            if state.composer_attachments.len() >= MAX_COMPOSER_ATTACHMENTS {
+                state.composer_error = Some(format!(
+                    "A message can include at most {MAX_COMPOSER_ATTACHMENTS} attachments."
+                ));
+                return Vec::new();
+            }
+            let Some(application) = state
+                .composer_desktop_apps
+                .iter()
+                .find(|application| application.id == application_id)
+                .cloned()
+            else {
+                return Vec::new();
+            };
+            let Some(plugin) = state
+                .marketplace
+                .composer_plugins
+                .iter()
+                .find(|plugin| {
+                    plugin.install_name.eq_ignore_ascii_case("computer-use")
+                        && composer_plugin_is_mentionable(plugin)
+                })
+                .cloned()
+            else {
+                return Vec::new();
+            };
+            if !plugin.installed
+                && (!plugin.installable || state.marketplace.pending_plugin_id.is_some())
+            {
+                return Vec::new();
+            }
+            let path = PathBuf::from(composer_desktop_app_uri(&plugin.id, &application.id));
+            if !state.composer_attachments.iter().any(|attachment| {
+                attachment.kind == ComposerAttachmentKind::Plugin && attachment.path == path
+            }) {
+                let name = application
+                    .display_name
+                    .filter(|name| !name.trim().is_empty())
+                    .unwrap_or(application.id);
+                state.composer_attachments.push(ComposerAttachment {
+                    path,
+                    name: bounded_string(name, MAX_ATTACHMENT_LABEL_BYTES),
+                    kind: ComposerAttachmentKind::Plugin,
+                });
+                state.composer_error = None;
+            }
+            if plugin.installed {
+                Vec::new()
+            } else {
+                reduce(
+                    state,
+                    Action::InstallPlugin {
+                        plugin_id: plugin.id,
+                        plugin_name: plugin.install_name,
+                        marketplace: plugin.marketplace,
+                    },
+                )
+            }
+        }
+        Action::RemoveComposerAttachment(index) => {
+            if index < state.composer_attachments.len() {
+                state.composer_attachments.remove(index);
+                state.composer_error = None;
+            }
+            Vec::new()
+        }
+        Action::SubmitComposer => {
+            let text = state.composer.trim().to_owned();
+            if text == "/new" {
+                if !state.composer_attachments.is_empty() {
+                    state.composer_error = Some("New chat requires an empty composer.".to_owned());
+                    return Vec::new();
+                }
+                return reduce(state, Action::BeginNewChat);
+            }
+            if text == "/fork" {
+                if !state.composer_attachments.is_empty() {
+                    state.composer_error =
+                        Some("Continue in new chat requires an empty composer.".to_owned());
+                    return Vec::new();
+                }
+                let Some(task_id) = state.selected_task_id.clone() else {
+                    state.composer_error =
+                        Some("Open a chat before continuing in a new chat.".to_owned());
+                    return Vec::new();
+                };
+                state.composer.clear();
+                state.composer_error = None;
+                return fork_task(state, &task_id, false);
+            }
+            if text == "/compact" {
+                if !state.composer_attachments.is_empty() {
+                    state.composer_error = Some("Compact requires an empty composer.".to_owned());
+                    return Vec::new();
+                }
+                let Some(task_id) = state.selected_task_id.clone() else {
+                    state.composer_error =
+                        Some("Open a chat before compacting context.".to_owned());
+                    return Vec::new();
+                };
+                let timeline = state.timelines.entry(task_id.clone()).or_default();
+                if timeline.active_turn_id.is_some() {
+                    state.composer_error =
+                        Some("Compact is disabled while a chat is in progress.".to_owned());
+                    return Vec::new();
+                }
+                if timeline.compaction_in_flight {
+                    state.composer_error =
+                        Some("Context compaction is already in progress.".to_owned());
+                    return Vec::new();
+                }
+                timeline.compaction_in_flight = true;
+                state.composer.clear();
+                state.composer_error = None;
+                return vec![Effect::CompactThread { task_id }];
+            }
+            let permission_mode = state
+                .composer_controls
+                .selected_permission_mode
+                .as_deref()
+                .and_then(|selected| {
+                    state
+                        .composer_controls
+                        .permission_modes
+                        .iter()
+                        .find(|mode| mode.id == selected && mode.allowed)
+                })
+                .cloned();
+            if state.composer_controls.goal_mode {
+                if !state.composer_attachments.is_empty() {
+                    state.composer_error =
+                        Some("Goal attachments are not supported yet.".to_owned());
+                    return Vec::new();
+                }
+                if text.is_empty() {
+                    state.composer_error = Some("Goal objective cannot be empty.".to_owned());
+                    return Vec::new();
+                }
+                if text.len() > MAX_GOAL_OBJECTIVE_BYTES {
+                    state.composer_error = Some(format!(
+                        "Goal objective is longer than {MAX_GOAL_OBJECTIVE_BYTES} bytes."
+                    ));
+                    return Vec::new();
+                }
+                state.composer.clear();
+                state.composer_error = None;
+                state.composer_controls.goal_mode = false;
+                if let Some(task_id) = state.selected_task_id.clone() {
+                    state.goals.entry(task_id.clone()).or_default().status = LoadStatus::Loading;
+                    state
+                        .timelines
+                        .entry(task_id.clone())
+                        .or_default()
+                        .goal_continuation_pending = false;
+                    return vec![Effect::SetGoal {
+                        task_id,
+                        objective: Some(text),
+                        status: Some(ThreadGoalStatus::Active),
+                        token_budget: None,
+                    }];
+                }
+                return vec![Effect::CreateTask {
+                    cwd: state.new_chat_cwd.clone(),
+                    model: state.composer_controls.selected_model.clone(),
+                    effort: state.composer_controls.selected_effort.clone(),
+                    service_tier: state.composer_controls.selected_service_tier.clone(),
+                    permissions: permission_mode
+                        .as_ref()
+                        .map(|mode| mode.permissions.clone()),
+                    approval_policy: permission_mode
+                        .as_ref()
+                        .and_then(|mode| mode.approval_policy.clone()),
+                    approvals_reviewer: permission_mode
+                        .as_ref()
+                        .and_then(|mode| mode.approvals_reviewer),
+                    initial_message: format!("/goal {text}"),
+                    attachments: Vec::new(),
+                    plan_mode: false,
+                    goal_objective: Some(text),
+                }];
+            }
+            if text.is_empty() && state.composer_attachments.is_empty() {
+                return Vec::new();
+            }
+            let attachments = std::mem::take(&mut state.composer_attachments);
+            let plan_mode = state.composer_controls.plan_mode;
             state.composer.clear();
             state.composer_error = None;
-            vec![Effect::StartTurn { task_id, text }]
+            if let Some(task_id) = state.selected_task_id.clone() {
+                if let Some(expected_turn_id) = state
+                    .timelines
+                    .get(&task_id)
+                    .and_then(|timeline| timeline.active_turn_id.clone())
+                {
+                    vec![Effect::SteerTurn {
+                        task_id,
+                        expected_turn_id,
+                        text,
+                        attachments,
+                    }]
+                } else {
+                    vec![Effect::StartTurn {
+                        task_id,
+                        text,
+                        model: state.composer_controls.selected_model.clone(),
+                        effort: state.composer_controls.selected_effort.clone(),
+                        service_tier: state.composer_controls.selected_service_tier.clone(),
+                        permissions: permission_mode
+                            .as_ref()
+                            .map(|mode| mode.permissions.clone()),
+                        approval_policy: permission_mode
+                            .as_ref()
+                            .and_then(|mode| mode.approval_policy.clone()),
+                        approvals_reviewer: permission_mode
+                            .as_ref()
+                            .and_then(|mode| mode.approvals_reviewer),
+                        attachments,
+                        plan_mode,
+                    }]
+                }
+            } else {
+                vec![Effect::CreateTask {
+                    cwd: state.new_chat_cwd.clone(),
+                    model: state.composer_controls.selected_model.clone(),
+                    effort: state.composer_controls.selected_effort.clone(),
+                    service_tier: state.composer_controls.selected_service_tier.clone(),
+                    permissions: permission_mode
+                        .as_ref()
+                        .map(|mode| mode.permissions.clone()),
+                    approval_policy: permission_mode
+                        .as_ref()
+                        .and_then(|mode| mode.approval_policy.clone()),
+                    approvals_reviewer: permission_mode
+                        .as_ref()
+                        .and_then(|mode| mode.approvals_reviewer),
+                    initial_message: text,
+                    attachments,
+                    plan_mode,
+                    goal_objective: None,
+                }]
+            }
+        }
+        Action::InterruptActiveTurn => {
+            let Some(task_id) = state.selected_task_id.clone() else {
+                return Vec::new();
+            };
+            let pause_active_goal = state.goals.get(&task_id).is_some_and(|goal_state| {
+                goal_state
+                    .goal
+                    .as_ref()
+                    .is_some_and(|goal| goal.status == ThreadGoalStatus::Active)
+            });
+            let timeline = state.timelines.entry(task_id.clone()).or_default();
+            let Some(turn_id) = timeline.active_turn_id.clone() else {
+                return Vec::new();
+            };
+            if timeline.interrupt_pending {
+                return Vec::new();
+            }
+            timeline.interrupt_pending = true;
+            timeline.goal_continuation_pending = false;
+            let mut effects = Vec::with_capacity(2);
+            if pause_active_goal {
+                state.goals.entry(task_id.clone()).or_default().status = LoadStatus::Loading;
+                effects.push(Effect::SetGoal {
+                    task_id: task_id.clone(),
+                    objective: None,
+                    status: Some(ThreadGoalStatus::Paused),
+                    token_budget: None,
+                });
+            }
+            effects.push(Effect::InterruptTurn { task_id, turn_id });
+            effects
         }
         Action::TurnStarted { task_id, turn_id } => {
             let timeline = state.timelines.entry(task_id.clone()).or_default();
-            timeline.active_turn_id = Some(turn_id);
+            timeline.active_turn_id = Some(turn_id.clone());
+            timeline.interrupt_pending = false;
+            timeline.goal_continuation_pending = false;
+            timeline.last_turn_diff = Some(TurnDiffState {
+                turn_id,
+                unified_diff: String::new(),
+                truncated: false,
+            });
             if let Some(task) = state.tasks.iter_mut().find(|task| task.id == task_id) {
                 task.status = TaskRunStatus::Running;
             }
@@ -848,6 +9140,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             if timeline.active_turn_id.as_deref() == Some(turn_id.as_str()) {
                 timeline.active_turn_id = None;
             }
+            timeline.interrupt_pending = false;
+            timeline.compaction_in_flight = false;
             if let Some(task) = state.tasks.iter_mut().find(|task| task.id == task_id) {
                 task.status = if failed {
                     TaskRunStatus::Failed
@@ -855,16 +9149,55 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     TaskRunStatus::Completed
                 };
             }
-            Vec::new()
+            schedule_goal_continuation(state, task_id)
         }
         Action::TurnInterrupted { task_id, turn_id } => {
             let timeline = state.timelines.entry(task_id.clone()).or_default();
             if timeline.active_turn_id.as_deref() == Some(turn_id.as_str()) {
                 timeline.active_turn_id = None;
             }
+            timeline.interrupt_pending = false;
+            timeline.goal_continuation_pending = false;
+            timeline.compaction_in_flight = false;
             if let Some(task) = state.tasks.iter_mut().find(|task| task.id == task_id) {
                 task.status = TaskRunStatus::Interrupted;
             }
+            Vec::new()
+        }
+        Action::TurnDiffUpdated {
+            task_id,
+            turn_id,
+            diff,
+            truncated,
+        } => {
+            let timeline = state.timelines.entry(task_id).or_default();
+            if timeline
+                .active_turn_id
+                .as_deref()
+                .is_some_and(|active_turn_id| active_turn_id != turn_id)
+                || (timeline.active_turn_id.is_none()
+                    && timeline
+                        .last_turn_diff
+                        .as_ref()
+                        .is_some_and(|current| current.turn_id != turn_id))
+            {
+                return Vec::new();
+            }
+            let was_truncated = diff.len() > MAX_TURN_DIFF_BYTES;
+            timeline.last_turn_diff = Some(TurnDiffState {
+                turn_id,
+                unified_diff: bounded_string(diff, MAX_TURN_DIFF_BYTES),
+                truncated: truncated || was_truncated,
+            });
+            Vec::new()
+        }
+        Action::TurnInterruptFailed { task_id, message } => {
+            state
+                .timelines
+                .entry(task_id)
+                .or_default()
+                .interrupt_pending = false;
+            state.status_message = Some(message);
             Vec::new()
         }
         Action::TimelineDelta {
@@ -876,13 +9209,36 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         } => {
             let timeline = state.timelines.entry(task_id).or_default();
             if let Some(item) = timeline.items.iter_mut().find(|item| item.id == item_id) {
-                append_bounded(&mut item.text, &delta, MAX_COMPOSER_BYTES);
+                if item.kind == TimelineKind::Command {
+                    append_bounded(
+                        item.detail.get_or_insert_default(),
+                        &delta,
+                        MAX_COMPOSER_BYTES,
+                    );
+                } else {
+                    append_bounded(&mut item.text, &delta, MAX_COMPOSER_BYTES);
+                }
             } else {
+                let (text, detail) = if kind == TimelineKind::Command {
+                    (
+                        "Running command".to_owned(),
+                        Some(bounded_string(delta, MAX_COMPOSER_BYTES)),
+                    )
+                } else {
+                    (bounded_string(delta, MAX_COMPOSER_BYTES), None)
+                };
                 timeline.items.push(TimelineItem {
                     id: item_id,
                     turn_id,
                     kind,
-                    text: bounded_string(delta, MAX_COMPOSER_BYTES),
+                    text,
+                    detail,
+                    process_id: None,
+                    memory_citations: Vec::new(),
+                    sources: Vec::new(),
+                    attachments: Vec::new(),
+                    output_artifacts: Vec::new(),
+                    edit_supported: false,
                     completed: false,
                 });
                 trim_front(&mut timeline.items, MAX_TIMELINE_ITEMS);
@@ -891,6 +9247,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::UpsertTimelineItem { task_id, item } => {
             let timeline = state.timelines.entry(task_id).or_default();
+            if item.kind == TimelineKind::ContextCompaction && item.completed {
+                timeline.compaction_in_flight = false;
+            }
             if let Some(existing) = timeline
                 .items
                 .iter_mut()
@@ -904,15 +9263,12 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::TimelineItemCompleted { task_id, item_id } => {
-            if let Some(item) = state
-                .timelines
-                .entry(task_id)
-                .or_default()
-                .items
-                .iter_mut()
-                .find(|item| item.id == item_id)
-            {
+            let timeline = state.timelines.entry(task_id).or_default();
+            if let Some(item) = timeline.items.iter_mut().find(|item| item.id == item_id) {
                 item.completed = true;
+                if item.kind == TimelineKind::ContextCompaction {
+                    timeline.compaction_in_flight = false;
+                }
             }
             Vec::new()
         }
@@ -950,6 +9306,249 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 Vec::new()
             }
         }
+        Action::UserInputRequested(mut request) => {
+            if state
+                .user_input_requests
+                .iter()
+                .any(|pending| pending.request_id == request.request_id)
+            {
+                return Vec::new();
+            }
+            normalize_user_input_request(&mut request);
+            if request.questions.is_empty() {
+                state.status_message = Some(
+                    "The structured input request did not contain a valid question.".to_owned(),
+                );
+                return Vec::new();
+            }
+            let task_id = request.task_id.clone();
+            if state.user_input_requests.len() == MAX_PENDING_USER_INPUT_REQUESTS {
+                state.user_input_requests.pop_front();
+                state.status_message =
+                    Some("Oldest pending input request was dropped at the queue limit.".to_owned());
+            }
+            if let Some(task) = state.tasks.iter_mut().find(|task| task.id == task_id) {
+                task.status = TaskRunStatus::WaitingForApproval;
+            }
+            state.user_input_requests.push_back(request);
+            Vec::new()
+        }
+        Action::ResolveUserInput {
+            request_id,
+            answers,
+        } => {
+            let position = state
+                .user_input_requests
+                .iter()
+                .position(|request| request.request_id == request_id);
+            let Some(position) = position else {
+                return Vec::new();
+            };
+            if !validate_user_input_answers(&state.user_input_requests[position], &answers) {
+                state.status_message = Some("The structured input response is invalid.".to_owned());
+                return Vec::new();
+            }
+            state.user_input_requests.remove(position);
+            vec![Effect::RespondUserInput {
+                request_id,
+                answers,
+            }]
+        }
+        Action::McpElicitationRequested(mut request) => {
+            if state
+                .mcp_elicitations
+                .iter()
+                .any(|pending| pending.request_id() == request.request_id())
+            {
+                return Vec::new();
+            }
+            normalize_mcp_elicitation(&mut request);
+            let task_id = request.task_id().to_owned();
+            if state.mcp_elicitations.len() == MAX_PENDING_MCP_ELICITATIONS {
+                state.mcp_elicitations.pop_front();
+                state.status_message =
+                    Some("Oldest pending MCP action was dropped at the queue limit.".to_owned());
+            }
+            if let Some(task) = state.tasks.iter_mut().find(|task| task.id == task_id) {
+                task.status = TaskRunStatus::WaitingForApproval;
+            }
+            state.mcp_elicitations.push_back(request);
+            Vec::new()
+        }
+        Action::MarkMcpUrlElicitationOpened { request_id } => {
+            if let Some(McpElicitation::Url(request)) = state
+                .mcp_elicitations
+                .iter_mut()
+                .find(|request| request.request_id() == request_id)
+            {
+                request.link_opened = true;
+            }
+            Vec::new()
+        }
+        Action::ResolveMcpElicitation {
+            request_id,
+            decision,
+            content,
+        } => {
+            let position = state
+                .mcp_elicitations
+                .iter()
+                .position(|request| request.request_id() == request_id);
+            let Some(position) = position else {
+                return Vec::new();
+            };
+            let content = match (&state.mcp_elicitations[position], decision) {
+                (McpElicitation::Url(request), McpElicitationDecision::Accept) => {
+                    if !request.link_opened {
+                        state.status_message =
+                            Some("Open the requested link before continuing.".to_owned());
+                        return Vec::new();
+                    }
+                    None
+                }
+                (McpElicitation::Form(request), McpElicitationDecision::Accept) => {
+                    let Some(content) = content else {
+                        state.status_message =
+                            Some("Complete the requested form before continuing.".to_owned());
+                        return Vec::new();
+                    };
+                    if !validate_mcp_form_content(request, &content).is_empty() {
+                        state.status_message =
+                            Some("Complete the highlighted fields before continuing.".to_owned());
+                        return Vec::new();
+                    }
+                    Some(content)
+                }
+                (
+                    McpElicitation::BrowserOrigin(_) | McpElicitation::BrowserResource(_),
+                    McpElicitationDecision::Accept,
+                ) => None,
+                (_, McpElicitationDecision::Decline | McpElicitationDecision::Cancel) => None,
+            };
+            state.mcp_elicitations.remove(position);
+            vec![Effect::RespondMcpElicitation {
+                request_id,
+                decision,
+                content,
+            }]
+        }
+        Action::ResolveBrowserOriginElicitation {
+            request_id,
+            decision,
+        } => {
+            let position = state.mcp_elicitations.iter().position(|request| {
+                matches!(
+                    request,
+                    McpElicitation::BrowserOrigin(request) if request.request_id == request_id
+                )
+            });
+            let Some(position) = position else {
+                return Vec::new();
+            };
+            let Some(McpElicitation::BrowserOrigin(request)) =
+                state.mcp_elicitations.remove(position)
+            else {
+                return Vec::new();
+            };
+            let mut effects = Vec::with_capacity(3);
+            match decision {
+                BrowserOriginElicitationDecision::AllowSite => {
+                    let mut site = state
+                        .browser_permissions
+                        .sites
+                        .iter()
+                        .find(|site| site.origin == request.origin)
+                        .cloned()
+                        .unwrap_or(BrowserSitePermission {
+                            origin: request.origin,
+                            browse: BrowserPermissionValue::Default,
+                            download: BrowserPermissionValue::Default,
+                            upload: BrowserPermissionValue::Default,
+                            full_cdp: BrowserPermissionValue::Default,
+                        });
+                    site.browse = BrowserPermissionValue::Allow;
+                    let previous = state.browser_permissions.clone();
+                    state.browser_permissions.upsert_site(site);
+                    if state.browser_permissions != previous {
+                        effects.push(Effect::PersistBrowserPermissions(
+                            state.browser_permissions.clone(),
+                        ));
+                        effects.push(Effect::ConfigureBrowserPermissions(
+                            state.browser_permissions.clone(),
+                        ));
+                    }
+                }
+                BrowserOriginElicitationDecision::AllowAll => {
+                    if state.browser_permissions.approval_mode != BrowserApprovalMode::NeverAsk {
+                        state.browser_permissions.approval_mode = BrowserApprovalMode::NeverAsk;
+                        effects.push(Effect::PersistBrowserPermissions(
+                            state.browser_permissions.clone(),
+                        ));
+                        effects.push(Effect::ConfigureBrowserPermissions(
+                            state.browser_permissions.clone(),
+                        ));
+                    }
+                }
+                BrowserOriginElicitationDecision::AllowOnce
+                | BrowserOriginElicitationDecision::Deny => {}
+            }
+            effects.push(Effect::RespondBrowserOriginElicitation {
+                request_id,
+                decision,
+            });
+            effects
+        }
+        Action::ResolveBrowserResourceElicitation {
+            request_id,
+            decision,
+        } => {
+            let position = state.mcp_elicitations.iter().position(|request| {
+                matches!(
+                    request,
+                    McpElicitation::BrowserResource(request) if request.request_id == request_id
+                )
+            });
+            let Some(position) = position else {
+                return Vec::new();
+            };
+            let Some(McpElicitation::BrowserResource(request)) =
+                state.mcp_elicitations.remove(position)
+            else {
+                return Vec::new();
+            };
+            let mut effects = Vec::with_capacity(3);
+            if decision == BrowserResourceElicitationDecision::AlwaysAllow {
+                let mut site = state
+                    .browser_permissions
+                    .sites
+                    .iter()
+                    .find(|site| site.origin == request.origin)
+                    .cloned()
+                    .unwrap_or(BrowserSitePermission {
+                        origin: request.origin,
+                        browse: BrowserPermissionValue::Default,
+                        download: BrowserPermissionValue::Default,
+                        upload: BrowserPermissionValue::Default,
+                        full_cdp: BrowserPermissionValue::Default,
+                    });
+                site.set_permission(request.resource, BrowserPermissionValue::Allow);
+                let previous = state.browser_permissions.clone();
+                state.browser_permissions.upsert_site(site);
+                if state.browser_permissions != previous {
+                    effects.push(Effect::PersistBrowserPermissions(
+                        state.browser_permissions.clone(),
+                    ));
+                    effects.push(Effect::ConfigureBrowserPermissions(
+                        state.browser_permissions.clone(),
+                    ));
+                }
+            }
+            effects.push(Effect::RespondBrowserResourceElicitation {
+                request_id,
+                decision,
+            });
+            effects
+        }
         Action::ComputerUseAvailable { task_id } => {
             state
                 .computer_use
@@ -970,6 +9569,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 computer_use.input_authorized_for_session = false;
                 computer_use.selected_window_id = None;
                 computer_use.selected_window_title = None;
+                computer_use.selected_application_id = None;
+                computer_use.applications.clear();
+                computer_use.launching_application_id = None;
                 computer_use.windows.clear();
                 computer_use.windows_loading = false;
                 computer_use.error = None;
@@ -981,6 +9583,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 task_id: task_id.clone(),
                 enabled,
                 selected_window_id: computer_use.selected_window_id.clone(),
+                selected_application_id: computer_use.selected_application_id.clone(),
                 input_authorized: computer_use.input_authorized_for_session,
             }];
             if enabled {
@@ -992,17 +9595,30 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             task_id,
             window_id,
             title,
+            application_id,
         } => {
             let computer_use = state.computer_use.entry(task_id.clone()).or_default();
             if computer_use.available_for_task && computer_use.enabled_for_task {
                 computer_use.selected_window_id = Some(window_id);
                 computer_use.selected_window_title = Some(title);
-                computer_use.input_authorized_for_session = false;
+                computer_use.selected_application_id =
+                    Some(normalize_computer_app_id(application_id));
+                computer_use.input_authorized_for_session = computer_use
+                    .selected_application_id
+                    .as_ref()
+                    .is_some_and(|app_id| {
+                        state
+                            .computer_use_settings
+                            .always_allowed_app_ids
+                            .iter()
+                            .any(|configured| computer_app_id_matches(configured, app_id))
+                    });
                 return vec![Effect::ConfigureComputerUse {
                     task_id,
                     enabled: true,
                     selected_window_id: computer_use.selected_window_id.clone(),
-                    input_authorized: false,
+                    selected_application_id: computer_use.selected_application_id.clone(),
+                    input_authorized: computer_use.input_authorized_for_session,
                 }];
             }
             Vec::new()
@@ -1020,6 +9636,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 task_id,
                 enabled: computer_use.enabled_for_task,
                 selected_window_id: computer_use.selected_window_id.clone(),
+                selected_application_id: computer_use.selected_application_id.clone(),
                 input_authorized: computer_use.input_authorized_for_session,
             }]
         }
@@ -1035,14 +9652,58 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::ComputerWindowsLoaded {
             task_id,
+            mut applications,
             mut windows,
         } => {
+            applications.truncate(MAX_COMPUTER_APPLICATIONS);
             windows.truncate(MAX_COMPUTER_WINDOWS);
             let computer_use = state.computer_use.entry(task_id).or_default();
+            computer_use.applications = applications;
             computer_use.windows = windows;
             computer_use.windows_loading = false;
             computer_use.error = None;
             Vec::new()
+        }
+        Action::LaunchComputerApp {
+            task_id,
+            application_id,
+        } => {
+            let computer_use = state.computer_use.entry(task_id.clone()).or_default();
+            let application_id = normalize_computer_app_id(application_id);
+            if !computer_use.available_for_task
+                || !computer_use.enabled_for_task
+                || computer_use.launching_application_id.is_some()
+                || !computer_use
+                    .applications
+                    .iter()
+                    .any(|application| application.id == application_id)
+            {
+                return Vec::new();
+            }
+            computer_use.launching_application_id = Some(application_id.clone());
+            computer_use.error = None;
+            vec![Effect::LaunchComputerApp {
+                task_id,
+                application_id,
+            }]
+        }
+        Action::ComputerAppLaunchFinished {
+            task_id,
+            application_id,
+            error,
+        } => {
+            let computer_use = state.computer_use.entry(task_id.clone()).or_default();
+            if computer_use.launching_application_id.as_deref() != Some(application_id.as_str()) {
+                return Vec::new();
+            }
+            computer_use.launching_application_id = None;
+            computer_use.error = error;
+            if computer_use.error.is_none() && computer_use.enabled_for_task {
+                computer_use.windows_loading = true;
+                vec![Effect::LoadComputerWindows { task_id }]
+            } else {
+                Vec::new()
+            }
         }
         Action::ComputerWindowsFailed { task_id, message } => {
             let computer_use = state.computer_use.entry(task_id).or_default();
@@ -1069,15 +9730,1060 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
+        Action::ComputerUseAppAuthorized {
+            task_id,
+            application_id,
+            always_allowed,
+        } => {
+            let application_id = normalize_computer_app_id(application_id);
+            let computer_use = state.computer_use.entry(task_id).or_default();
+            if computer_use.selected_application_id.as_deref() == Some(application_id.as_str()) {
+                computer_use.input_authorized_for_session = true;
+            }
+            if always_allowed && !application_id.is_empty() {
+                let mut app_ids = state.computer_use_settings.always_allowed_app_ids.clone();
+                if !app_ids
+                    .iter()
+                    .any(|configured| computer_app_id_matches(configured, &application_id))
+                {
+                    app_ids.push(application_id);
+                }
+                state.computer_use_settings.always_allowed_app_ids =
+                    normalize_computer_app_ids(app_ids);
+                state.computer_use_settings.status = LoadStatus::Ready;
+                state.computer_use_settings.error = None;
+            }
+            Vec::new()
+        }
+        Action::RefreshComputerUsePolicy => {
+            state.computer_use_settings.status = LoadStatus::Loading;
+            state.computer_use_settings.error = None;
+            vec![Effect::LoadComputerUsePolicy]
+        }
+        Action::ComputerUsePolicyLoaded(app_ids) => {
+            state.computer_use_settings.status = LoadStatus::Ready;
+            state.computer_use_settings.always_allowed_app_ids =
+                normalize_computer_app_ids(app_ids);
+            state.computer_use_settings.pending_removal_app_id = None;
+            state.computer_use_settings.error = None;
+            Vec::new()
+        }
+        Action::ComputerUsePolicyFailed(message) => {
+            state.computer_use_settings.status = LoadStatus::Failed;
+            state.computer_use_settings.pending_removal_app_id = None;
+            state.computer_use_settings.error = Some(bounded_string(message, MAX_COMPOSER_BYTES));
+            Vec::new()
+        }
+        Action::RemoveComputerUseAllowedApp(app_id) => {
+            let app_id = normalize_computer_app_id(app_id);
+            let can_remove = !app_id.is_empty()
+                && state.computer_use_settings.pending_removal_app_id.is_none()
+                && state
+                    .computer_use_settings
+                    .always_allowed_app_ids
+                    .contains(&app_id);
+            if !can_remove {
+                return Vec::new();
+            }
+            let remaining_app_ids = state
+                .computer_use_settings
+                .always_allowed_app_ids
+                .iter()
+                .filter(|candidate| candidate.as_str() != app_id.as_str())
+                .cloned()
+                .collect();
+            state.computer_use_settings.pending_removal_app_id = Some(app_id.clone());
+            state.computer_use_settings.error = None;
+            vec![Effect::RemoveComputerUseAllowedApp {
+                app_id,
+                remaining_app_ids,
+            }]
+        }
+        Action::ComputerUseAllowedAppRemoved { app_id, overridden } => {
+            let app_id = normalize_computer_app_id(app_id);
+            state
+                .computer_use_settings
+                .always_allowed_app_ids
+                .retain(|candidate| candidate != &app_id);
+            if state
+                .computer_use_settings
+                .pending_removal_app_id
+                .as_deref()
+                == Some(app_id.as_str())
+            {
+                state.computer_use_settings.pending_removal_app_id = None;
+            }
+            state.computer_use_settings.error = None;
+            if overridden {
+                state.status_message = Some(
+                    "Computer Use app policy is overridden by higher-priority configuration."
+                        .to_owned(),
+                );
+            }
+            Vec::new()
+        }
+        Action::ComputerUsePolicyMutationFailed { app_id, message } => {
+            let app_id = normalize_computer_app_id(app_id);
+            if state
+                .computer_use_settings
+                .pending_removal_app_id
+                .as_deref()
+                == Some(app_id.as_str())
+            {
+                state.computer_use_settings.pending_removal_app_id = None;
+            }
+            state.computer_use_settings.error = Some(bounded_string(message, MAX_COMPOSER_BYTES));
+            Vec::new()
+        }
+        Action::OpenBrowserTab => {
+            let Some(task_id) = state.selected_task_id.clone() else {
+                state.status_message = Some("Open a chat before opening the Browser.".to_owned());
+                return Vec::new();
+            };
+            state.inspector = InspectorPane::Browser;
+            state.last_side_panel = InspectorPane::Browser;
+            state.side_panel_full_width = false;
+            if state.terminal.location == TerminalDockLocation::Right {
+                state.terminal_dock_open = false;
+            }
+            let mut effects = vec![Effect::PersistUiState {
+                route: state.route,
+                inspector: state.inspector,
+            }];
+            if let Some(effect) = prepare_browser_effect(state, task_id, true) {
+                effects.push(effect);
+            }
+            effects
+        }
+        Action::ToggleBrowserPanel => {
+            if state.inspector == InspectorPane::Browser {
+                state.inspector = InspectorPane::Hidden;
+                state.side_panel_full_width = false;
+                return vec![Effect::PersistUiState {
+                    route: state.route,
+                    inspector: state.inspector,
+                }];
+            }
+            let Some(task_id) = state.selected_task_id.clone() else {
+                state.status_message = Some("Open a chat before opening the Browser.".to_owned());
+                return Vec::new();
+            };
+            state.inspector = InspectorPane::Browser;
+            state.last_side_panel = InspectorPane::Browser;
+            state.side_panel_full_width = false;
+            if state.terminal.location == TerminalDockLocation::Right {
+                state.terminal_dock_open = false;
+            }
+            let mut effects = vec![Effect::PersistUiState {
+                route: state.route,
+                inspector: state.inspector,
+            }];
+            if let Some(effect) = prepare_browser_effect(state, task_id, false) {
+                effects.push(effect);
+            }
+            effects
+        }
+        Action::NavigateBrowser(url) => {
+            let Some(task_id) = state.selected_task_id.clone() else {
+                return Vec::new();
+            };
+            let url = bounded_string(url.trim().to_owned(), MAX_BROWSER_URL_BYTES);
+            if url.is_empty()
+                || state
+                    .browser
+                    .get(&task_id)
+                    .is_none_or(|browser| browser.status != LoadStatus::Ready)
+            {
+                return Vec::new();
+            }
+            vec![Effect::BrowserNavigate { task_id, url }]
+        }
+        Action::NavigateBrowserBack => state
+            .selected_task_id
+            .clone()
+            .filter(|task_id| {
+                state
+                    .browser
+                    .get(task_id)
+                    .is_some_and(|browser| browser.status == LoadStatus::Ready)
+            })
+            .map(|task_id| vec![Effect::BrowserBack { task_id }])
+            .unwrap_or_default(),
+        Action::NavigateBrowserForward => state
+            .selected_task_id
+            .clone()
+            .filter(|task_id| {
+                state
+                    .browser
+                    .get(task_id)
+                    .is_some_and(|browser| browser.status == LoadStatus::Ready)
+            })
+            .map(|task_id| vec![Effect::BrowserForward { task_id }])
+            .unwrap_or_default(),
+        Action::ReloadBrowser => state
+            .selected_task_id
+            .clone()
+            .filter(|task_id| {
+                state
+                    .browser
+                    .get(task_id)
+                    .is_some_and(|browser| browser.status == LoadStatus::Ready)
+            })
+            .map(|task_id| vec![Effect::BrowserReload { task_id }])
+            .unwrap_or_default(),
+        Action::StopBrowser => state
+            .selected_task_id
+            .clone()
+            .filter(|task_id| {
+                state.browser.get(task_id).is_some_and(|browser| {
+                    browser.status == LoadStatus::Ready
+                        && browser.active_tab_id.as_deref().is_some_and(|active_id| {
+                            browser
+                                .tabs
+                                .iter()
+                                .find(|tab| tab.id == active_id)
+                                .is_some_and(|tab| tab.loading)
+                        })
+                })
+            })
+            .map(|task_id| vec![Effect::BrowserStop { task_id }])
+            .unwrap_or_default(),
+        Action::SelectBrowserTab(tab_id) => {
+            let Some(task_id) = state.selected_task_id.clone() else {
+                return Vec::new();
+            };
+            let Some(browser) = state.browser.get_mut(&task_id) else {
+                return Vec::new();
+            };
+            if browser.status != LoadStatus::Ready
+                || !browser.tabs.iter().any(|tab| tab.id == tab_id)
+            {
+                return Vec::new();
+            }
+            browser.active_tab_id = Some(tab_id.clone());
+            browser.frame = None;
+            vec![Effect::BrowserSelectTab { task_id, tab_id }]
+        }
+        Action::CloseBrowserTab(tab_id) => {
+            let Some(task_id) = state.selected_task_id.clone() else {
+                return Vec::new();
+            };
+            if state.browser.get(&task_id).is_none_or(|browser| {
+                browser.status != LoadStatus::Ready
+                    || !browser.tabs.iter().any(|tab| tab.id == tab_id)
+            }) {
+                return Vec::new();
+            }
+            vec![Effect::BrowserCloseTab { task_id, tab_id }]
+        }
+        Action::ResizeBrowser { width, height } => {
+            let Some(task_id) = state.selected_task_id.clone() else {
+                return Vec::new();
+            };
+            if state
+                .browser
+                .get(&task_id)
+                .is_none_or(|browser| browser.status != LoadStatus::Ready)
+            {
+                return Vec::new();
+            }
+            vec![Effect::BrowserResize {
+                task_id,
+                width: width.clamp(320, 1_920),
+                height: height.clamp(240, 1_080),
+            }]
+        }
+        Action::ClickBrowser { x, y, button } => {
+            let Some(task_id) = state.selected_task_id.clone() else {
+                return Vec::new();
+            };
+            if state
+                .browser
+                .get(&task_id)
+                .is_none_or(|browser| browser.status != LoadStatus::Ready)
+            {
+                return Vec::new();
+            }
+            vec![Effect::BrowserClick {
+                task_id,
+                x: x.min(1_919),
+                y: y.min(1_079),
+                button,
+            }]
+        }
+        Action::ScrollBrowser {
+            x,
+            y,
+            delta_x,
+            delta_y,
+        } => {
+            let Some(task_id) = state.selected_task_id.clone() else {
+                return Vec::new();
+            };
+            if state
+                .browser
+                .get(&task_id)
+                .is_none_or(|browser| browser.status != LoadStatus::Ready)
+                || (delta_x == 0 && delta_y == 0)
+            {
+                return Vec::new();
+            }
+            vec![Effect::BrowserScroll {
+                task_id,
+                x: x.min(1_919),
+                y: y.min(1_079),
+                delta_x: delta_x.clamp(-10_000, 10_000),
+                delta_y: delta_y.clamp(-10_000, 10_000),
+            }]
+        }
+        Action::BrowserKey(mut input) => {
+            let Some(task_id) = state.selected_task_id.clone() else {
+                return Vec::new();
+            };
+            input.key = bounded_string(input.key.trim().to_owned(), MAX_BROWSER_KEY_BYTES);
+            input.text = input.text.and_then(|text| {
+                let text = bounded_string(text, MAX_BROWSER_TEXT_BYTES);
+                (!text.is_empty() && !text.contains('\0')).then_some(text)
+            });
+            if input.key.is_empty()
+                || input.key.chars().any(char::is_control)
+                || state
+                    .browser
+                    .get(&task_id)
+                    .is_none_or(|browser| browser.status != LoadStatus::Ready)
+            {
+                return Vec::new();
+            }
+            vec![Effect::BrowserKey { task_id, input }]
+        }
+        Action::BrowserDownloadPreferencesLoaded(preferences) => {
+            let preferences = preferences.normalized();
+            state.browser_download_preferences = preferences.clone();
+            vec![Effect::ConfigureBrowserDownloads(preferences)]
+        }
+        Action::BrowserPermissionsLoaded(permissions) => {
+            let permissions = permissions.normalized();
+            state.browser_permissions = permissions.clone();
+            vec![Effect::ConfigureBrowserPermissions(permissions)]
+        }
+        Action::SetBrowserApprovalMode(approval_mode) => {
+            if state.browser_permissions.approval_mode == approval_mode {
+                return Vec::new();
+            }
+            state.browser_permissions.approval_mode = approval_mode;
+            vec![
+                Effect::PersistBrowserPermissions(state.browser_permissions.clone()),
+                Effect::ConfigureBrowserPermissions(state.browser_permissions.clone()),
+            ]
+        }
+        Action::SetBrowserFullCdpAccessEnabled(enabled) => {
+            if state.browser_permissions.full_cdp_access_enabled == enabled {
+                return Vec::new();
+            }
+            state.browser_permissions.full_cdp_access_enabled = enabled;
+            vec![
+                Effect::PersistBrowserPermissions(state.browser_permissions.clone()),
+                Effect::ConfigureBrowserPermissions(state.browser_permissions.clone()),
+            ]
+        }
+        Action::UpsertBrowserSitePermission(site) => {
+            let previous = state.browser_permissions.clone();
+            state.browser_permissions.upsert_site(site);
+            if state.browser_permissions == previous {
+                return Vec::new();
+            }
+            vec![
+                Effect::PersistBrowserPermissions(state.browser_permissions.clone()),
+                Effect::ConfigureBrowserPermissions(state.browser_permissions.clone()),
+            ]
+        }
+        Action::RemoveBrowserSitePermission(origin) => {
+            let origin = bounded_string(
+                origin.trim().to_owned(),
+                MAX_BROWSER_PERMISSION_ORIGIN_BYTES,
+            );
+            let previous = state.browser_permissions.clone();
+            state.browser_permissions.remove_site(&origin);
+            if state.browser_permissions == previous {
+                return Vec::new();
+            }
+            vec![
+                Effect::PersistBrowserPermissions(state.browser_permissions.clone()),
+                Effect::ConfigureBrowserPermissions(state.browser_permissions.clone()),
+            ]
+        }
+        Action::SetBrowserDownloadDirectory(download_directory) => {
+            let preferences = BrowserDownloadPreferences {
+                download_directory,
+                prompt_for_user_downloads: state
+                    .browser_download_preferences
+                    .prompt_for_user_downloads,
+            }
+            .normalized();
+            if preferences == state.browser_download_preferences {
+                return Vec::new();
+            }
+            state.browser_download_preferences = preferences.clone();
+            vec![
+                Effect::PersistBrowserDownloadPreferences(preferences.clone()),
+                Effect::ConfigureBrowserDownloads(preferences),
+            ]
+        }
+        Action::SetPromptForBrowserDownloads(prompt_for_user_downloads) => {
+            let preferences = BrowserDownloadPreferences {
+                download_directory: state
+                    .browser_download_preferences
+                    .download_directory
+                    .clone(),
+                prompt_for_user_downloads,
+            }
+            .normalized();
+            if preferences == state.browser_download_preferences {
+                return Vec::new();
+            }
+            state.browser_download_preferences = preferences.clone();
+            vec![
+                Effect::PersistBrowserDownloadPreferences(preferences.clone()),
+                Effect::ConfigureBrowserDownloads(preferences),
+            ]
+        }
+        Action::AcknowledgeBrowserDownloads => {
+            state.browser_downloads.unacknowledged_ids.clear();
+            Vec::new()
+        }
+        Action::CancelBrowserDownload(id) => {
+            let id = bounded_string(id.trim().to_owned(), MAX_TASK_TITLE_BYTES);
+            state
+                .browser_downloads
+                .downloads
+                .iter()
+                .any(|download| {
+                    download.id == id && download.status.active() && download.can_cancel
+                })
+                .then_some(vec![Effect::BrowserCancelDownload { id }])
+                .unwrap_or_default()
+        }
+        Action::PauseBrowserDownload(id) => {
+            let id = bounded_string(id.trim().to_owned(), MAX_TASK_TITLE_BYTES);
+            state
+                .browser_downloads
+                .downloads
+                .iter()
+                .any(|download| {
+                    download.id == id
+                        && download.status.active()
+                        && download.status != BrowserDownloadStatus::Paused
+                        && download.can_pause
+                })
+                .then_some(vec![Effect::BrowserPauseDownload { id }])
+                .unwrap_or_default()
+        }
+        Action::ResumeBrowserDownload(id) => {
+            let id = bounded_string(id.trim().to_owned(), MAX_TASK_TITLE_BYTES);
+            state
+                .browser_downloads
+                .downloads
+                .iter()
+                .any(|download| {
+                    download.id == id
+                        && download.status == BrowserDownloadStatus::Paused
+                        && download.can_resume
+                })
+                .then_some(vec![Effect::BrowserResumeDownload { id }])
+                .unwrap_or_default()
+        }
+        Action::OpenBrowserDownload(id) => {
+            let id = bounded_string(id.trim().to_owned(), MAX_TASK_TITLE_BYTES);
+            if state.browser_downloads.downloads.iter().any(|download| {
+                download.id == id && download.status == BrowserDownloadStatus::Complete
+            }) {
+                state.browser_downloads.unacknowledged_ids.remove(&id);
+                vec![Effect::BrowserOpenDownload { id }]
+            } else {
+                Vec::new()
+            }
+        }
+        Action::RemoveBrowserDownload(id) => {
+            let id = bounded_string(id.trim().to_owned(), MAX_TASK_TITLE_BYTES);
+            state
+                .browser_downloads
+                .downloads
+                .iter()
+                .any(|download| download.id == id && !download.status.active())
+                .then_some(vec![Effect::BrowserRemoveDownload { id }])
+                .unwrap_or_default()
+        }
+        Action::ShowBrowserDownloadInFolder(id) => {
+            let id = bounded_string(id.trim().to_owned(), MAX_TASK_TITLE_BYTES);
+            if state.browser_downloads.downloads.iter().any(|download| {
+                download.id == id && download.status == BrowserDownloadStatus::Complete
+            }) {
+                state.browser_downloads.unacknowledged_ids.remove(&id);
+                vec![Effect::BrowserShowDownloadInFolder { id }]
+            } else {
+                Vec::new()
+            }
+        }
+        Action::ShowBrowserDownloadsFolder => vec![Effect::BrowserShowDownloadsFolder],
+        Action::SetBrowserDownloadDestination { id, path } => {
+            let id = bounded_string(id.trim().to_owned(), MAX_TASK_TITLE_BYTES);
+            if id.is_empty()
+                || !state.browser_downloads.downloads.iter().any(|download| {
+                    download.id == id && download.user_initiated && download.status.active()
+                })
+            {
+                return Vec::new();
+            }
+            let path = match path {
+                Some(path) => {
+                    let value = path.to_string_lossy();
+                    if !path.is_absolute()
+                        || path.as_os_str().is_empty()
+                        || value.len() > MAX_BROWSER_DOWNLOAD_PATH_BYTES
+                        || value.contains('\0')
+                    {
+                        state.status_message =
+                            Some("The selected Browser download path is invalid.".to_owned());
+                        return Vec::new();
+                    }
+                    Some(path)
+                }
+                None => None,
+            };
+            vec![Effect::BrowserSetDownloadDestination { id, path }]
+        }
+        Action::BrowserReady {
+            task_id,
+            executable,
+        } => {
+            let browser = state.browser.entry(task_id).or_default();
+            browser.status = LoadStatus::Ready;
+            browser.executable = Some(executable);
+            browser.error = None;
+            Vec::new()
+        }
+        Action::BrowserTabsChanged {
+            task_id,
+            mut tabs,
+            active_tab_id,
+        } => {
+            tabs.truncate(MAX_BROWSER_TABS);
+            for tab in &mut tabs {
+                tab.id = bounded_string(tab.id.trim().to_owned(), MAX_TASK_TITLE_BYTES);
+                tab.url = bounded_string(tab.url.trim().to_owned(), MAX_BROWSER_URL_BYTES);
+                tab.title = bounded_string(tab.title.trim().to_owned(), MAX_BROWSER_TITLE_BYTES);
+            }
+            tabs.retain(|tab| !tab.id.is_empty());
+            let active_tab_id = tabs
+                .iter()
+                .find(|tab| tab.id == active_tab_id)
+                .or_else(|| tabs.first())
+                .map(|tab| tab.id.clone());
+            let browser = state.browser.entry(task_id).or_default();
+            if browser.active_tab_id != active_tab_id {
+                browser.frame = None;
+            }
+            browser.status = LoadStatus::Ready;
+            browser.tabs = tabs;
+            browser.active_tab_id = active_tab_id;
+            browser.error = None;
+            Vec::new()
+        }
+        Action::BrowserFrameReady {
+            task_id,
+            tab_id,
+            jpeg,
+            width,
+            height,
+        } => {
+            if jpeg.is_empty()
+                || jpeg.len() > MAX_BROWSER_FRAME_BYTES
+                || width == 0
+                || height == 0
+                || width > 1_920
+                || height > 1_080
+            {
+                return Vec::new();
+            }
+            let Some(browser) = state.browser.get_mut(&task_id) else {
+                return Vec::new();
+            };
+            if browser.status != LoadStatus::Ready
+                || browser.active_tab_id.as_deref() != Some(tab_id.as_str())
+            {
+                return Vec::new();
+            }
+            browser.frame = Some(BrowserFrameState {
+                tab_id,
+                jpeg,
+                width,
+                height,
+            });
+            Vec::new()
+        }
+        Action::BrowserVisibilityRequested { task_id, visible } => {
+            if state.selected_task_id.as_deref() != Some(task_id.as_str()) {
+                return Vec::new();
+            }
+            if visible {
+                if state.route == MainRoute::Tasks && state.inspector == InspectorPane::Browser {
+                    return Vec::new();
+                }
+                state.route = MainRoute::Tasks;
+                state.inspector = InspectorPane::Browser;
+                state.last_side_panel = InspectorPane::Browser;
+                state.side_panel_full_width = false;
+                if state.terminal.location == TerminalDockLocation::Right {
+                    state.terminal_dock_open = false;
+                }
+            } else {
+                if state.inspector != InspectorPane::Browser {
+                    return Vec::new();
+                }
+                state.inspector = InspectorPane::Hidden;
+                state.side_panel_full_width = false;
+            }
+            vec![Effect::PersistUiState {
+                route: state.route,
+                inspector: state.inspector,
+            }]
+        }
+        Action::BrowserDownloadHistoryLoaded(mut downloads) => {
+            downloads.truncate(MAX_BROWSER_DOWNLOADS);
+            for download in &mut downloads {
+                download.context_id =
+                    bounded_string(download.context_id.clone(), MAX_BROWSER_CONTEXT_ID_BYTES);
+                download.filename =
+                    bounded_string(download.filename.clone(), MAX_BROWSER_TITLE_BYTES);
+                download.id = bounded_string(download.id.clone(), MAX_TASK_TITLE_BYTES);
+                download.url.clear();
+                download.can_cancel = false;
+                download.can_pause = false;
+                download.can_resume = false;
+                download.file_exists = download.status == BrowserDownloadStatus::Complete
+                    && download.path.is_absolute()
+                    && download.file_exists;
+            }
+            downloads.retain(|download| {
+                !download.id.is_empty()
+                    && !download.filename.is_empty()
+                    && download.path.is_absolute()
+                    && !download.status.active()
+            });
+            let active = state
+                .browser_downloads
+                .downloads
+                .iter()
+                .filter(|download| download.status.active())
+                .cloned()
+                .collect::<Vec<_>>();
+            state.browser_downloads.downloads = active.into_iter().chain(downloads).fold(
+                VecDeque::new(),
+                |mut history, download| {
+                    if history.iter().all(|entry| entry.id != download.id) {
+                        history.push_back(download);
+                    }
+                    history
+                },
+            );
+            state
+                .browser_downloads
+                .downloads
+                .truncate(MAX_BROWSER_DOWNLOADS);
+            Vec::new()
+        }
+        Action::BrowserDownloadChanged(mut download) => {
+            download.context_id = bounded_string(download.context_id, MAX_BROWSER_CONTEXT_ID_BYTES);
+            download.filename = bounded_string(download.filename, MAX_BROWSER_TITLE_BYTES);
+            download.id = bounded_string(download.id, MAX_TASK_TITLE_BYTES);
+            download.url = bounded_string(download.url, MAX_BROWSER_URL_BYTES);
+            if download.id.is_empty() || download.filename.is_empty() {
+                return Vec::new();
+            }
+            match download.status {
+                BrowserDownloadStatus::Started | BrowserDownloadStatus::InProgress => {
+                    download.can_resume = false;
+                }
+                BrowserDownloadStatus::Paused => {
+                    download.can_pause = false;
+                }
+                BrowserDownloadStatus::Failed
+                | BrowserDownloadStatus::Canceled
+                | BrowserDownloadStatus::Complete => {
+                    download.can_cancel = false;
+                    download.can_pause = false;
+                    download.can_resume = false;
+                }
+            }
+            let previous_status = state
+                .browser_downloads
+                .downloads
+                .iter()
+                .find(|entry| entry.id == download.id)
+                .map(|entry| entry.status);
+            state
+                .browser_downloads
+                .downloads
+                .retain(|entry| entry.id != download.id);
+            if matches!(
+                download.status,
+                BrowserDownloadStatus::Complete | BrowserDownloadStatus::Failed
+            ) && previous_status != Some(download.status)
+            {
+                state
+                    .browser_downloads
+                    .unacknowledged_ids
+                    .insert(download.id.clone());
+            }
+            let persisted = (!download.status.active()).then(|| download.clone());
+            state.browser_downloads.downloads.push_front(download);
+            state
+                .browser_downloads
+                .downloads
+                .truncate(MAX_BROWSER_DOWNLOADS);
+            let retained_ids = state
+                .browser_downloads
+                .downloads
+                .iter()
+                .map(|entry| entry.id.clone())
+                .collect::<HashSet<_>>();
+            state
+                .browser_downloads
+                .unacknowledged_ids
+                .retain(|id| retained_ids.contains(id));
+            persisted
+                .map(Effect::PersistBrowserDownload)
+                .into_iter()
+                .collect()
+        }
+        Action::BrowserDownloadSaveRequested { .. } => Vec::new(),
+        Action::BrowserDownloadRemoved { id } => {
+            let existed = state
+                .browser_downloads
+                .downloads
+                .iter()
+                .any(|download| download.id == id);
+            state
+                .browser_downloads
+                .downloads
+                .retain(|download| download.id != id);
+            state.browser_downloads.unacknowledged_ids.remove(&id);
+            existed
+                .then_some(Effect::DeletePersistedBrowserDownload { id })
+                .into_iter()
+                .collect()
+        }
+        Action::BrowserOperationFailed(message) => {
+            state.status_message = Some(bounded_string(message, MAX_COMPOSER_BYTES));
+            Vec::new()
+        }
+        Action::BrowserFailed { task_id, message } => {
+            let message = bounded_string(message, MAX_COMPOSER_BYTES);
+            if let Some(task_id) = task_id {
+                let browser = state.browser.entry(task_id).or_default();
+                browser.status = LoadStatus::Failed;
+                browser.frame = None;
+                browser.error = Some(message);
+            } else {
+                for browser in state.browser.values_mut() {
+                    browser.status = LoadStatus::Failed;
+                    browser.frame = None;
+                    browser.error = Some(message.clone());
+                }
+            }
+            Vec::new()
+        }
+        Action::BrowserExited => {
+            for browser in state.browser.values_mut() {
+                if matches!(browser.status, LoadStatus::Loading | LoadStatus::Ready) {
+                    browser.status = LoadStatus::Failed;
+                    browser.frame = None;
+                    browser.error = Some("The Browser process exited.".to_owned());
+                }
+            }
+            Vec::new()
+        }
+        Action::RefreshAccount => {
+            state.account.status = LoadStatus::Loading;
+            state.account.error = None;
+            state.account.usage_error = None;
+            vec![Effect::LoadAccount]
+        }
+        Action::AccountLoaded {
+            mut profile,
+            requires_openai_auth,
+            mut usage_limits,
+            mut credits,
+            usage_error,
+        } => {
+            if let Some(profile) = &mut profile {
+                profile.email = profile.email.take().and_then(|email| {
+                    let email = bounded_string(email.trim().to_owned(), MAX_ACCOUNT_FIELD_BYTES);
+                    (!email.is_empty()).then_some(email)
+                });
+                profile.plan = profile.plan.take().and_then(|plan| {
+                    let plan = bounded_string(plan.trim().to_owned(), MAX_ACCOUNT_FIELD_BYTES);
+                    (!plan.is_empty()).then_some(plan)
+                });
+            }
+            usage_limits.truncate(MAX_USAGE_LIMIT_WINDOWS);
+            if let Some(credits) = &mut credits {
+                credits.balance = credits.balance.take().and_then(|balance| {
+                    let balance =
+                        bounded_string(balance.trim().to_owned(), MAX_ACCOUNT_FIELD_BYTES);
+                    (!balance.is_empty()).then_some(balance)
+                });
+            }
+            let connected = profile.is_some();
+            state.account.status = LoadStatus::Ready;
+            state.account.profile = profile;
+            state.account.requires_openai_auth = requires_openai_auth;
+            state.account.usage_limits = usage_limits;
+            state.account.credits = credits;
+            state.account.usage_error =
+                usage_error.map(|message| bounded_string(message, MAX_ACCOUNT_FIELD_BYTES));
+            state.account.error = None;
+            if connected {
+                state.account.auth_operation = AccountAuthOperation::Idle;
+                state.account.login_id = None;
+                state.account.auth_error = None;
+            }
+            Vec::new()
+        }
+        Action::AccountLoadFailed(message) => {
+            state.account.status = LoadStatus::Failed;
+            state.account.error = Some(bounded_string(message, MAX_ACCOUNT_FIELD_BYTES));
+            Vec::new()
+        }
+        Action::StartAccountLogin => {
+            if state.account.profile.is_some()
+                || state.account.auth_operation != AccountAuthOperation::Idle
+            {
+                return Vec::new();
+            }
+            state.account.auth_operation = AccountAuthOperation::StartingLogin;
+            state.account.login_id = None;
+            state.account.auth_error = None;
+            vec![Effect::StartAccountLogin]
+        }
+        Action::AccountLoginStarted {
+            login_id,
+            authorization_url,
+        } => {
+            if state.account.auth_operation != AccountAuthOperation::StartingLogin {
+                return Vec::new();
+            }
+            let login_id = bounded_string(login_id.trim().to_owned(), MAX_ACCOUNT_FIELD_BYTES);
+            let authorization_url = bounded_string(authorization_url.trim().to_owned(), 8 * 1024);
+            if login_id.is_empty() || authorization_url.is_empty() {
+                state.account.auth_operation = AccountAuthOperation::Idle;
+                state.account.auth_error =
+                    Some("Could not start ChatGPT sign-in. Please try again.".to_owned());
+                return Vec::new();
+            }
+            state.account.auth_operation = AccountAuthOperation::AwaitingLogin;
+            state.account.login_id = Some(login_id);
+            state.account.auth_error = None;
+            Vec::new()
+        }
+        Action::AccountLoginStartFailed(message) => {
+            if state.account.auth_operation == AccountAuthOperation::StartingLogin {
+                state.account.auth_operation = AccountAuthOperation::Idle;
+                state.account.login_id = None;
+                state.account.auth_error = Some(bounded_string(message, MAX_ACCOUNT_FIELD_BYTES));
+            }
+            Vec::new()
+        }
+        Action::AccountLoginAuthorizationUrlRejected => {
+            let Some(login_id) = state.account.login_id.clone() else {
+                return Vec::new();
+            };
+            if state.account.auth_operation != AccountAuthOperation::AwaitingLogin {
+                return Vec::new();
+            }
+            state.account.auth_operation = AccountAuthOperation::CancelingLogin;
+            state.account.auth_error =
+                Some("The sign-in service returned an unsupported URL.".to_owned());
+            vec![Effect::CancelAccountLogin { login_id }]
+        }
+        Action::CancelAccountLogin => {
+            let Some(login_id) = state.account.login_id.clone() else {
+                return Vec::new();
+            };
+            if state.account.auth_operation != AccountAuthOperation::AwaitingLogin {
+                return Vec::new();
+            }
+            state.account.auth_operation = AccountAuthOperation::CancelingLogin;
+            state.account.auth_error = None;
+            vec![Effect::CancelAccountLogin { login_id }]
+        }
+        Action::AccountLoginCanceled { login_id } => {
+            if state.account.login_id.as_deref() != Some(login_id.as_str()) {
+                return Vec::new();
+            }
+            state.account.auth_operation = AccountAuthOperation::Idle;
+            state.account.login_id = None;
+            Vec::new()
+        }
+        Action::AccountLoginCancelFailed(message) => {
+            if state.account.auth_operation == AccountAuthOperation::CancelingLogin {
+                state.account.auth_operation = AccountAuthOperation::AwaitingLogin;
+                state.account.auth_error = Some(bounded_string(message, MAX_ACCOUNT_FIELD_BYTES));
+            }
+            Vec::new()
+        }
+        Action::AccountLoginCompleted { login_id, success } => {
+            if state.account.auth_operation == AccountAuthOperation::Idle {
+                return Vec::new();
+            }
+            let Some(expected) = state.account.login_id.as_deref() else {
+                return Vec::new();
+            };
+            if login_id.as_deref() != Some(expected) {
+                return Vec::new();
+            }
+            state.account.auth_operation = AccountAuthOperation::Idle;
+            state.account.login_id = None;
+            if success {
+                state.account.auth_error = None;
+                state.account.status = LoadStatus::Loading;
+                vec![Effect::LoadAccount]
+            } else {
+                state.account.auth_error =
+                    Some("ChatGPT sign-in failed. Please try again.".to_owned());
+                Vec::new()
+            }
+        }
+        Action::LogoutAccount => {
+            if state.account.profile.is_none()
+                || state.account.auth_operation != AccountAuthOperation::Idle
+            {
+                return Vec::new();
+            }
+            state.account.auth_operation = AccountAuthOperation::LoggingOut;
+            state.account.auth_error = None;
+            vec![Effect::LogoutAccount]
+        }
+        Action::AccountLoggedOut => {
+            state.account = AccountState {
+                status: LoadStatus::Loading,
+                ..AccountState::default()
+            };
+            vec![Effect::LoadAccount]
+        }
+        Action::AccountLogoutFailed(message) => {
+            if state.account.auth_operation == AccountAuthOperation::LoggingOut {
+                state.account.auth_operation = AccountAuthOperation::Idle;
+                state.account.auth_error = Some(bounded_string(message, MAX_ACCOUNT_FIELD_BYTES));
+            }
+            Vec::new()
+        }
+        Action::SubmitFeedback {
+            classification,
+            reason,
+            include_logs,
+        } => {
+            if state.feedback.pending {
+                return Vec::new();
+            }
+            let reason = reason.trim().to_owned();
+            state.feedback.feedback_id = None;
+            state.feedback.error = None;
+            if reason.is_empty() {
+                state.feedback.error = Some("Share details before submitting.".to_owned());
+                return Vec::new();
+            }
+            if reason.len() > MAX_FEEDBACK_DETAILS_BYTES {
+                state.feedback.error = Some("Feedback details are too long.".to_owned());
+                return Vec::new();
+            }
+            state.feedback.pending = true;
+            vec![Effect::SubmitFeedback {
+                classification,
+                reason,
+                include_logs,
+                thread_id: state.selected_task_id.clone(),
+            }]
+        }
+        Action::FeedbackSubmitted { feedback_id } => {
+            if !state.feedback.pending {
+                return Vec::new();
+            }
+            state.feedback.pending = false;
+            state.feedback.error = None;
+            state.feedback.feedback_id = Some(bounded_string(
+                feedback_id.trim().to_owned(),
+                MAX_ACCOUNT_FIELD_BYTES,
+            ));
+            state.status_message = Some("Feedback uploaded".to_owned());
+            Vec::new()
+        }
+        Action::FeedbackFailed(message) => {
+            if state.feedback.pending {
+                state.feedback.pending = false;
+                state.feedback.error = Some(bounded_string(
+                    message.trim().to_owned(),
+                    MAX_ACCOUNT_FIELD_BYTES,
+                ));
+            }
+            Vec::new()
+        }
+        Action::ClearFeedbackError => {
+            if !state.feedback.pending {
+                state.feedback.error = None;
+                state.feedback.feedback_id = None;
+            }
+            Vec::new()
+        }
         Action::RefreshMarketplace => {
             state.marketplace.status = Some(LoadStatus::Loading);
-            vec![Effect::RefreshMarketplace]
+            vec![Effect::RefreshMarketplace {
+                cwds: selected_task_cwds(state),
+                directory_tab: state.marketplace.selected_directory_tab,
+                force_refetch: true,
+                include_all_marketplaces: state.marketplace.manage_mode,
+            }]
         }
-        Action::MarketplaceLoaded(mut plugins) => {
+        Action::MarketplaceLoaded {
+            mut plugins,
+            mut sources,
+        } => {
             plugins.truncate(MAX_MARKETPLACE_ITEMS);
+            sources.truncate(MAX_MARKETPLACE_SOURCES);
+            for source in &mut sources {
+                source.name =
+                    bounded_string(source.name.trim().to_owned(), MAX_MARKETPLACE_NAME_BYTES);
+                source.plugin_count = source.plugin_count.min(MAX_MARKETPLACE_ITEMS);
+            }
+            sources.retain(|source| !source.name.is_empty());
             state.marketplace.plugins = plugins;
+            state.marketplace.marketplace_sources = sources;
             state.marketplace.status = Some(LoadStatus::Ready);
             state.marketplace.errors.clear();
+            if !marketplace_section_exists(
+                &state.marketplace.plugins,
+                state.marketplace.selected_section.as_ref(),
+            ) {
+                state.marketplace.selected_section = None;
+            }
+            if state
+                .marketplace
+                .selected_plugin_id
+                .as_deref()
+                .is_some_and(|selected_plugin_id| {
+                    !state
+                        .marketplace
+                        .plugins
+                        .iter()
+                        .any(|plugin| plugin.id == selected_plugin_id)
+                })
+            {
+                state.marketplace.selected_plugin_id = None;
+                state.marketplace.plugin_detail_status = None;
+                state.marketplace.plugin_detail = None;
+                state.marketplace.plugin_detail_error = None;
+                state.marketplace.pending_plugin_skill_name = None;
+            }
             Vec::new()
         }
         Action::MarketplaceFailed(message) => {
@@ -1085,18 +10791,1313 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.marketplace.errors = vec![message];
             Vec::new()
         }
+        Action::ComposerPluginsLoaded(mut plugins) => {
+            plugins.truncate(MAX_MARKETPLACE_ITEMS);
+            for plugin in &mut plugins {
+                plugin.id = bounded_string(plugin.id.trim().to_owned(), 512);
+                plugin.install_name = bounded_string(plugin.install_name.trim().to_owned(), 512);
+                plugin.marketplace = bounded_string(plugin.marketplace.trim().to_owned(), 512);
+                plugin.name = bounded_string(plugin.name.trim().to_owned(), 512);
+                plugin.description =
+                    bounded_string(plugin.description.trim().to_owned(), 16 * 1024);
+            }
+            let mut seen = HashSet::new();
+            plugins.retain(|plugin| {
+                !plugin.id.is_empty()
+                    && !plugin.install_name.is_empty()
+                    && !plugin.name.is_empty()
+                    && seen.insert(plugin.id.clone())
+            });
+            state.marketplace.composer_plugins = plugins;
+            Vec::new()
+        }
+        Action::ComposerDesktopAppsLoaded(mut applications) => {
+            applications.truncate(MAX_COMPUTER_APPLICATIONS);
+            for application in &mut applications {
+                application.id = application.id.trim().to_owned();
+                application.display_name = application
+                    .display_name
+                    .take()
+                    .map(|name| bounded_string(name.trim().to_owned(), MAX_ATTACHMENT_LABEL_BYTES))
+                    .filter(|name| !name.is_empty());
+                application.window_count = application.window_count.min(MAX_COMPUTER_WINDOWS);
+            }
+            let mut seen = HashSet::new();
+            applications.retain(|application| {
+                !application.id.is_empty()
+                    && application.id.len() <= MAX_COMPUTER_APP_ID_BYTES
+                    && seen.insert(application.id.clone())
+            });
+            state.composer_desktop_apps = applications;
+            Vec::new()
+        }
+        Action::SetMarketplaceManageMode(enabled) => {
+            let manage_mode = enabled && state.marketplace.selected_tab == MarketplaceTab::Plugins;
+            if state.marketplace.manage_mode == manage_mode {
+                return Vec::new();
+            }
+            state.marketplace.manage_mode = manage_mode;
+            state.marketplace.selected_manage_tab = MarketplaceManageTab::InstalledPlugins;
+            state.marketplace.query.clear();
+            state.marketplace.selected_section = None;
+            state.marketplace.selected_plugin_id = None;
+            state.marketplace.plugin_detail_status = None;
+            state.marketplace.plugin_detail = None;
+            state.marketplace.plugin_detail_error = None;
+            state.marketplace.selected_app_id = None;
+            state.marketplace.app_detail_status = None;
+            state.marketplace.app_detail = None;
+            state.marketplace.app_detail_error = None;
+            state.marketplace.status = Some(LoadStatus::Loading);
+            let cwds = selected_task_cwds(state);
+            let skill_cwds = composer_workspace_roots(state);
+            let cwd = cwds.first().cloned();
+            let mut effects = vec![Effect::RefreshMarketplace {
+                cwds: cwds.clone(),
+                directory_tab: state.marketplace.selected_directory_tab,
+                force_refetch: false,
+                include_all_marketplaces: manage_mode,
+            }];
+            if manage_mode && state.marketplace.apps_status != Some(LoadStatus::Ready) {
+                state.marketplace.apps_status = Some(LoadStatus::Loading);
+                effects.push(Effect::RefreshApps {
+                    force_refetch: false,
+                });
+            }
+            if manage_mode && state.marketplace.mcp_status != Some(LoadStatus::Ready) {
+                state.marketplace.mcp_status = Some(LoadStatus::Loading);
+                effects.push(Effect::RefreshMcpServers { cwd });
+            }
+            if manage_mode && state.marketplace.skills_status != Some(LoadStatus::Ready) {
+                state.marketplace.skills_status = Some(LoadStatus::Loading);
+                effects.push(Effect::RefreshSkills {
+                    cwds: skill_cwds,
+                    force_reload: false,
+                });
+            }
+            effects
+        }
+        Action::SelectMarketplaceManageTab(tab) => {
+            if !state.marketplace.manage_mode {
+                return Vec::new();
+            }
+            state.marketplace.selected_manage_tab = tab;
+            if tab != MarketplaceManageTab::Apps {
+                state.marketplace.selected_app_id = None;
+                state.marketplace.app_detail_status = None;
+                state.marketplace.app_detail = None;
+                state.marketplace.app_detail_error = None;
+            }
+            if tab == MarketplaceManageTab::Apps
+                && !matches!(
+                    state.marketplace.apps_status,
+                    Some(LoadStatus::Loading | LoadStatus::Ready)
+                )
+            {
+                state.marketplace.apps_status = Some(LoadStatus::Loading);
+                vec![Effect::RefreshApps {
+                    force_refetch: false,
+                }]
+            } else if tab == MarketplaceManageTab::Mcps
+                && !matches!(
+                    state.marketplace.mcp_status,
+                    Some(LoadStatus::Loading | LoadStatus::Ready)
+                )
+            {
+                state.marketplace.mcp_status = Some(LoadStatus::Loading);
+                vec![Effect::RefreshMcpServers {
+                    cwd: selected_task_cwds(state).into_iter().next(),
+                }]
+            } else if tab == MarketplaceManageTab::Skills
+                && !matches!(
+                    state.marketplace.skills_status,
+                    Some(LoadStatus::Loading | LoadStatus::Ready)
+                )
+            {
+                state.marketplace.skills_status = Some(LoadStatus::Loading);
+                vec![Effect::RefreshSkills {
+                    cwds: composer_workspace_roots(state),
+                    force_reload: false,
+                }]
+            } else {
+                Vec::new()
+            }
+        }
+        Action::AddMarketplace {
+            source,
+            ref_name,
+            sparse_paths,
+        } => {
+            if state.marketplace.marketplace_add_pending {
+                return Vec::new();
+            }
+            let source = source.trim().to_owned();
+            let ref_name = ref_name
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty());
+            let sparse_paths = sparse_paths
+                .into_iter()
+                .map(|path| path.trim().to_owned())
+                .filter(|path| !path.is_empty())
+                .collect::<Vec<_>>();
+            let invalid = source.is_empty()
+                || source.len() > MAX_MARKETPLACE_SOURCE_BYTES
+                || ref_name
+                    .as_ref()
+                    .is_some_and(|value| value.len() > MAX_MARKETPLACE_REF_BYTES)
+                || sparse_paths.len() > MAX_MARKETPLACE_SPARSE_PATHS
+                || sparse_paths
+                    .iter()
+                    .any(|path| path.len() > MAX_MARKETPLACE_SPARSE_PATH_BYTES);
+            if invalid {
+                state.marketplace.marketplace_add_error =
+                    Some("Check the marketplace source, Git ref, and sparse paths.".to_owned());
+                return Vec::new();
+            }
+
+            state.marketplace.marketplace_add_pending = true;
+            state.marketplace.marketplace_add_error = None;
+            vec![Effect::AddMarketplace {
+                source,
+                ref_name,
+                sparse_paths: (!sparse_paths.is_empty()).then_some(sparse_paths),
+            }]
+        }
+        Action::MarketplaceAdded {
+            marketplace_name,
+            already_added,
+        } => {
+            state.marketplace.marketplace_add_pending = false;
+            state.marketplace.marketplace_add_error = None;
+            state.marketplace.status = Some(LoadStatus::Loading);
+            state.status_message = Some(if already_added {
+                format!("Marketplace {marketplace_name} was already added.")
+            } else {
+                format!("Added marketplace {marketplace_name}.")
+            });
+            vec![Effect::RefreshMarketplace {
+                cwds: selected_task_cwds(state),
+                directory_tab: state.marketplace.selected_directory_tab,
+                force_refetch: true,
+                include_all_marketplaces: state.marketplace.manage_mode,
+            }]
+        }
+        Action::MarketplaceAddFailed(message) => {
+            state.marketplace.marketplace_add_pending = false;
+            state.marketplace.marketplace_add_error = Some(bounded_string(message, 4 * 1024));
+            Vec::new()
+        }
+        Action::ClearMarketplaceAddError => {
+            if !state.marketplace.marketplace_add_pending {
+                state.marketplace.marketplace_add_error = None;
+            }
+            Vec::new()
+        }
+        Action::RemoveMarketplace(marketplace_name) => {
+            if state.marketplace.pending_marketplace_remove.is_some()
+                || state.marketplace.marketplace_upgrade_pending
+            {
+                return Vec::new();
+            }
+            let marketplace_name = bounded_string(
+                marketplace_name.trim().to_owned(),
+                MAX_MARKETPLACE_NAME_BYTES,
+            );
+            let removable = !marketplace_name.is_empty()
+                && state
+                    .marketplace
+                    .marketplace_sources
+                    .iter()
+                    .any(|source| source.name == marketplace_name && source.removable);
+            if !removable {
+                state.marketplace.marketplace_mutation_error =
+                    Some("This marketplace cannot be removed.".to_owned());
+                return Vec::new();
+            }
+            state.marketplace.pending_marketplace_remove = Some(marketplace_name.clone());
+            state.marketplace.marketplace_mutation_error = None;
+            vec![Effect::RemoveMarketplace { marketplace_name }]
+        }
+        Action::MarketplaceRemoved(marketplace_name) => {
+            if state.marketplace.pending_marketplace_remove.as_deref()
+                != Some(marketplace_name.as_str())
+            {
+                return Vec::new();
+            }
+            state.marketplace.pending_marketplace_remove = None;
+            state.marketplace.marketplace_mutation_error = None;
+            state.marketplace.status = Some(LoadStatus::Loading);
+            state.status_message = Some(format!("Removed marketplace {marketplace_name}."));
+            vec![Effect::RefreshMarketplace {
+                cwds: selected_task_cwds(state),
+                directory_tab: state.marketplace.selected_directory_tab,
+                force_refetch: true,
+                include_all_marketplaces: true,
+            }]
+        }
+        Action::MarketplaceRemoveFailed {
+            marketplace_name,
+            message,
+        } => {
+            if state.marketplace.pending_marketplace_remove.as_deref()
+                == Some(marketplace_name.as_str())
+            {
+                state.marketplace.pending_marketplace_remove = None;
+                state.marketplace.marketplace_mutation_error =
+                    Some(bounded_string(message, 4 * 1024));
+            }
+            Vec::new()
+        }
+        Action::UpgradeMarketplaces(marketplace_name) => {
+            if state.marketplace.marketplace_upgrade_pending
+                || state.marketplace.pending_marketplace_remove.is_some()
+            {
+                return Vec::new();
+            }
+            let marketplace_name = marketplace_name
+                .map(|name| bounded_string(name.trim().to_owned(), MAX_MARKETPLACE_NAME_BYTES))
+                .filter(|name| !name.is_empty());
+            if marketplace_name.as_ref().is_some_and(|name| {
+                !state
+                    .marketplace
+                    .marketplace_sources
+                    .iter()
+                    .any(|source| source.name == *name)
+            }) {
+                state.marketplace.marketplace_mutation_error =
+                    Some("This marketplace is no longer available.".to_owned());
+                return Vec::new();
+            }
+            state.marketplace.marketplace_upgrade_pending = true;
+            state.marketplace.marketplace_mutation_error = None;
+            vec![Effect::UpgradeMarketplaces { marketplace_name }]
+        }
+        Action::MarketplacesUpgraded {
+            mut selected_marketplaces,
+            upgraded_count,
+            mut errors,
+        } => {
+            state.marketplace.marketplace_upgrade_pending = false;
+            selected_marketplaces.truncate(MAX_MARKETPLACE_SOURCES);
+            errors.truncate(MAX_MARKETPLACE_SOURCES);
+            let selected_count = selected_marketplaces.len();
+            state.status_message = Some(format!(
+                "Upgraded {upgraded_count} of {selected_count} selected marketplace(s)."
+            ));
+            state.marketplace.marketplace_mutation_error = errors.first().map(|error| {
+                bounded_string(
+                    format!(
+                        "{}: {}{}",
+                        error.marketplace_name,
+                        error.message,
+                        if errors.len() > 1 {
+                            format!(" (+{} more)", errors.len() - 1)
+                        } else {
+                            String::new()
+                        }
+                    ),
+                    4 * 1024,
+                )
+            });
+            state.marketplace.status = Some(LoadStatus::Loading);
+            vec![Effect::RefreshMarketplace {
+                cwds: selected_task_cwds(state),
+                directory_tab: state.marketplace.selected_directory_tab,
+                force_refetch: true,
+                include_all_marketplaces: true,
+            }]
+        }
+        Action::MarketplaceUpgradeFailed(message) => {
+            state.marketplace.marketplace_upgrade_pending = false;
+            state.marketplace.marketplace_mutation_error = Some(bounded_string(message, 4 * 1024));
+            Vec::new()
+        }
+        Action::ClearMarketplaceMutationError => {
+            if state.marketplace.pending_marketplace_remove.is_none()
+                && !state.marketplace.marketplace_upgrade_pending
+            {
+                state.marketplace.marketplace_mutation_error = None;
+            }
+            Vec::new()
+        }
         Action::MarketplaceQueryChanged(query) => {
             state.marketplace.query = bounded_string(query, 4 * 1024);
             Vec::new()
         }
+        Action::SelectMarketplaceSection(section) => {
+            state.marketplace.selected_section = section.and_then(|section| match section {
+                MarketplaceSectionFilter::Featured => state
+                    .marketplace
+                    .plugins
+                    .iter()
+                    .any(|plugin| plugin.featured)
+                    .then_some(MarketplaceSectionFilter::Featured),
+                MarketplaceSectionFilter::Category(category) => {
+                    let category = bounded_string(category.trim().to_owned(), 256);
+                    (!category.is_empty()
+                        && state.marketplace.plugins.iter().any(|plugin| {
+                            plugin
+                                .category
+                                .as_deref()
+                                .unwrap_or("Other")
+                                .eq_ignore_ascii_case(&category)
+                        }))
+                    .then_some(MarketplaceSectionFilter::Category(category))
+                }
+            });
+            Vec::new()
+        }
+        Action::SelectPluginDirectoryTab(tab) => {
+            if state.marketplace.selected_directory_tab == tab {
+                return Vec::new();
+            }
+            state.marketplace.selected_directory_tab = tab;
+            state.marketplace.selected_section = None;
+            state.marketplace.selected_plugin_id = None;
+            state.marketplace.plugin_detail_status = None;
+            state.marketplace.plugin_detail = None;
+            state.marketplace.plugin_detail_error = None;
+            state.marketplace.pending_plugin_skill_name = None;
+            state.marketplace.selected_app_id = None;
+            state.marketplace.app_detail_status = None;
+            state.marketplace.app_detail = None;
+            state.marketplace.app_detail_error = None;
+            state.marketplace.status = Some(LoadStatus::Loading);
+            vec![Effect::RefreshMarketplace {
+                cwds: selected_task_cwds(state),
+                directory_tab: tab,
+                force_refetch: false,
+                include_all_marketplaces: false,
+            }]
+        }
+        Action::OpenPluginDetails { plugin_id } => {
+            let Some(plugin) = state
+                .marketplace
+                .plugins
+                .iter()
+                .find(|plugin| plugin.id == plugin_id)
+                .cloned()
+            else {
+                return Vec::new();
+            };
+            state.marketplace.selected_plugin_id = Some(plugin.id.clone());
+            state.marketplace.plugin_detail_status = Some(LoadStatus::Loading);
+            state.marketplace.plugin_detail = None;
+            state.marketplace.plugin_detail_error = None;
+            state.marketplace.pending_plugin_skill_name = None;
+            state.marketplace.selected_app_id = None;
+            state.marketplace.app_detail_status = None;
+            state.marketplace.app_detail = None;
+            state.marketplace.app_detail_error = None;
+            vec![Effect::ReadPlugin {
+                plugin_id: plugin.id,
+                plugin_name: plugin.install_name,
+                marketplace: plugin.marketplace,
+            }]
+        }
+        Action::ClosePluginDetails => {
+            state.marketplace.selected_plugin_id = None;
+            state.marketplace.plugin_detail_status = None;
+            state.marketplace.plugin_detail = None;
+            state.marketplace.plugin_detail_error = None;
+            state.marketplace.pending_plugin_skill_name = None;
+            Vec::new()
+        }
+        Action::PluginDetailLoaded {
+            plugin_id,
+            mut detail,
+        } => {
+            if state.marketplace.selected_plugin_id.as_deref() != Some(plugin_id.as_str()) {
+                return Vec::new();
+            }
+            detail.capabilities.truncate(MAX_PLUGIN_DETAIL_ITEMS);
+            detail.skills.truncate(MAX_PLUGIN_DETAIL_ITEMS);
+            detail.apps.truncate(MAX_PLUGIN_DETAIL_ITEMS);
+            detail.app_templates.truncate(MAX_PLUGIN_DETAIL_ITEMS);
+            detail.hooks.truncate(MAX_PLUGIN_DETAIL_ITEMS);
+            detail.mcp_servers.truncate(MAX_PLUGIN_DETAIL_ITEMS);
+            detail.scheduled_tasks.truncate(MAX_PLUGIN_DETAIL_ITEMS);
+            state.marketplace.plugin_detail = Some(detail);
+            state.marketplace.plugin_detail_status = Some(LoadStatus::Ready);
+            state.marketplace.plugin_detail_error = None;
+            Vec::new()
+        }
+        Action::PluginDetailFailed { plugin_id, message } => {
+            if state.marketplace.selected_plugin_id.as_deref() != Some(plugin_id.as_str()) {
+                return Vec::new();
+            }
+            state.marketplace.plugin_detail_status = Some(LoadStatus::Failed);
+            state.marketplace.plugin_detail_error = Some(bounded_string(message, 4 * 1024));
+            Vec::new()
+        }
+        Action::SelectMarketplaceTab(tab) => {
+            state.marketplace.selected_tab = tab;
+            if tab == MarketplaceTab::Skills {
+                state.marketplace.manage_mode = false;
+                state.marketplace.selected_plugin_id = None;
+                state.marketplace.plugin_detail_status = None;
+                state.marketplace.plugin_detail = None;
+                state.marketplace.plugin_detail_error = None;
+                state.marketplace.pending_plugin_skill_name = None;
+                state.marketplace.selected_app_id = None;
+                state.marketplace.app_detail_status = None;
+                state.marketplace.app_detail = None;
+                state.marketplace.app_detail_error = None;
+            }
+            match tab {
+                MarketplaceTab::Plugins if state.marketplace.status != Some(LoadStatus::Ready) => {
+                    state.marketplace.status = Some(LoadStatus::Loading);
+                    vec![Effect::RefreshMarketplace {
+                        cwds: selected_task_cwds(state),
+                        directory_tab: state.marketplace.selected_directory_tab,
+                        force_refetch: false,
+                        include_all_marketplaces: false,
+                    }]
+                }
+                MarketplaceTab::Skills
+                    if !matches!(
+                        state.marketplace.skills_status,
+                        Some(LoadStatus::Loading | LoadStatus::Ready)
+                    ) =>
+                {
+                    state.marketplace.skills_status = Some(LoadStatus::Loading);
+                    vec![Effect::RefreshSkills {
+                        cwds: composer_workspace_roots(state),
+                        force_reload: false,
+                    }]
+                }
+                MarketplaceTab::Plugins | MarketplaceTab::Skills => Vec::new(),
+            }
+        }
+        Action::RefreshApps => {
+            state.marketplace.apps_status = Some(LoadStatus::Loading);
+            vec![Effect::RefreshApps {
+                force_refetch: true,
+            }]
+        }
+        Action::AppsLoaded(mut apps) => {
+            apps.truncate(MAX_APP_ITEMS);
+            for app in &mut apps {
+                app.id = bounded_string(app.id.trim().to_owned(), 256);
+                app.name = bounded_string(app.name.trim().to_owned(), 512);
+                app.description = bounded_string(app.description.trim().to_owned(), 16 * 1024);
+                app.plugin_display_names.truncate(MAX_COMPOSER_OPTIONS);
+                for alias in &mut app.plugin_display_names {
+                    *alias = bounded_string(alias.trim().to_owned(), 512);
+                }
+                app.plugin_display_names.retain(|alias| !alias.is_empty());
+                app.logo_url = app
+                    .logo_url
+                    .take()
+                    .map(|url| bounded_string(url.trim().to_owned(), 8 * 1024))
+                    .filter(|url| !url.is_empty());
+                app.logo_url_dark = app
+                    .logo_url_dark
+                    .take()
+                    .map(|url| bounded_string(url.trim().to_owned(), 8 * 1024))
+                    .filter(|url| !url.is_empty());
+                app.install_url = app
+                    .install_url
+                    .take()
+                    .map(|url| bounded_string(url.trim().to_owned(), 8 * 1024))
+                    .filter(|url| !url.is_empty());
+            }
+            apps.retain(|app| !app.id.is_empty() && !app.name.is_empty());
+            state.marketplace.apps = apps;
+            state.marketplace.apps_status = Some(LoadStatus::Ready);
+            state.marketplace.app_errors.clear();
+            if state
+                .marketplace
+                .selected_app_id
+                .as_ref()
+                .is_some_and(|selected_app_id| {
+                    !state
+                        .marketplace
+                        .apps
+                        .iter()
+                        .any(|app| app.id == *selected_app_id)
+                })
+            {
+                state.marketplace.selected_app_id = None;
+                state.marketplace.app_detail_status = None;
+                state.marketplace.app_detail = None;
+                state.marketplace.app_detail_error = None;
+            }
+            Vec::new()
+        }
+        Action::AppsFailed(message) => {
+            state.marketplace.apps_status = Some(LoadStatus::Failed);
+            state.marketplace.app_errors = vec![bounded_string(message, 4 * 1024)];
+            Vec::new()
+        }
+        Action::OpenAppDetails { app_id } => {
+            let Some(app) = state
+                .marketplace
+                .apps
+                .iter()
+                .find(|app| app.id == app_id)
+                .cloned()
+            else {
+                return Vec::new();
+            };
+            state.marketplace.selected_app_id = Some(app.id.clone());
+            state.marketplace.app_detail_status = Some(LoadStatus::Loading);
+            state.marketplace.app_detail = None;
+            state.marketplace.app_detail_error = None;
+            state.marketplace.selected_plugin_id = None;
+            state.marketplace.plugin_detail_status = None;
+            state.marketplace.plugin_detail = None;
+            state.marketplace.plugin_detail_error = None;
+            state.marketplace.pending_plugin_skill_name = None;
+            vec![Effect::ReadApp { app_id: app.id }]
+        }
+        Action::CloseAppDetails => {
+            state.marketplace.selected_app_id = None;
+            state.marketplace.app_detail_status = None;
+            state.marketplace.app_detail = None;
+            state.marketplace.app_detail_error = None;
+            Vec::new()
+        }
+        Action::AppDetailLoaded { app_id, mut detail } => {
+            if state.marketplace.selected_app_id.as_deref() != Some(app_id.as_str()) {
+                return Vec::new();
+            }
+            let Some(app) = state
+                .marketplace
+                .apps
+                .iter()
+                .find(|app| app.id == app_id)
+                .cloned()
+            else {
+                return Vec::new();
+            };
+            detail.app_id = bounded_string(app_id, 256);
+            detail.name = bounded_string(detail.name.trim().to_owned(), 512);
+            if detail.name.is_empty() {
+                detail.name = app.name;
+            }
+            detail.description = bounded_string(detail.description.trim().to_owned(), 16 * 1024);
+            if detail.description.is_empty() {
+                detail.description = app.description;
+            }
+            detail.logo_url = detail
+                .logo_url
+                .take()
+                .or(app.logo_url)
+                .map(|url| bounded_string(url.trim().to_owned(), 8 * 1024))
+                .filter(|url| !url.is_empty());
+            detail.logo_url_dark = detail
+                .logo_url_dark
+                .take()
+                .or(app.logo_url_dark)
+                .map(|url| bounded_string(url.trim().to_owned(), 8 * 1024))
+                .filter(|url| !url.is_empty());
+            detail.install_url = detail
+                .install_url
+                .take()
+                .or(app.install_url)
+                .map(|url| bounded_string(url.trim().to_owned(), 8 * 1024))
+                .filter(|url| !url.is_empty());
+            detail.distribution_channel = detail
+                .distribution_channel
+                .take()
+                .map(|channel| bounded_string(channel.trim().to_owned(), 512))
+                .filter(|channel| !channel.is_empty());
+            detail
+                .plugin_display_names
+                .truncate(MAX_PLUGIN_DETAIL_ITEMS);
+            for name in &mut detail.plugin_display_names {
+                *name = bounded_string(name.trim().to_owned(), 512);
+            }
+            detail.plugin_display_names.retain(|name| !name.is_empty());
+            detail.tools.truncate(MAX_PLUGIN_DETAIL_ITEMS);
+            for tool in &mut detail.tools {
+                tool.name = bounded_string(tool.name.trim().to_owned(), 512);
+                tool.title = bounded_string(tool.title.trim().to_owned(), 512);
+                if tool.title.is_empty() {
+                    tool.title = tool.name.clone();
+                }
+                tool.description = bounded_string(tool.description.trim().to_owned(), 16 * 1024);
+            }
+            detail.tools.retain(|tool| !tool.name.is_empty());
+            state.marketplace.app_detail = Some(detail);
+            state.marketplace.app_detail_status = Some(LoadStatus::Ready);
+            state.marketplace.app_detail_error = None;
+            Vec::new()
+        }
+        Action::AppDetailFailed { app_id, message } => {
+            if state.marketplace.selected_app_id.as_deref() != Some(app_id.as_str()) {
+                return Vec::new();
+            }
+            state.marketplace.app_detail_status = Some(LoadStatus::Failed);
+            state.marketplace.app_detail = None;
+            state.marketplace.app_detail_error = Some(bounded_string(message, 4 * 1024));
+            Vec::new()
+        }
+        Action::SetAppEnabled { app_id, enabled } => {
+            let can_toggle = state.marketplace.pending_app_id.is_none()
+                && state
+                    .marketplace
+                    .apps
+                    .iter()
+                    .any(|app| app.id == app_id && app.is_accessible);
+            if !can_toggle {
+                return Vec::new();
+            }
+            state.marketplace.pending_app_id = Some(app_id.clone());
+            vec![Effect::SetAppEnabled { app_id, enabled }]
+        }
+        Action::AppEnabledChanged {
+            app_id,
+            enabled,
+            overridden,
+        } => {
+            if state.marketplace.pending_app_id.as_deref() != Some(app_id.as_str()) {
+                return Vec::new();
+            }
+            if let Some(app) = state
+                .marketplace
+                .apps
+                .iter_mut()
+                .find(|app| app.id == app_id)
+            {
+                app.enabled = enabled;
+            }
+            state.marketplace.pending_app_id = None;
+            if overridden {
+                state.status_message =
+                    Some("App state is overridden by higher-priority configuration.".to_owned());
+            }
+            vec![Effect::RefreshApps {
+                force_refetch: false,
+            }]
+        }
+        Action::AppMutationFailed { app_id, message } => {
+            if state.marketplace.pending_app_id.as_deref() == Some(app_id.as_str()) {
+                state.marketplace.pending_app_id = None;
+                state.status_message = Some(bounded_string(message, 4 * 1024));
+            }
+            Vec::new()
+        }
+        Action::RefreshMcpServers => {
+            state.marketplace.mcp_status = Some(LoadStatus::Loading);
+            vec![Effect::RefreshMcpServers {
+                cwd: selected_task_cwds(state).into_iter().next(),
+            }]
+        }
+        Action::McpServersLoaded {
+            mut servers,
+            mut plugin_servers,
+            mut warnings,
+        } => {
+            let authorization_urls = state
+                .marketplace
+                .mcp_servers
+                .iter()
+                .chain(&state.marketplace.plugin_mcp_servers)
+                .filter_map(|server| {
+                    server
+                        .authorization_url
+                        .clone()
+                        .map(|url| (server.key.clone(), url))
+                })
+                .collect::<HashMap<_, _>>();
+            sanitize_mcp_servers(&mut servers, &authorization_urls);
+            sanitize_mcp_servers(&mut plugin_servers, &authorization_urls);
+            warnings.truncate(MAX_MCP_SERVER_ITEMS);
+            for warning in &mut warnings {
+                *warning = bounded_string(warning.trim().to_owned(), 4 * 1024);
+            }
+            warnings.retain(|warning| !warning.is_empty());
+            state.marketplace.mcp_servers = servers;
+            state.marketplace.plugin_mcp_servers = plugin_servers;
+            state.marketplace.mcp_status = Some(LoadStatus::Ready);
+            state.marketplace.mcp_errors = warnings;
+            Vec::new()
+        }
+        Action::McpServersFailed(message) => {
+            state.marketplace.mcp_status = Some(LoadStatus::Failed);
+            state.marketplace.mcp_errors = vec![bounded_string(message, 4 * 1024)];
+            Vec::new()
+        }
+        Action::ReadMcpResource { server, uri } => {
+            let server = bounded_string(server.trim().to_owned(), 512);
+            let uri = bounded_string(uri.trim().to_owned(), MAX_MCP_SERVER_FIELD_BYTES);
+            let advertised = state
+                .marketplace
+                .mcp_servers
+                .iter()
+                .chain(&state.marketplace.plugin_mcp_servers)
+                .any(|candidate| {
+                    candidate.key == server
+                        && candidate
+                            .resources
+                            .iter()
+                            .any(|resource| resource.uri == uri)
+                });
+            if !advertised
+                || state.marketplace.mcp_resource_read.status == Some(LoadStatus::Loading)
+            {
+                return Vec::new();
+            }
+            state.marketplace.mcp_resource_read = McpResourceReadState {
+                server: Some(server.clone()),
+                uri: Some(uri.clone()),
+                status: Some(LoadStatus::Loading),
+                contents: Vec::new(),
+                error: None,
+            };
+            vec![Effect::ReadMcpResource { server, uri }]
+        }
+        Action::McpResourceLoaded {
+            server,
+            uri,
+            mut contents,
+        } => {
+            let selected = &state.marketplace.mcp_resource_read;
+            if selected.server.as_deref() != Some(server.as_str())
+                || selected.uri.as_deref() != Some(uri.as_str())
+            {
+                return Vec::new();
+            }
+            contents.truncate(MAX_MCP_SERVER_LIST_ITEMS);
+            for content in &mut contents {
+                content.uri =
+                    bounded_string(content.uri.trim().to_owned(), MAX_MCP_SERVER_FIELD_BYTES);
+                content.mime_type = content
+                    .mime_type
+                    .take()
+                    .map(|mime_type| {
+                        bounded_string(mime_type.trim().to_owned(), MAX_MCP_SERVER_FIELD_BYTES)
+                    })
+                    .filter(|mime_type| !mime_type.is_empty());
+                if let Some(text) = &mut content.text {
+                    content.truncated |= text.len() > MAX_COMPOSER_BYTES;
+                    *text = bounded_string(std::mem::take(text), MAX_COMPOSER_BYTES);
+                }
+            }
+            state.marketplace.mcp_resource_read.status = Some(LoadStatus::Ready);
+            state.marketplace.mcp_resource_read.contents = contents;
+            state.marketplace.mcp_resource_read.error = None;
+            Vec::new()
+        }
+        Action::McpResourceFailed {
+            server,
+            uri,
+            message,
+        } => {
+            let selected = &state.marketplace.mcp_resource_read;
+            if selected.server.as_deref() != Some(server.as_str())
+                || selected.uri.as_deref() != Some(uri.as_str())
+            {
+                return Vec::new();
+            }
+            state.marketplace.mcp_resource_read.status = Some(LoadStatus::Failed);
+            state.marketplace.mcp_resource_read.contents.clear();
+            state.marketplace.mcp_resource_read.error =
+                Some(bounded_string(message, MAX_MCP_SERVER_FIELD_BYTES));
+            Vec::new()
+        }
+        Action::SetMcpServerEnabled { key, enabled } => {
+            let can_toggle = state.marketplace.pending_mcp_key.is_none()
+                && state
+                    .marketplace
+                    .mcp_servers
+                    .iter()
+                    .any(|server| server.key == key && !server.read_only);
+            if !can_toggle {
+                return Vec::new();
+            }
+            state.marketplace.pending_mcp_key = Some(key.clone());
+            state.marketplace.mcp_mutation_error = None;
+            vec![Effect::SetMcpServerEnabled { key, enabled }]
+        }
+        Action::SaveMcpServer {
+            existing_key,
+            draft,
+        } => {
+            if state.marketplace.pending_mcp_key.is_some() {
+                return Vec::new();
+            }
+            let draft = match sanitize_mcp_server_draft(draft) {
+                Ok(draft) => draft,
+                Err(message) => {
+                    state.marketplace.mcp_mutation_error = Some(message.clone());
+                    state.status_message = Some(message);
+                    return Vec::new();
+                }
+            };
+            let key = if let Some(existing_key) = existing_key.as_deref() {
+                let Some(server) = state
+                    .marketplace
+                    .mcp_servers
+                    .iter()
+                    .find(|server| server.key == existing_key)
+                else {
+                    return Vec::new();
+                };
+                if server.read_only {
+                    let message = "This MCP server is managed by project configuration.".to_owned();
+                    state.marketplace.mcp_mutation_error = Some(message.clone());
+                    state.status_message = Some(message);
+                    return Vec::new();
+                }
+                if server
+                    .transport
+                    .is_some_and(|transport| transport != draft.transport)
+                {
+                    let message =
+                        "Uninstall the MCP server before changing its transport type.".to_owned();
+                    state.marketplace.mcp_mutation_error = Some(message.clone());
+                    state.status_message = Some(message);
+                    return Vec::new();
+                }
+                existing_key.to_owned()
+            } else {
+                next_mcp_server_key(
+                    &draft.name,
+                    state
+                        .marketplace
+                        .mcp_servers
+                        .iter()
+                        .map(|server| server.key.as_str()),
+                )
+            };
+            state.marketplace.pending_mcp_key = Some(key.clone());
+            state.marketplace.mcp_mutation_error = None;
+            vec![Effect::SaveMcpServer {
+                existing_key,
+                key,
+                draft: Box::new(draft),
+                cwd: selected_task_cwds(state).into_iter().next(),
+            }]
+        }
+        Action::McpServerSaved { key, overridden } => {
+            if state.marketplace.pending_mcp_key.as_deref() != Some(key.as_str()) {
+                return Vec::new();
+            }
+            state.marketplace.pending_mcp_key = None;
+            state.marketplace.mcp_mutation_error = None;
+            state.marketplace.mcp_status = Some(LoadStatus::Loading);
+            state.status_message = Some(if overridden {
+                format!(
+                    "Saved MCP server {key}, but higher-priority configuration still overrides it."
+                )
+            } else {
+                format!("Saved MCP server {key}.")
+            });
+            vec![Effect::ReloadMcpServers {
+                cwd: selected_task_cwds(state).into_iter().next(),
+            }]
+        }
+        Action::RemoveMcpServer { key } => {
+            let can_remove = state.marketplace.pending_mcp_key.is_none()
+                && state
+                    .marketplace
+                    .mcp_servers
+                    .iter()
+                    .any(|server| server.key == key && !server.read_only);
+            if !can_remove {
+                return Vec::new();
+            }
+            state.marketplace.pending_mcp_key = Some(key.clone());
+            state.marketplace.mcp_mutation_error = None;
+            vec![Effect::RemoveMcpServer { key }]
+        }
+        Action::McpServerRemoved { key, overridden } => {
+            if state.marketplace.pending_mcp_key.as_deref() != Some(key.as_str()) {
+                return Vec::new();
+            }
+            state.marketplace.pending_mcp_key = None;
+            state.marketplace.mcp_mutation_error = None;
+            state
+                .marketplace
+                .mcp_servers
+                .retain(|server| server.key != key);
+            state.marketplace.mcp_status = Some(LoadStatus::Loading);
+            state.status_message = Some(if overridden {
+                format!(
+                    "Removed the user setting for {key}, but higher-priority configuration still provides it."
+                )
+            } else {
+                format!("Uninstalled MCP server {key}.")
+            });
+            vec![Effect::ReloadMcpServers {
+                cwd: selected_task_cwds(state).into_iter().next(),
+            }]
+        }
+        Action::ClearMcpServerMutationError => {
+            state.marketplace.mcp_mutation_error = None;
+            Vec::new()
+        }
+        Action::McpServerEnabledChanged {
+            key,
+            enabled,
+            overridden,
+        } => {
+            if state.marketplace.pending_mcp_key.as_deref() != Some(key.as_str()) {
+                return Vec::new();
+            }
+            if let Some(server) = state
+                .marketplace
+                .mcp_servers
+                .iter_mut()
+                .find(|server| server.key == key)
+            {
+                server.enabled = enabled;
+            }
+            state.marketplace.pending_mcp_key = None;
+            state.marketplace.mcp_mutation_error = None;
+            if overridden {
+                state.status_message = Some(
+                    "MCP server state is overridden by higher-priority configuration.".to_owned(),
+                );
+            }
+            vec![Effect::RefreshMcpServers {
+                cwd: selected_task_cwds(state).into_iter().next(),
+            }]
+        }
+        Action::McpServerMutationFailed { key, message } => {
+            if state.marketplace.pending_mcp_key.as_deref() == Some(key.as_str()) {
+                state.marketplace.pending_mcp_key = None;
+                let message = bounded_string(message, 4 * 1024);
+                state.marketplace.mcp_mutation_error = Some(message.clone());
+                state.status_message = Some(message);
+            }
+            Vec::new()
+        }
+        Action::AuthenticateMcpServer { name } => {
+            let can_authenticate = state.marketplace.pending_mcp_auth_name.is_none()
+                && state
+                    .marketplace
+                    .mcp_servers
+                    .iter()
+                    .chain(&state.marketplace.plugin_mcp_servers)
+                    .any(|server| {
+                        server.key == name
+                            && server.auth_status == McpAuthStatus::NotLoggedIn
+                            && server.authorization_url.is_none()
+                    });
+            if !can_authenticate {
+                return Vec::new();
+            }
+            state.marketplace.pending_mcp_auth_name = Some(name.clone());
+            vec![Effect::AuthenticateMcpServer { name }]
+        }
+        Action::McpServerAuthenticationStarted {
+            name,
+            authorization_url,
+        } => {
+            if state.marketplace.pending_mcp_auth_name.as_deref() != Some(name.as_str()) {
+                return Vec::new();
+            }
+            state.marketplace.pending_mcp_auth_name = None;
+            let authorization_url = bounded_string(authorization_url.trim().to_owned(), 8 * 1024);
+            if authorization_url.is_empty() {
+                state.status_message =
+                    Some("MCP server returned an empty authorization URL.".to_owned());
+                return Vec::new();
+            }
+            if let Some(server) = state
+                .marketplace
+                .mcp_servers
+                .iter_mut()
+                .chain(&mut state.marketplace.plugin_mcp_servers)
+                .find(|server| server.key == name)
+            {
+                server.authorization_url = Some(authorization_url);
+            }
+            state.status_message = Some(format!(
+                "Continue authentication for {name} in your browser."
+            ));
+            Vec::new()
+        }
+        Action::McpServerAuthenticationCompleted {
+            name,
+            success,
+            error,
+        } => {
+            if state
+                .marketplace
+                .pending_mcp_auth_name
+                .as_deref()
+                .is_some_and(|pending| pending == name)
+            {
+                state.marketplace.pending_mcp_auth_name = None;
+            }
+            for server in state
+                .marketplace
+                .mcp_servers
+                .iter_mut()
+                .chain(&mut state.marketplace.plugin_mcp_servers)
+                .filter(|server| server.key == name || server.name == name)
+            {
+                server.authorization_url = None;
+            }
+            if success {
+                state.marketplace.mcp_status = Some(LoadStatus::Loading);
+                state.status_message = Some(format!("Authenticated MCP server {name}."));
+                vec![Effect::ReloadMcpServers {
+                    cwd: selected_task_cwds(state).into_iter().next(),
+                }]
+            } else {
+                state.status_message = Some(
+                    error
+                        .map(|message| bounded_string(message, 4 * 1024))
+                        .filter(|message| !message.is_empty())
+                        .unwrap_or_else(|| {
+                            format!("Authentication for MCP server {name} was not completed.")
+                        }),
+                );
+                Vec::new()
+            }
+        }
+        Action::McpServerStartupStatusUpdated {
+            name,
+            status,
+            error,
+            failure_reason,
+        } => {
+            let name = bounded_string(name.trim().to_owned(), 512);
+            if name.is_empty() {
+                return Vec::new();
+            }
+            let error = error
+                .map(|error| bounded_string(error.trim().to_owned(), 4 * 1024))
+                .filter(|error| !error.is_empty());
+            for server in state
+                .marketplace
+                .mcp_servers
+                .iter_mut()
+                .chain(&mut state.marketplace.plugin_mcp_servers)
+                .filter(|server| server.key == name || server.name == name)
+            {
+                server.startup_state = Some(status);
+                server.startup_error.clone_from(&error);
+                server.startup_failure_reason = failure_reason;
+                if failure_reason == Some(McpServerStartupFailureReason::ReauthenticationRequired) {
+                    server.auth_status = McpAuthStatus::NotLoggedIn;
+                    server.authorization_url = None;
+                }
+            }
+            match (status, failure_reason) {
+                (
+                    McpServerStartupState::Failed,
+                    Some(McpServerStartupFailureReason::ReauthenticationRequired),
+                ) => {
+                    state.status_message = Some(format!(
+                        "Reconnect {name} to continue using this MCP server."
+                    ));
+                }
+                (McpServerStartupState::Failed, _) => {
+                    state.status_message = Some(
+                        error.unwrap_or_else(|| format!("MCP server {name} failed to start.")),
+                    );
+                }
+                _ => {}
+            }
+            Vec::new()
+        }
+        Action::RefreshSkills => {
+            state.marketplace.skills_status = Some(LoadStatus::Loading);
+            vec![Effect::RefreshSkills {
+                cwds: composer_workspace_roots(state),
+                force_reload: true,
+            }]
+        }
+        Action::SkillsInvalidated => {
+            state.marketplace.skills_status = Some(LoadStatus::Loading);
+            vec![Effect::RefreshSkills {
+                cwds: composer_workspace_roots(state),
+                force_reload: false,
+            }]
+        }
+        Action::SkillsLoaded {
+            mut skills,
+            mut errors,
+        } => {
+            skills.truncate(MAX_SKILL_ITEMS);
+            errors.truncate(MAX_SKILL_ITEMS);
+            state.marketplace.skills = skills;
+            state.marketplace.skills_status = Some(LoadStatus::Ready);
+            state.marketplace.skill_errors = errors;
+            Vec::new()
+        }
+        Action::SkillsFailed(message) => {
+            state.marketplace.skills_status = Some(LoadStatus::Failed);
+            state.marketplace.skill_errors = vec![message];
+            Vec::new()
+        }
+        Action::RefreshHooks => {
+            let cwds = hook_workspace_roots(state);
+            state.hooks.cwds.clone_from(&cwds);
+            state.hooks.error = None;
+            if cwds.is_empty() {
+                state.hooks.status = LoadStatus::Ready;
+                state.hooks.entries.clear();
+                return Vec::new();
+            }
+            state.hooks.status = LoadStatus::Loading;
+            vec![Effect::RefreshHooks { cwds }]
+        }
+        Action::HooksLoaded(mut entries) => {
+            entries.truncate(MAX_HOOK_PROJECTS);
+            for entry in &mut entries {
+                entry.hooks.truncate(MAX_HOOK_ITEMS);
+                entry.warnings.truncate(MAX_HOOK_ISSUES);
+                entry.errors.truncate(MAX_HOOK_ISSUES);
+                for hook in &mut entry.hooks {
+                    hook.key = bounded_string(hook.key.trim().to_owned(), MAX_HOOK_FIELD_BYTES);
+                    hook.current_hash =
+                        bounded_string(hook.current_hash.trim().to_owned(), MAX_HOOK_FIELD_BYTES);
+                    hook.matcher = hook
+                        .matcher
+                        .take()
+                        .map(|value| bounded_string(value.trim().to_owned(), MAX_HOOK_FIELD_BYTES));
+                    hook.command = hook
+                        .command
+                        .take()
+                        .map(|value| bounded_string(value.trim().to_owned(), MAX_HOOK_FIELD_BYTES));
+                    hook.status_message = hook
+                        .status_message
+                        .take()
+                        .map(|value| bounded_string(value.trim().to_owned(), MAX_HOOK_FIELD_BYTES));
+                    hook.plugin_id = hook
+                        .plugin_id
+                        .take()
+                        .map(|value| bounded_string(value.trim().to_owned(), MAX_HOOK_FIELD_BYTES));
+                }
+                entry.hooks.retain(|hook| !hook.key.is_empty());
+                entry.hooks.sort_by_key(|hook| hook.display_order);
+                for warning in &mut entry.warnings {
+                    *warning = bounded_string(warning.trim().to_owned(), MAX_HOOK_FIELD_BYTES);
+                }
+                entry.warnings.retain(|warning| !warning.is_empty());
+                for error in &mut entry.errors {
+                    error.message =
+                        bounded_string(error.message.trim().to_owned(), MAX_HOOK_FIELD_BYTES);
+                }
+                entry.errors.retain(|error| !error.message.is_empty());
+            }
+            state.hooks.entries = entries;
+            state.hooks.status = LoadStatus::Ready;
+            state.hooks.error = None;
+            Vec::new()
+        }
+        Action::HooksFailed(message) => {
+            state.hooks.status = LoadStatus::Failed;
+            state.hooks.error = Some(bounded_string(message, MAX_HOOK_FIELD_BYTES));
+            Vec::new()
+        }
+        Action::SetHookEnabled { key, enabled } => {
+            let hook = state
+                .hooks
+                .entries
+                .iter()
+                .flat_map(|entry| &entry.hooks)
+                .find(|hook| hook.key == key);
+            let can_update = state.hooks.pending_key.is_none()
+                && hook.is_some_and(|hook| {
+                    !hook.is_managed
+                        && hook.trust_status == HookTrustStatus::Trusted
+                        && hook.enabled != enabled
+                });
+            if !can_update {
+                return Vec::new();
+            }
+            state.hooks.pending_key = Some(key.clone());
+            vec![Effect::SetHookEnabled { key, enabled }]
+        }
+        Action::TrustHook { key } => {
+            let current_hash = state
+                .hooks
+                .entries
+                .iter()
+                .flat_map(|entry| &entry.hooks)
+                .find(|hook| {
+                    hook.key == key
+                        && !hook.is_managed
+                        && matches!(
+                            hook.trust_status,
+                            HookTrustStatus::Untrusted | HookTrustStatus::Modified
+                        )
+                })
+                .map(|hook| hook.current_hash.clone())
+                .filter(|hash| !hash.is_empty());
+            let Some(current_hash) = current_hash else {
+                return Vec::new();
+            };
+            if state.hooks.pending_key.is_some() {
+                return Vec::new();
+            }
+            state.hooks.pending_key = Some(key.clone());
+            vec![Effect::TrustHook { key, current_hash }]
+        }
+        Action::HookMutationFinished { key, overridden } => {
+            if state.hooks.pending_key.as_deref() != Some(key.as_str()) {
+                return Vec::new();
+            }
+            state.hooks.pending_key = None;
+            if overridden {
+                state.status_message =
+                    Some("Hook state is overridden by higher-priority configuration.".to_owned());
+            }
+            if state.hooks.cwds.is_empty() {
+                state.hooks.status = LoadStatus::Ready;
+                Vec::new()
+            } else {
+                state.hooks.status = LoadStatus::Loading;
+                vec![Effect::RefreshHooks {
+                    cwds: state.hooks.cwds.clone(),
+                }]
+            }
+        }
+        Action::HookMutationFailed { key, message } => {
+            if state.hooks.pending_key.as_deref() == Some(key.as_str()) {
+                state.hooks.pending_key = None;
+            }
+            state.status_message = Some(bounded_string(message, MAX_HOOK_FIELD_BYTES));
+            Vec::new()
+        }
         Action::InstallPlugin {
             plugin_id,
+            plugin_name,
             marketplace,
-        } => vec![Effect::InstallPlugin {
-            plugin_id,
-            marketplace,
-        }],
-        Action::UninstallPlugin { plugin_id } => vec![Effect::UninstallPlugin { plugin_id }],
+        } => {
+            let can_install = state.marketplace.pending_plugin_id.is_none()
+                && state.marketplace.pending_plugin_skill_name.is_none()
+                && state
+                    .marketplace
+                    .plugins
+                    .iter()
+                    .chain(&state.marketplace.composer_plugins)
+                    .any(|plugin| {
+                        plugin.id == plugin_id && !plugin.installed && plugin.installable
+                    });
+            if !can_install {
+                return Vec::new();
+            }
+            state.marketplace.pending_plugin_id = Some(plugin_id.clone());
+            vec![Effect::InstallPlugin {
+                plugin_id,
+                plugin_name,
+                marketplace,
+            }]
+        }
+        Action::UninstallPlugin { plugin_id } => {
+            let can_uninstall = state.marketplace.pending_plugin_id.is_none()
+                && state.marketplace.pending_plugin_skill_name.is_none()
+                && state
+                    .marketplace
+                    .plugins
+                    .iter()
+                    .any(|plugin| plugin.id == plugin_id && plugin.installed);
+            if !can_uninstall {
+                return Vec::new();
+            }
+            state.marketplace.pending_plugin_id = Some(plugin_id.clone());
+            vec![Effect::UninstallPlugin { plugin_id }]
+        }
         Action::PluginMutationFinished {
             plugin_id,
             installed,
@@ -1110,6 +12111,501 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 plugin.installed = installed;
                 plugin.enabled = installed;
             }
+            if let Some(plugin) = state
+                .marketplace
+                .composer_plugins
+                .iter_mut()
+                .find(|plugin| plugin.id == plugin_id)
+            {
+                plugin.installed = installed;
+                plugin.enabled = installed;
+            }
+            if state.marketplace.pending_plugin_id.as_deref() == Some(plugin_id.as_str()) {
+                state.marketplace.pending_plugin_id = None;
+            }
+            let cwds = selected_task_cwds(state);
+            vec![
+                Effect::RefreshMarketplace {
+                    cwds: cwds.clone(),
+                    directory_tab: state.marketplace.selected_directory_tab,
+                    force_refetch: false,
+                    include_all_marketplaces: state.marketplace.manage_mode,
+                },
+                Effect::RefreshComposerPlugins {
+                    cwds,
+                    force_refetch: false,
+                },
+            ]
+        }
+        Action::SetPluginEnabled { plugin_id, enabled } => {
+            let can_toggle = state.marketplace.pending_plugin_id.is_none()
+                && state.marketplace.pending_plugin_skill_name.is_none()
+                && state
+                    .marketplace
+                    .plugins
+                    .iter()
+                    .any(|plugin| plugin.id == plugin_id && plugin.installed);
+            if !can_toggle {
+                return Vec::new();
+            }
+            state.marketplace.pending_plugin_id = Some(plugin_id.clone());
+            vec![Effect::SetPluginEnabled { plugin_id, enabled }]
+        }
+        Action::PluginEnabledChanged {
+            plugin_id,
+            enabled,
+            overridden,
+        } => {
+            if let Some(plugin) = state
+                .marketplace
+                .plugins
+                .iter_mut()
+                .find(|plugin| plugin.id == plugin_id)
+            {
+                plugin.enabled = enabled;
+            }
+            if let Some(plugin) = state
+                .marketplace
+                .composer_plugins
+                .iter_mut()
+                .find(|plugin| plugin.id == plugin_id)
+            {
+                plugin.enabled = enabled;
+            }
+            if state.marketplace.pending_plugin_id.as_deref() == Some(plugin_id.as_str()) {
+                state.marketplace.pending_plugin_id = None;
+            }
+            if overridden {
+                state.status_message =
+                    Some("Plugin state is overridden by higher-priority configuration.".to_owned());
+            }
+            let cwds = selected_task_cwds(state);
+            vec![
+                Effect::RefreshMarketplace {
+                    cwds: cwds.clone(),
+                    directory_tab: state.marketplace.selected_directory_tab,
+                    force_refetch: false,
+                    include_all_marketplaces: state.marketplace.manage_mode,
+                },
+                Effect::RefreshComposerPlugins {
+                    cwds,
+                    force_refetch: false,
+                },
+            ]
+        }
+        Action::SetPluginSkillEnabled {
+            plugin_id,
+            skill_name,
+            enabled,
+        } => {
+            let can_toggle = state.marketplace.pending_plugin_id.is_none()
+                && state.marketplace.pending_plugin_skill_name.is_none()
+                && state.marketplace.selected_plugin_id.as_deref() == Some(plugin_id.as_str())
+                && state
+                    .marketplace
+                    .plugins
+                    .iter()
+                    .any(|plugin| plugin.id == plugin_id && plugin.installed)
+                && state
+                    .marketplace
+                    .plugin_detail
+                    .as_ref()
+                    .is_some_and(|detail| {
+                        detail.plugin_id == plugin_id
+                            && detail.skills.iter().any(|skill| skill.name == skill_name)
+                    });
+            if !can_toggle {
+                return Vec::new();
+            }
+            state.marketplace.pending_plugin_skill_name = Some(skill_name.clone());
+            vec![Effect::SetPluginSkillEnabled {
+                plugin_id,
+                skill_name,
+                enabled,
+            }]
+        }
+        Action::PluginSkillEnabledChanged {
+            plugin_id,
+            skill_name,
+            requested_enabled,
+            effective_enabled,
+        } => {
+            let is_current = state.marketplace.selected_plugin_id.as_deref()
+                == Some(plugin_id.as_str())
+                && state.marketplace.pending_plugin_skill_name.as_deref()
+                    == Some(skill_name.as_str());
+            if !is_current {
+                return Vec::new();
+            }
+            if let Some(skill) = state
+                .marketplace
+                .plugin_detail
+                .as_mut()
+                .filter(|detail| detail.plugin_id == plugin_id)
+                .and_then(|detail| {
+                    detail
+                        .skills
+                        .iter_mut()
+                        .find(|skill| skill.name == skill_name)
+                })
+            {
+                skill.enabled = effective_enabled;
+            }
+            state.marketplace.pending_plugin_skill_name = None;
+            if requested_enabled != effective_enabled {
+                state.status_message =
+                    Some("Skill state is overridden by higher-priority configuration.".to_owned());
+            }
+            Vec::new()
+        }
+        Action::PluginSkillMutationFailed {
+            plugin_id,
+            skill_name,
+            message,
+        } => {
+            if state.marketplace.selected_plugin_id.as_deref() == Some(plugin_id.as_str())
+                && state.marketplace.pending_plugin_skill_name.as_deref()
+                    == Some(skill_name.as_str())
+            {
+                state.marketplace.pending_plugin_skill_name = None;
+                state.status_message = Some(message);
+            }
+            Vec::new()
+        }
+        Action::PluginMutationFailed { plugin_id, message } => {
+            if state.marketplace.pending_plugin_id.as_deref() == Some(plugin_id.as_str()) {
+                state.marketplace.pending_plugin_id = None;
+            }
+            state.status_message = Some(message);
+            Vec::new()
+        }
+        Action::SetSkillEnabled { path, enabled } => {
+            let can_toggle = state.marketplace.pending_skill_path.is_none()
+                && state
+                    .marketplace
+                    .skills
+                    .iter()
+                    .any(|skill| skill.path == path);
+            if !can_toggle {
+                return Vec::new();
+            }
+            state.marketplace.pending_skill_path = Some(path.clone());
+            vec![Effect::SetSkillEnabled { path, enabled }]
+        }
+        Action::SkillEnabledChanged {
+            path,
+            requested_enabled,
+            effective_enabled,
+        } => {
+            if let Some(skill) = state
+                .marketplace
+                .skills
+                .iter_mut()
+                .find(|skill| skill.path == path)
+            {
+                skill.enabled = effective_enabled;
+            }
+            if state.marketplace.pending_skill_path.as_ref() == Some(&path) {
+                state.marketplace.pending_skill_path = None;
+            }
+            if requested_enabled != effective_enabled {
+                state.status_message =
+                    Some("Skill state is overridden by higher-priority configuration.".to_owned());
+            }
+            Vec::new()
+        }
+        Action::SkillMutationFailed { path, message } => {
+            if state.marketplace.pending_skill_path.as_ref() == Some(&path) {
+                state.marketplace.pending_skill_path = None;
+            }
+            state.status_message = Some(message);
+            Vec::new()
+        }
+        Action::RefreshPullRequests => vec![begin_pull_request_search(state, false)],
+        Action::PullRequestQueryChanged(query) => {
+            let query = query
+                .chars()
+                .take(MAX_PULL_REQUEST_SEARCH_CHARS)
+                .collect::<String>();
+            if state.pull_requests.query == query {
+                return Vec::new();
+            }
+            state.pull_requests.query = query;
+            if state.route == MainRoute::PullRequests {
+                vec![begin_pull_request_search(state, true)]
+            } else {
+                Vec::new()
+            }
+        }
+        Action::SetPullRequestRelationship(relationship) => {
+            if state.pull_requests.relationship == relationship {
+                return Vec::new();
+            }
+            state.pull_requests.relationship = relationship;
+            vec![begin_pull_request_search(state, false)]
+        }
+        Action::SetPullRequestLifecycle(lifecycle) => {
+            if state.pull_requests.lifecycle == lifecycle {
+                return Vec::new();
+            }
+            state.pull_requests.lifecycle = lifecycle;
+            vec![begin_pull_request_search(state, false)]
+        }
+        Action::PullRequestSearchDue { generation } => {
+            if generation != state.pull_requests.generation
+                || state.route != MainRoute::PullRequests
+            {
+                return Vec::new();
+            }
+            vec![pull_request_search_effect(state, None, false)]
+        }
+        Action::PullRequestsLoaded {
+            generation,
+            account_login,
+            account_avatar_url,
+            items,
+            total_count,
+            next_cursor,
+            truncated,
+            append,
+        } => {
+            if generation != state.pull_requests.generation {
+                return Vec::new();
+            }
+            state.pull_requests.status = LoadStatus::Ready;
+            state.pull_requests.loading_more = false;
+            state.pull_requests.error = None;
+            state.pull_requests.account_login = Some(account_login);
+            state.pull_requests.account_avatar_url = account_avatar_url;
+            state.pull_requests.total_count = total_count;
+            state.pull_requests.next_cursor = next_cursor;
+            state.pull_requests.truncated = truncated;
+            if append {
+                let mut identities = state
+                    .pull_requests
+                    .items
+                    .iter()
+                    .map(|item| item.identity.clone())
+                    .collect::<HashSet<_>>();
+                state.pull_requests.items.extend(
+                    items
+                        .into_iter()
+                        .filter(|item| identities.insert(item.identity.clone())),
+                );
+            } else {
+                state.pull_requests.items = items;
+            }
+            state.pull_requests.items.truncate(MAX_PULL_REQUEST_ITEMS);
+            Vec::new()
+        }
+        Action::PullRequestsFailed {
+            generation,
+            message,
+            append,
+        } => {
+            if generation != state.pull_requests.generation {
+                return Vec::new();
+            }
+            state.pull_requests.loading_more = false;
+            state.pull_requests.error = Some(message.clone());
+            if !append {
+                state.pull_requests.status = LoadStatus::Failed;
+                state.pull_requests.items.clear();
+                state.pull_requests.next_cursor = None;
+            }
+            state.status_message = Some(message);
+            Vec::new()
+        }
+        Action::LoadMorePullRequests => {
+            if state.pull_requests.loading_more {
+                return Vec::new();
+            }
+            let Some(cursor) = state.pull_requests.next_cursor.clone() else {
+                return Vec::new();
+            };
+            state.pull_requests.loading_more = true;
+            vec![pull_request_search_effect(state, Some(cursor), true)]
+        }
+        Action::SelectPullRequest(identity) => {
+            if !state
+                .pull_requests
+                .items
+                .iter()
+                .any(|item| item.identity == identity)
+            {
+                return Vec::new();
+            }
+            let Some(account_login) = state.pull_requests.account_login.clone() else {
+                return Vec::new();
+            };
+            let cwd = pull_request_cwd(state);
+            state.pull_requests.selected = Some(identity.clone());
+            state.pull_requests.detail_generation =
+                state.pull_requests.detail_generation.saturating_add(1);
+            state.pull_requests.detail_status = LoadStatus::Loading;
+            state.pull_requests.detail = None;
+            state.pull_requests.detail_error = None;
+            state.pull_requests.detail_tab = PullRequestDetailTab::Summary;
+            state.pull_requests.mutation_error = None;
+            clear_pull_request_diff(state);
+            vec![Effect::LoadPullRequestDetail {
+                generation: state.pull_requests.detail_generation,
+                cwd,
+                identity,
+                account_login,
+            }]
+        }
+        Action::PullRequestDetailLoaded { generation, detail } => {
+            if generation != state.pull_requests.detail_generation
+                || state.pull_requests.selected.as_ref() != Some(&detail.summary.identity)
+            {
+                return Vec::new();
+            }
+            state.pull_requests.detail_status = LoadStatus::Ready;
+            state.pull_requests.detail_error = None;
+            state.pull_requests.detail = Some(detail);
+            Vec::new()
+        }
+        Action::PullRequestDetailFailed {
+            generation,
+            message,
+        } => {
+            if generation != state.pull_requests.detail_generation {
+                return Vec::new();
+            }
+            state.pull_requests.detail_status = LoadStatus::Failed;
+            state.pull_requests.detail_error = Some(message.clone());
+            state.status_message = Some(message);
+            Vec::new()
+        }
+        Action::SelectPullRequestDetailTab(tab) => {
+            if state.pull_requests.selected.is_none() {
+                return Vec::new();
+            }
+            state.pull_requests.detail_tab = tab;
+            if tab == PullRequestDetailTab::Code
+                && !matches!(
+                    state.pull_requests.diff_status,
+                    LoadStatus::Loading | LoadStatus::Ready
+                )
+            {
+                begin_pull_request_diff(state)
+            } else {
+                Vec::new()
+            }
+        }
+        Action::RefreshPullRequestDiff => {
+            if state.pull_requests.detail_tab == PullRequestDetailTab::Code {
+                begin_pull_request_diff(state)
+            } else {
+                Vec::new()
+            }
+        }
+        Action::PullRequestDiffLoaded {
+            generation,
+            identity,
+            head_revision,
+            unified_diff,
+        } => {
+            if generation != state.pull_requests.diff_generation
+                || state.pull_requests.selected.as_ref() != Some(&identity)
+            {
+                return Vec::new();
+            }
+            state.pull_requests.diff_status = LoadStatus::Ready;
+            state.pull_requests.diff_head_revision = Some(head_revision);
+            state.pull_requests.unified_diff = unified_diff;
+            state.pull_requests.diff_error = None;
+            Vec::new()
+        }
+        Action::PullRequestDiffFailed {
+            generation,
+            identity,
+            message,
+        } => {
+            if generation != state.pull_requests.diff_generation
+                || state.pull_requests.selected.as_ref() != Some(&identity)
+            {
+                return Vec::new();
+            }
+            state.pull_requests.diff_status = LoadStatus::Failed;
+            state.pull_requests.diff_error = Some(message.clone());
+            state.status_message = Some(message);
+            Vec::new()
+        }
+        Action::SubmitPullRequestMutation(mutation) => begin_pull_request_mutation(state, mutation),
+        Action::ClearPullRequestMutationError => {
+            state.pull_requests.mutation_error = None;
+            Vec::new()
+        }
+        Action::PullRequestMutationCompleted {
+            generation,
+            identity,
+        } => {
+            if generation != state.pull_requests.mutation_generation {
+                return Vec::new();
+            }
+            let completed = state.pull_requests.pending_mutation.take();
+            state.pull_requests.mutation_error = None;
+            state.status_message = Some(match completed {
+                Some(PullRequestMutationKind::Comment) => "Pull request comment posted.".to_owned(),
+                Some(
+                    PullRequestMutationKind::Approve
+                    | PullRequestMutationKind::ReviewComment
+                    | PullRequestMutationKind::RequestChanges,
+                ) => "Pull request review submitted.".to_owned(),
+                Some(PullRequestMutationKind::Merge | PullRequestMutationKind::Squash) => {
+                    "Pull request merged.".to_owned()
+                }
+                None => "Pull request updated.".to_owned(),
+            });
+            if state.pull_requests.selected.as_ref() != Some(&identity) {
+                return Vec::new();
+            }
+            let Some(account_login) = state.pull_requests.account_login.clone() else {
+                return Vec::new();
+            };
+            state.pull_requests.detail_generation =
+                state.pull_requests.detail_generation.saturating_add(1);
+            state.pull_requests.detail_status = LoadStatus::Loading;
+            state.pull_requests.detail_error = None;
+            if matches!(
+                completed,
+                Some(PullRequestMutationKind::Merge | PullRequestMutationKind::Squash)
+            ) {
+                clear_pull_request_diff(state);
+            }
+            vec![Effect::LoadPullRequestDetail {
+                generation: state.pull_requests.detail_generation,
+                cwd: pull_request_cwd(state),
+                identity,
+                account_login,
+            }]
+        }
+        Action::PullRequestMutationFailed {
+            generation,
+            identity: _,
+            message,
+        } => {
+            if generation != state.pull_requests.mutation_generation {
+                return Vec::new();
+            }
+            state.pull_requests.pending_mutation = None;
+            state.pull_requests.mutation_error = Some(message.clone());
+            state.status_message = Some(message);
+            Vec::new()
+        }
+        Action::ClosePullRequestDetail => {
+            if state.pull_requests.pending_mutation.is_some() {
+                return Vec::new();
+            }
+            state.pull_requests.selected = None;
+            state.pull_requests.detail_status = LoadStatus::Idle;
+            state.pull_requests.detail = None;
+            state.pull_requests.detail_error = None;
+            state.pull_requests.detail_tab = PullRequestDetailTab::Summary;
+            state.pull_requests.mutation_error = None;
+            clear_pull_request_diff(state);
             Vec::new()
         }
         Action::RefreshGit => state
@@ -1126,20 +12622,58 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 Vec::new()
             }),
         Action::GitSnapshotLoaded(git) => {
+            let keep_last_turn = state.git.selected_scope == GitDiffScope::LastTurn
+                || state.git_preferences.review_mode == GitReviewMode::LastTurnOnly;
+            let pull_request_lookup =
+                git.repository_root
+                    .clone()
+                    .zip(git.branch.clone())
+                    .filter(|(_, branch)| {
+                        git.default_branch.as_deref() != Some(branch.as_str())
+                            && git.default_branch.is_some()
+                    });
             state.git = git;
+            if keep_last_turn {
+                state.git.selected_scope = GitDiffScope::LastTurn;
+                state.git.selected_path = None;
+                state.git.unified_diff.clear();
+            }
+            pull_request_lookup.map_or_else(Vec::new, |(root, branch)| {
+                state.git.pull_request_provider = GitPullRequestProvider::Loading;
+                vec![Effect::LoadGitPullRequest { root, branch }]
+            })
+        }
+        Action::SelectGitDiffScope(scope) => {
+            if state.git_preferences.review_mode == GitReviewMode::LastTurnOnly
+                && scope != GitDiffScope::LastTurn
+            {
+                return Vec::new();
+            }
+            if state.git.selected_scope != scope {
+                state.git.selected_scope = scope;
+                state.git.selected_path = None;
+                state.git.unified_diff.clear();
+                state.git.diff_generation = state.git.diff_generation.saturating_add(1);
+            }
             Vec::new()
         }
-        Action::SelectDiffPath(path) => {
+        Action::SelectDiffPath { path, scope } => {
+            if scope == GitDiffScope::LastTurn {
+                return Vec::new();
+            }
             let Some(root) = state.git.repository_root.clone() else {
                 state.status_message = Some("No Git repository is selected.".to_owned());
                 return Vec::new();
             };
+            state.git.selected_scope = scope;
             state.git.selected_path = Some(path.clone());
+            state.git.unified_diff.clear();
             state.git.diff_generation = state.git.diff_generation.saturating_add(1);
             vec![Effect::LoadDiff {
                 generation: state.git.diff_generation,
                 root,
                 path,
+                staged: scope == GitDiffScope::Staged,
             }]
         }
         Action::StagePath(path) => state
@@ -1148,25 +12682,388 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             .clone()
             .map(|root| vec![Effect::StagePath { root, path }])
             .unwrap_or_default(),
+        Action::StageAll => state
+            .git
+            .repository_root
+            .clone()
+            .map(|root| vec![Effect::StageAll { root }])
+            .unwrap_or_default(),
         Action::UnstagePath(path) => state
             .git
             .repository_root
             .clone()
             .map(|root| vec![Effect::UnstagePath { root, path }])
             .unwrap_or_default(),
+        Action::UnstageAll => state
+            .git
+            .repository_root
+            .clone()
+            .map(|root| vec![Effect::UnstageAll { root }])
+            .unwrap_or_default(),
+        Action::SetGitIncludeUnstaged(include_unstaged) => {
+            if state.git_include_unstaged == include_unstaged {
+                Vec::new()
+            } else {
+                state.git_include_unstaged = include_unstaged;
+                vec![Effect::PersistGitIncludeUnstaged(include_unstaged)]
+            }
+        }
+        Action::ClearGitCommitError => {
+            state.git.commit_error = None;
+            Vec::new()
+        }
+        Action::CommitGit {
+            message,
+            include_unstaged,
+            next_step,
+        } => {
+            let message = message.trim().to_owned();
+            let commits = next_step != GitCommitNextStep::Push;
+            let invalid_message = commits
+                && (message.chars().count() > MAX_GIT_COMMIT_MESSAGE_CHARS
+                    || message.contains('\0'));
+            let no_selected_changes = commits
+                && if include_unstaged {
+                    state.git.changed_files == 0
+                } else {
+                    state.git.staged_files == 0
+                };
+            let no_commits_to_push = next_step == GitCommitNextStep::Push && state.git.ahead == 0;
+            if invalid_message {
+                state.git.commit_error =
+                    Some("Commit message must be at most 4,000 characters.".to_owned());
+                Vec::new()
+            } else if no_selected_changes {
+                state.git.commit_error = Some(if include_unstaged {
+                    "No changes to commit.".to_owned()
+                } else {
+                    "No staged changes to commit.".to_owned()
+                });
+                Vec::new()
+            } else if no_commits_to_push {
+                state.git.commit_error = Some("No commits to push.".to_owned());
+                Vec::new()
+            } else if state.git.pending_commit.is_some() || state.git.pending_pull_request.is_some()
+            {
+                Vec::new()
+            } else {
+                let Some(root) = state.git.repository_root.clone() else {
+                    state.git.commit_error = Some("No Git repository is selected.".to_owned());
+                    return Vec::new();
+                };
+                state.git.pending_commit = Some(if next_step == GitCommitNextStep::Push {
+                    GitCommitPhase::Pushing
+                } else if message.is_empty() {
+                    GitCommitPhase::GeneratingMessage
+                } else {
+                    GitCommitPhase::Committing
+                });
+                state.git.commit_error = None;
+                vec![Effect::CommitGit {
+                    root,
+                    branch: state.git.branch.clone(),
+                    message,
+                    include_unstaged,
+                    next_step,
+                    force_push: state.git_preferences.always_force_push,
+                    commit_instructions: state.git_preferences.commit_instructions.clone(),
+                }]
+            }
+        }
+        Action::GitCommitMessageGenerated => {
+            if state.git.pending_commit == Some(GitCommitPhase::GeneratingMessage) {
+                state.git.pending_commit = Some(GitCommitPhase::Committing);
+            }
+            Vec::new()
+        }
+        Action::GitPushStarted => {
+            if state.git.pending_commit.is_some() {
+                state.git.pending_commit = Some(GitCommitPhase::Pushing);
+            }
+            Vec::new()
+        }
+        Action::GitCommitCompleted { branch, pushed } => {
+            state.git.pending_commit = None;
+            state.git.commit_error = None;
+            state.status_message = Some(branch.filter(|branch| !branch.is_empty()).map_or_else(
+                || {
+                    if pushed {
+                        "Pushed your branch".to_owned()
+                    } else {
+                        "Committed to your branch".to_owned()
+                    }
+                },
+                |branch| {
+                    if pushed {
+                        format!("Pushed {branch}")
+                    } else {
+                        format!("Committed to {branch}")
+                    }
+                },
+            ));
+            Vec::new()
+        }
+        Action::GitCommitFailed { message } => {
+            state.git.pending_commit = None;
+            state.git.commit_error = Some(message.clone());
+            state.status_message = Some(message);
+            Vec::new()
+        }
+        Action::ClearGitPullRequestError => {
+            state.git.pull_request_error = None;
+            Vec::new()
+        }
+        Action::GitPullRequestStatusLoaded {
+            branch,
+            provider,
+            pull_request,
+        } => {
+            if state.git.branch.as_deref() != Some(branch.as_str()) {
+                return Vec::new();
+            }
+            state.git.pull_request_provider = provider;
+            state.git.pull_request = pull_request;
+            Vec::new()
+        }
+        Action::CreateGitPullRequest {
+            title,
+            body,
+            include_local_changes,
+            is_draft,
+            open_in_browser,
+        } => {
+            if state.git.pending_commit.is_some() || state.git.pending_pull_request.is_some() {
+                return Vec::new();
+            }
+            let Some(root) = state.git.repository_root.clone() else {
+                state.git.pull_request_error = Some("No Git repository is selected.".to_owned());
+                return Vec::new();
+            };
+            let Some(branch) = state.git.branch.clone() else {
+                state.git.pull_request_error = Some("Git has no current branch.".to_owned());
+                return Vec::new();
+            };
+            let Some(base_branch) = state.git.default_branch.clone() else {
+                state.git.pull_request_error = Some("Default branch is unavailable.".to_owned());
+                return Vec::new();
+            };
+            if branch == base_branch {
+                state.git.pull_request_error =
+                    Some("Switch to a branch before creating a pull request.".to_owned());
+                return Vec::new();
+            }
+            let provider_error = match state.git.pull_request_provider {
+                GitPullRequestProvider::Available => None,
+                GitPullRequestProvider::Loading | GitPullRequestProvider::Unknown => {
+                    Some("Loading pull request provider…")
+                }
+                GitPullRequestProvider::CliMissing => {
+                    Some("Install GitHub CLI (gh) to create PRs.")
+                }
+                GitPullRequestProvider::AuthenticationRequired => {
+                    Some("Authenticate GitHub CLI: run `gh auth login`.")
+                }
+                GitPullRequestProvider::Unavailable => Some("Pull request creation unavailable."),
+            };
+            if let Some(message) = provider_error {
+                state.git.pull_request_error = Some(message.to_owned());
+                return Vec::new();
+            }
+            if state.git.pull_request.is_some() {
+                state.git.pull_request_error =
+                    Some("A pull request already exists for this branch.".to_owned());
+                return Vec::new();
+            }
+            let title = title.trim().to_owned();
+            let body = body.trim().to_owned();
+            if title.chars().count() > MAX_GIT_PULL_REQUEST_TITLE_CHARS
+                || body.chars().count() > MAX_GIT_PULL_REQUEST_BODY_CHARS
+                || title.contains('\0')
+                || body.contains('\0')
+            {
+                state.git.pull_request_error =
+                    Some("Pull request title or description is too long.".to_owned());
+                return Vec::new();
+            }
+            let next_step = if include_local_changes && state.git.changed_files > 0 {
+                GitPullRequestNextStep::CommitPushAndCreate
+            } else if state.git.upstream_ref.is_none()
+                || include_local_changes && state.git.ahead > 0
+            {
+                GitPullRequestNextStep::PushAndCreate
+            } else {
+                GitPullRequestNextStep::Create
+            };
+            let generation_required = title.is_empty()
+                || body.is_empty()
+                || next_step == GitPullRequestNextStep::CommitPushAndCreate;
+            if generation_required && state.connection != ConnectionStatus::Online {
+                state.git.pull_request_error =
+                    Some("Generating pull request details requires app-server.".to_owned());
+                return Vec::new();
+            }
+            state.git.pending_pull_request = Some(if generation_required {
+                GitPullRequestPhase::GeneratingMessages
+            } else if next_step == GitPullRequestNextStep::PushAndCreate {
+                GitPullRequestPhase::Pushing
+            } else {
+                GitPullRequestPhase::Creating
+            });
+            state.git.pull_request_error = None;
+            vec![Effect::CreateGitPullRequest {
+                root,
+                branch,
+                base_branch,
+                title,
+                body,
+                include_local_changes,
+                next_step,
+                is_draft,
+                open_in_browser,
+                force_push: state.git_preferences.always_force_push,
+                commit_instructions: state.git_preferences.commit_instructions.clone(),
+                pull_request_instructions: state.git_preferences.pull_request_instructions.clone(),
+            }]
+        }
+        Action::GitPullRequestCommitStarted => {
+            if state.git.pending_pull_request.is_some() {
+                state.git.pending_pull_request = Some(GitPullRequestPhase::Committing);
+            }
+            Vec::new()
+        }
+        Action::GitPullRequestPushStarted => {
+            if state.git.pending_pull_request.is_some() {
+                state.git.pending_pull_request = Some(GitPullRequestPhase::Pushing);
+            }
+            Vec::new()
+        }
+        Action::GitPullRequestCreateStarted => {
+            if state.git.pending_pull_request.is_some() {
+                state.git.pending_pull_request = Some(GitPullRequestPhase::Creating);
+            }
+            Vec::new()
+        }
+        Action::GitPullRequestCompleted {
+            pull_request,
+            open_in_browser,
+        } => {
+            let branch = pull_request.head_branch.clone();
+            state.git.pending_pull_request = None;
+            state.git.pull_request_error = None;
+            state.git.pull_request_provider = GitPullRequestProvider::Available;
+            if !open_in_browser {
+                state.git.pull_request = Some(pull_request);
+            }
+            state.status_message = Some(if open_in_browser {
+                "Opened pull request in browser".to_owned()
+            } else if branch.is_empty() {
+                "Created PR for your branch".to_owned()
+            } else {
+                format!("Created PR for {branch}")
+            });
+            Vec::new()
+        }
+        Action::GitPullRequestFailed { message } => {
+            state.git.pending_pull_request = None;
+            state.git.pull_request_error = Some(message.clone());
+            state.status_message = Some(message);
+            Vec::new()
+        }
         Action::SwitchGitBranch(branch) => {
             let branch = branch.trim().to_owned();
             if branch.is_empty() || branch.len() > MAX_GIT_BRANCH_BYTES {
                 state.status_message = Some("Enter a valid Git branch name.".to_owned());
                 Vec::new()
+            } else if state.git.pending_branch_operation.is_some()
+                || state.git.branch.as_deref() == Some(branch.as_str())
+            {
+                Vec::new()
             } else {
-                state
-                    .git
-                    .repository_root
-                    .clone()
-                    .map(|root| vec![Effect::SwitchGitBranch { root, branch }])
-                    .unwrap_or_default()
+                let Some(root) = state.git.repository_root.clone() else {
+                    state.status_message = Some("No Git repository is selected.".to_owned());
+                    return Vec::new();
+                };
+                state.git.pending_branch_operation = Some(branch.clone());
+                state.git.branch_mutation_error = None;
+                state.git.branch_conflict = None;
+                vec![Effect::SwitchGitBranch { root, branch }]
             }
+        }
+        Action::CreateGitBranch(branch) => {
+            let branch = branch.trim().to_owned();
+            let invalid = branch.is_empty()
+                || branch.len() > MAX_GIT_BRANCH_BYTES
+                || branch.ends_with('/')
+                || state
+                    .git
+                    .branches
+                    .iter()
+                    .any(|candidate| candidate.name == branch);
+            if invalid {
+                state.git.branch_mutation_error = Some(
+                    if state
+                        .git
+                        .branches
+                        .iter()
+                        .any(|candidate| candidate.name == branch)
+                    {
+                        "Branch already exists.".to_owned()
+                    } else {
+                        "Enter a valid branch name that does not end with “/”.".to_owned()
+                    },
+                );
+                Vec::new()
+            } else if state.git.pending_branch_operation.is_some() {
+                Vec::new()
+            } else {
+                let Some(root) = state.git.repository_root.clone() else {
+                    state.status_message = Some("No Git repository is selected.".to_owned());
+                    return Vec::new();
+                };
+                state.git.pending_branch_operation = Some(branch.clone());
+                state.git.branch_mutation_error = None;
+                state.git.branch_conflict = None;
+                vec![Effect::CreateGitBranch { root, branch }]
+            }
+        }
+        Action::GitBranchMutationCompleted { message } => {
+            state.git.pending_branch_operation = None;
+            state.git.branch_mutation_error = None;
+            state.git.branch_conflict = None;
+            state.status_message = Some(message);
+            Vec::new()
+        }
+        Action::GitBranchMutationFailed { message } => {
+            state.git.pending_branch_operation = None;
+            state.git.branch_mutation_error = Some(bounded_string(message.clone(), 16 * 1024));
+            state.status_message = Some(bounded_string(message, 16 * 1024));
+            Vec::new()
+        }
+        Action::GitBranchSwitchBlocked {
+            branch,
+            create_branch,
+            mut paths,
+            truncated,
+        } => {
+            const MAX_CONFLICT_PATHS: usize = 100;
+            paths.truncate(MAX_CONFLICT_PATHS);
+            state.git.pending_branch_operation = None;
+            state.git.branch_mutation_error = None;
+            state.git.branch_conflict = Some(GitBranchConflictState {
+                branch: bounded_string(branch, MAX_GIT_BRANCH_BYTES),
+                create_branch,
+                paths,
+                truncated,
+            });
+            Vec::new()
+        }
+        Action::DismissGitBranchConflict => {
+            state.git.branch_conflict = None;
+            Vec::new()
+        }
+        Action::ClearGitBranchMutationError => {
+            state.git.branch_mutation_error = None;
+            Vec::new()
         }
         Action::CreateGitWorktree {
             path,
@@ -1208,49 +13105,143 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
-        Action::SpawnTerminal => {
-            if state.terminal.running {
-                Vec::new()
+        Action::SpawnTerminal => spawn_terminal_tab(state),
+        Action::SelectTerminalTab(tab_id) => {
+            let Some(task_id) = state
+                .terminal
+                .tabs
+                .iter()
+                .find(|tab| tab.id == tab_id)
+                .map(|tab| tab.task_id.clone())
+            else {
+                return Vec::new();
+            };
+            if state.selected_task_id.as_deref() == Some(task_id.as_str()) {
+                state.terminal.active_tab_ids.insert(task_id, tab_id);
+            }
+            Vec::new()
+        }
+        Action::CloseTerminalTab(tab_id) => {
+            let Some(index) = state.terminal.tabs.iter().position(|tab| tab.id == tab_id) else {
+                return Vec::new();
+            };
+            let tab = state.terminal.tabs.remove(index);
+            if state.terminal.active_tab_ids.get(&tab.task_id) == Some(&tab_id) {
+                if let Some(next_id) = state
+                    .terminal
+                    .tabs
+                    .iter()
+                    .rev()
+                    .find(|candidate| candidate.task_id == tab.task_id)
+                    .map(|candidate| candidate.id)
+                {
+                    state
+                        .terminal
+                        .active_tab_ids
+                        .insert(tab.task_id.clone(), next_id);
+                } else {
+                    state.terminal.active_tab_ids.remove(&tab.task_id);
+                    if state.selected_task_id.as_deref() == Some(tab.task_id.as_str()) {
+                        state.terminal_dock_open = false;
+                    }
+                }
+            }
+            if tab.running || tab.starting || tab.stopping {
+                vec![Effect::StopTerminal { tab_id }]
             } else {
-                state
-                    .selected_task_id
-                    .as_deref()
-                    .and_then(|task_id| state.tasks.iter().find(|task| task.id == task_id))
-                    .map(|task| {
-                        vec![Effect::SpawnTerminal {
-                            cwd: task.cwd.clone(),
-                        }]
-                    })
-                    .unwrap_or_else(|| {
-                        state.status_message =
-                            Some("Select a task before opening a terminal.".to_owned());
-                        Vec::new()
-                    })
+                Vec::new()
             }
         }
-        Action::TerminalStarted { process_id, title } => {
-            state.terminal.process_id = Some(process_id);
-            state.terminal.title = title;
-            state.terminal.running = true;
-            state.terminal.output.clear();
-            state.terminal.truncated = false;
-            state.terminal.exit_code = None;
+        Action::RestartTerminal => {
+            let Some(tab) = state
+                .selected_task_id
+                .as_deref()
+                .and_then(|task_id| state.terminal.active_tab_ids.get(task_id))
+                .and_then(|tab_id| state.terminal.tabs.iter_mut().find(|tab| tab.id == *tab_id))
+            else {
+                return Vec::new();
+            };
+            if tab.starting || tab.stopping {
+                return Vec::new();
+            }
+            tab.starting = true;
+            tab.running = false;
+            tab.stopping = false;
+            tab.process_id = None;
+            tab.output.clear();
+            tab.truncated = false;
+            tab.exit_code = None;
+            tab.error = None;
+            vec![Effect::RestartTerminal {
+                tab_id: tab.id,
+                cwd: tab.cwd.clone(),
+                shell: tab.shell,
+            }]
+        }
+        Action::TerminalStarted { tab_id, process_id } => {
+            if let Some(tab) = state.terminal.tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                tab.process_id = Some(process_id);
+                tab.starting = false;
+                tab.running = true;
+                tab.stopping = false;
+                tab.output.clear();
+                tab.truncated = false;
+                tab.exit_code = None;
+                tab.error = None;
+            }
             Vec::new()
         }
-        Action::TerminalScreen(screen) => {
+        Action::TerminalStartFailed { tab_id, message } => {
+            let message = bounded_string(message, 16 * 1024);
+            if let Some(tab) = state.terminal.tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                tab.starting = false;
+                tab.running = false;
+                tab.stopping = false;
+                tab.process_id = None;
+                tab.error = Some(message.clone());
+            }
+            state.status_message = Some(message);
+            Vec::new()
+        }
+        Action::TerminalTitleChanged { tab_id, title } => {
+            if let Some(tab) = state.terminal.tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                tab.title = bounded_string(title, 512);
+            }
+            Vec::new()
+        }
+        Action::TerminalScreen { tab_id, screen } => {
             const MAX_TERMINAL_BYTES: usize = 4 * 1024 * 1024;
-            state.terminal.output = bounded_string(screen, MAX_TERMINAL_BYTES);
-            state.terminal.truncated |= state.terminal.output.len() == MAX_TERMINAL_BYTES;
+            if let Some(tab) = state.terminal.tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                tab.output = bounded_string(screen, MAX_TERMINAL_BYTES);
+                tab.truncated |= tab.output.len() == MAX_TERMINAL_BYTES;
+            }
             Vec::new()
         }
-        Action::TerminalOutputTruncated => {
-            state.terminal.truncated = true;
+        Action::TerminalOutputTruncated(tab_id) => {
+            if let Some(tab) = state.terminal.tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                tab.truncated = true;
+            }
             Vec::new()
         }
         Action::SubmitTerminalInput(input) => {
             const MAX_TERMINAL_INPUT_BYTES: usize = 64 * 1024;
-            if state.terminal.running && input.len() <= MAX_TERMINAL_INPUT_BYTES {
-                vec![Effect::WriteTerminal { input }]
+            let active_tab_id = state
+                .selected_task_id
+                .as_deref()
+                .and_then(|task_id| state.terminal.active_tab_ids.get(task_id))
+                .copied();
+            let running = active_tab_id.is_some_and(|tab_id| {
+                state
+                    .terminal
+                    .tabs
+                    .iter()
+                    .any(|tab| tab.id == tab_id && tab.running && !tab.stopping)
+            });
+            if running && input.len() <= MAX_TERMINAL_INPUT_BYTES {
+                vec![Effect::WriteTerminal {
+                    tab_id: active_tab_id.unwrap_or_default(),
+                    input,
+                }]
             } else {
                 if input.len() > MAX_TERMINAL_INPUT_BYTES {
                     state.status_message = Some("Terminal input exceeds 64 KiB.".to_owned());
@@ -1259,16 +13250,28 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
         }
         Action::StopTerminal => {
-            if state.terminal.running {
-                vec![Effect::StopTerminal]
-            } else {
-                Vec::new()
+            let Some(tab) = state
+                .selected_task_id
+                .as_deref()
+                .and_then(|task_id| state.terminal.active_tab_ids.get(task_id))
+                .and_then(|tab_id| state.terminal.tabs.iter_mut().find(|tab| tab.id == *tab_id))
+            else {
+                return Vec::new();
+            };
+            if !tab.running || tab.stopping {
+                return Vec::new();
             }
+            tab.stopping = true;
+            vec![Effect::StopTerminal { tab_id: tab.id }]
         }
-        Action::TerminalExited { code } => {
-            state.terminal.running = false;
-            state.terminal.process_id = None;
-            state.terminal.exit_code = Some(code);
+        Action::TerminalExited { tab_id, code } => {
+            if let Some(tab) = state.terminal.tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                tab.starting = false;
+                tab.running = false;
+                tab.stopping = false;
+                tab.process_id = None;
+                tab.exit_code = Some(code);
+            }
             Vec::new()
         }
         Action::SetStatus(message) => {
@@ -1322,13 +13325,806 @@ fn bounded_string(mut value: String, limit: usize) -> String {
     value
 }
 
+fn normalize_user_input_request(request: &mut UserInputRequest) {
+    request.request_id = bounded_string(
+        request.request_id.trim().to_owned(),
+        MAX_MCP_SERVER_FIELD_BYTES,
+    );
+    request.task_id = bounded_string(
+        request.task_id.trim().to_owned(),
+        MAX_MCP_SERVER_FIELD_BYTES,
+    );
+    request.turn_id = bounded_string(
+        request.turn_id.trim().to_owned(),
+        MAX_MCP_SERVER_FIELD_BYTES,
+    );
+    request.item_id = bounded_string(
+        request.item_id.trim().to_owned(),
+        MAX_MCP_SERVER_FIELD_BYTES,
+    );
+    request.questions.truncate(MAX_USER_INPUT_QUESTIONS);
+    let mut question_ids = HashSet::new();
+    request.questions.retain_mut(|question| {
+        question.id = bounded_string(question.id.trim().to_owned(), MAX_MCP_SERVER_FIELD_BYTES);
+        question.header = bounded_string(
+            question.header.trim().to_owned(),
+            MAX_MCP_SERVER_FIELD_BYTES,
+        );
+        question.question = bounded_string(
+            question.question.trim().to_owned(),
+            MAX_MCP_SERVER_FIELD_BYTES,
+        );
+        question.options.truncate(MAX_USER_INPUT_OPTIONS);
+        let mut option_labels = HashSet::new();
+        question.options.retain_mut(|option| {
+            option.label =
+                bounded_string(option.label.trim().to_owned(), MAX_USER_INPUT_VALUE_BYTES);
+            option.description = bounded_string(
+                option.description.trim().to_owned(),
+                MAX_MCP_SERVER_FIELD_BYTES,
+            );
+            !option.label.is_empty() && option_labels.insert(option.label.clone())
+        });
+        !question.id.is_empty()
+            && !question.question.is_empty()
+            && question_ids.insert(question.id.clone())
+    });
+}
+
+#[must_use]
+pub fn validate_user_input_answers(
+    request: &UserInputRequest,
+    response: &UserInputAnswers,
+) -> bool {
+    if response.answers.len() > request.questions.len() {
+        return false;
+    }
+    let mut answered_questions = HashSet::new();
+    response.answers.iter().all(|answer| {
+        let Some(question) = request
+            .questions
+            .iter()
+            .find(|question| question.id == answer.question_id)
+        else {
+            return false;
+        };
+        if !answered_questions.insert(answer.question_id.as_str()) || answer.answers.len() != 1 {
+            return false;
+        }
+        let value = answer.answers[0].trim();
+        if value.is_empty() || value.len() > MAX_USER_INPUT_VALUE_BYTES {
+            return false;
+        }
+        question.options.is_empty()
+            || question.options.iter().any(|option| option.label == value)
+            || question.is_other
+    })
+}
+
+fn normalize_mcp_elicitation(request: &mut McpElicitation) {
+    match request {
+        McpElicitation::BrowserOrigin(request) => {
+            request.task_id = bounded_string(
+                request.task_id.trim().to_owned(),
+                MAX_MCP_SERVER_FIELD_BYTES,
+            );
+            request.turn_id = request
+                .turn_id
+                .take()
+                .map(|turn_id| {
+                    bounded_string(turn_id.trim().to_owned(), MAX_MCP_SERVER_FIELD_BYTES)
+                })
+                .filter(|turn_id| !turn_id.is_empty());
+            request.server_name = bounded_string(
+                request.server_name.trim().to_owned(),
+                MAX_MCP_SERVER_FIELD_BYTES,
+            );
+            request.source_name = bounded_string(
+                request.source_name.trim().to_owned(),
+                MAX_MCP_SERVER_FIELD_BYTES,
+            );
+            request.origin = bounded_string(
+                request.origin.trim().to_owned(),
+                MAX_BROWSER_PERMISSION_ORIGIN_BYTES,
+            );
+            request.reason = request
+                .reason
+                .take()
+                .map(|reason| bounded_string(reason.trim().to_owned(), MAX_MCP_SERVER_FIELD_BYTES))
+                .filter(|reason| !reason.is_empty());
+            request.message = bounded_string(
+                request.message.trim().to_owned(),
+                MAX_MCP_SERVER_FIELD_BYTES,
+            );
+        }
+        McpElicitation::BrowserResource(request) => {
+            request.task_id = bounded_string(
+                request.task_id.trim().to_owned(),
+                MAX_MCP_SERVER_FIELD_BYTES,
+            );
+            request.turn_id = request
+                .turn_id
+                .take()
+                .map(|turn_id| {
+                    bounded_string(turn_id.trim().to_owned(), MAX_MCP_SERVER_FIELD_BYTES)
+                })
+                .filter(|turn_id| !turn_id.is_empty());
+            request.server_name = bounded_string(
+                request.server_name.trim().to_owned(),
+                MAX_MCP_SERVER_FIELD_BYTES,
+            );
+            request.source_name = bounded_string(
+                request.source_name.trim().to_owned(),
+                MAX_MCP_SERVER_FIELD_BYTES,
+            );
+            request.origin = bounded_string(
+                request.origin.trim().to_owned(),
+                MAX_BROWSER_PERMISSION_ORIGIN_BYTES,
+            );
+            request.message = bounded_string(
+                request.message.trim().to_owned(),
+                MAX_MCP_SERVER_FIELD_BYTES,
+            );
+            request.reason = request
+                .reason
+                .take()
+                .map(|reason| bounded_string(reason.trim().to_owned(), MAX_MCP_SERVER_FIELD_BYTES))
+                .filter(|reason| !reason.is_empty());
+        }
+        McpElicitation::Url(request) => {
+            request.task_id = bounded_string(
+                request.task_id.trim().to_owned(),
+                MAX_MCP_SERVER_FIELD_BYTES,
+            );
+            request.turn_id = request
+                .turn_id
+                .take()
+                .map(|turn_id| {
+                    bounded_string(turn_id.trim().to_owned(), MAX_MCP_SERVER_FIELD_BYTES)
+                })
+                .filter(|turn_id| !turn_id.is_empty());
+            request.server_name = bounded_string(
+                request.server_name.trim().to_owned(),
+                MAX_MCP_SERVER_FIELD_BYTES,
+            );
+            request.elicitation_id = bounded_string(
+                request.elicitation_id.trim().to_owned(),
+                MAX_MCP_SERVER_FIELD_BYTES,
+            );
+            request.message = bounded_string(
+                request.message.trim().to_owned(),
+                MAX_MCP_SERVER_FIELD_BYTES,
+            );
+            request.url = bounded_string(request.url.trim().to_owned(), MAX_MCP_SERVER_FIELD_BYTES);
+            request.link_opened = false;
+        }
+        McpElicitation::Form(request) => {
+            request.task_id = bounded_string(
+                request.task_id.trim().to_owned(),
+                MAX_MCP_SERVER_FIELD_BYTES,
+            );
+            request.turn_id = request
+                .turn_id
+                .take()
+                .map(|turn_id| {
+                    bounded_string(turn_id.trim().to_owned(), MAX_MCP_SERVER_FIELD_BYTES)
+                })
+                .filter(|turn_id| !turn_id.is_empty());
+            request.server_name = bounded_string(
+                request.server_name.trim().to_owned(),
+                MAX_MCP_SERVER_FIELD_BYTES,
+            );
+            request.message = bounded_string(
+                request.message.trim().to_owned(),
+                MAX_MCP_SERVER_FIELD_BYTES,
+            );
+            request.fields.truncate(MAX_MCP_FORM_FIELDS);
+            let mut names = HashSet::new();
+            request.fields.retain_mut(|field| {
+                field.name =
+                    bounded_string(field.name.trim().to_owned(), MAX_MCP_SERVER_FIELD_BYTES);
+                if field.name.is_empty() || !names.insert(field.name.clone()) {
+                    return false;
+                }
+                field.title =
+                    bounded_string(field.title.trim().to_owned(), MAX_MCP_SERVER_FIELD_BYTES);
+                if field.title.is_empty() {
+                    field.title = field.name.clone();
+                }
+                field.description = field
+                    .description
+                    .take()
+                    .map(|description| {
+                        bounded_string(description.trim().to_owned(), MAX_MCP_SERVER_FIELD_BYTES)
+                    })
+                    .filter(|description| !description.is_empty());
+                normalize_mcp_form_field(field);
+                true
+            });
+        }
+    }
+}
+
+fn normalize_mcp_form_field(field: &mut McpFormField) {
+    match &mut field.kind {
+        McpFormFieldKind::String {
+            min_length,
+            max_length,
+            ..
+        } => {
+            *min_length = min_length.map(|value| value.min(MAX_MCP_FORM_VALUE_BYTES));
+            *max_length = max_length.map(|value| value.min(MAX_MCP_FORM_VALUE_BYTES));
+        }
+        McpFormFieldKind::SingleSelect { options }
+        | McpFormFieldKind::MultiSelect { options, .. } => {
+            options.truncate(MAX_MCP_FORM_OPTIONS);
+            let mut values = HashSet::new();
+            options.retain_mut(|option| {
+                option.value =
+                    bounded_string(option.value.trim().to_owned(), MAX_MCP_FORM_VALUE_BYTES);
+                if option.value.is_empty() || !values.insert(option.value.clone()) {
+                    return false;
+                }
+                option.label =
+                    bounded_string(option.label.trim().to_owned(), MAX_MCP_SERVER_FIELD_BYTES);
+                if option.label.is_empty() {
+                    option.label = option.value.clone();
+                }
+                true
+            });
+        }
+        McpFormFieldKind::ImagePicker { items } => {
+            items.truncate(MAX_MCP_FORM_OPTIONS);
+            let mut values = HashSet::new();
+            items.retain_mut(|item| {
+                item.value = bounded_string(item.value.clone(), MAX_MCP_FORM_VALUE_BYTES);
+                if item.value.trim().is_empty()
+                    || item.image_data_url.len() > MAX_MCP_FORM_IMAGE_DATA_URL_BYTES
+                    || !values.insert(item.value.clone())
+                {
+                    return false;
+                }
+                item.title = bounded_string(item.title.clone(), MAX_MCP_SERVER_FIELD_BYTES);
+                if item.title.trim().is_empty() {
+                    item.title = item.value.clone();
+                }
+                true
+            });
+        }
+        McpFormFieldKind::Boolean => {}
+        McpFormFieldKind::Number {
+            minimum, maximum, ..
+        } => {
+            *minimum = minimum
+                .take()
+                .map(|value| bounded_string(value, MAX_MCP_FORM_VALUE_BYTES));
+            *maximum = maximum
+                .take()
+                .map(|value| bounded_string(value, MAX_MCP_FORM_VALUE_BYTES));
+        }
+    }
+    if let Some(default) = &mut field.default {
+        match default {
+            McpElicitationValue::String(value) | McpElicitationValue::Number(value) => {
+                *value = bounded_string(value.clone(), MAX_MCP_FORM_VALUE_BYTES);
+            }
+            McpElicitationValue::Boolean(_) => {}
+            McpElicitationValue::Strings(values) => {
+                values.truncate(MAX_MCP_FORM_OPTIONS);
+                for value in values {
+                    *value = bounded_string(value.clone(), MAX_MCP_FORM_VALUE_BYTES);
+                }
+            }
+        }
+    }
+}
+
+pub fn validate_mcp_form_content(
+    request: &McpFormElicitation,
+    content: &McpElicitationContent,
+) -> Vec<String> {
+    let mut invalid = Vec::new();
+    if content.fields.len() > MAX_MCP_FORM_FIELDS {
+        invalid.push(String::new());
+        return invalid;
+    }
+
+    let mut values = HashMap::new();
+    for (name, value) in &content.fields {
+        if name.is_empty()
+            || name.len() > MAX_MCP_SERVER_FIELD_BYTES
+            || values.insert(name.as_str(), value).is_some()
+            || !request.fields.iter().any(|field| field.name == *name)
+        {
+            invalid.push(bounded_string(name.clone(), MAX_MCP_SERVER_FIELD_BYTES));
+        }
+    }
+
+    for field in &request.fields {
+        let value = values.get(field.name.as_str()).copied();
+        let valid = match (&field.kind, value) {
+            (
+                McpFormFieldKind::String {
+                    min_length,
+                    max_length,
+                    format,
+                },
+                Some(McpElicitationValue::String(value)),
+            ) => {
+                let active = field.required || !value.is_empty();
+                !active
+                    || value.len() <= MAX_MCP_FORM_VALUE_BYTES
+                        && min_length.is_none_or(|minimum| value.chars().count() >= minimum)
+                        && max_length.is_none_or(|maximum| value.chars().count() <= maximum)
+                        && format.is_none_or(|format| mcp_form_string_matches(format, value))
+            }
+            (McpFormFieldKind::String { .. }, None) => !field.required,
+            (
+                McpFormFieldKind::SingleSelect { options },
+                Some(McpElicitationValue::String(value)),
+            ) => {
+                let active = field.required || !value.is_empty();
+                !active
+                    || value.len() <= MAX_MCP_FORM_VALUE_BYTES
+                        && options.iter().any(|option| option.value == *value)
+            }
+            (McpFormFieldKind::SingleSelect { .. }, None) => !field.required,
+            (McpFormFieldKind::ImagePicker { items }, Some(McpElicitationValue::String(value))) => {
+                let active = field.required || !value.is_empty();
+                !active
+                    || value.len() <= MAX_MCP_FORM_VALUE_BYTES
+                        && items.iter().any(|item| item.value == *value)
+            }
+            (McpFormFieldKind::ImagePicker { .. }, None) => !field.required,
+            (
+                McpFormFieldKind::MultiSelect {
+                    options,
+                    min_items,
+                    max_items,
+                },
+                Some(McpElicitationValue::Strings(selected)),
+            ) => {
+                let active = field.required || !selected.is_empty();
+                !active
+                    || selected.len() <= MAX_MCP_FORM_OPTIONS
+                        && min_items.is_none_or(|minimum| selected.len() >= minimum)
+                        && max_items.is_none_or(|maximum| selected.len() <= maximum)
+                        && selected.iter().all(|value| {
+                            value.len() <= MAX_MCP_FORM_VALUE_BYTES
+                                && options.iter().any(|option| option.value == *value)
+                        })
+            }
+            (McpFormFieldKind::MultiSelect { .. }, None) => !field.required,
+            (McpFormFieldKind::Boolean, Some(McpElicitationValue::Boolean(_))) => true,
+            (McpFormFieldKind::Boolean, None) => !field.required,
+            (
+                McpFormFieldKind::Number {
+                    integer,
+                    minimum,
+                    maximum,
+                },
+                Some(McpElicitationValue::Number(value)),
+            ) => {
+                let active = field.required || !value.is_empty();
+                !active
+                    || value.len() <= MAX_MCP_FORM_VALUE_BYTES
+                        && value.parse::<f64>().ok().is_some_and(|number| {
+                            number.is_finite()
+                                && (!integer || number.fract() == 0.0)
+                                && minimum
+                                    .as_deref()
+                                    .and_then(|minimum| minimum.parse::<f64>().ok())
+                                    .is_none_or(|minimum| number >= minimum)
+                                && maximum
+                                    .as_deref()
+                                    .and_then(|maximum| maximum.parse::<f64>().ok())
+                                    .is_none_or(|maximum| number <= maximum)
+                        })
+            }
+            (McpFormFieldKind::Number { .. }, None) => !field.required,
+            _ => false,
+        };
+        if !valid {
+            invalid.push(field.name.clone());
+        }
+    }
+    invalid.sort();
+    invalid.dedup();
+    invalid
+}
+
+fn mcp_form_string_matches(format: McpFormStringFormat, value: &str) -> bool {
+    match format {
+        McpFormStringFormat::Email => {
+            !value.chars().any(char::is_whitespace)
+                && value.split_once('@').is_some_and(|(local, domain)| {
+                    !local.is_empty()
+                        && !domain.is_empty()
+                        && domain.contains('.')
+                        && !domain.starts_with('.')
+                        && !domain.ends_with('.')
+                })
+        }
+        McpFormStringFormat::Uri => {
+            !value.chars().any(char::is_whitespace)
+                && value.split_once(':').is_some_and(|(scheme, rest)| {
+                    !rest.is_empty()
+                        && scheme.chars().enumerate().all(|(index, character)| {
+                            if index == 0 {
+                                character.is_ascii_alphabetic()
+                            } else {
+                                character.is_ascii_alphanumeric()
+                                    || matches!(character, '+' | '-' | '.')
+                            }
+                        })
+                })
+        }
+        McpFormStringFormat::Date => valid_iso_date(value),
+        McpFormStringFormat::DateTime => valid_rfc3339_datetime(value),
+    }
+}
+
+fn valid_iso_date(value: &str) -> bool {
+    if value.len() != 10
+        || value.as_bytes().get(4) != Some(&b'-')
+        || value.as_bytes().get(7) != Some(&b'-')
+    {
+        return false;
+    }
+    let year = value.get(0..4).and_then(|value| value.parse::<u32>().ok());
+    let month = value.get(5..7).and_then(|value| value.parse::<u32>().ok());
+    let day = value.get(8..10).and_then(|value| value.parse::<u32>().ok());
+    let (Some(year), Some(month), Some(day)) = (year, month, day) else {
+        return false;
+    };
+    let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+    let maximum = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=maximum).contains(&day)
+}
+
+fn valid_rfc3339_datetime(value: &str) -> bool {
+    if value.len() < 20 || !valid_iso_date(value.get(..10).unwrap_or_default()) {
+        return false;
+    }
+    let bytes = value.as_bytes();
+    if !matches!(bytes.get(10), Some(b'T' | b't'))
+        || bytes.get(13) != Some(&b':')
+        || bytes.get(16) != Some(&b':')
+    {
+        return false;
+    }
+    let hour = value
+        .get(11..13)
+        .and_then(|value| value.parse::<u32>().ok());
+    let minute = value
+        .get(14..16)
+        .and_then(|value| value.parse::<u32>().ok());
+    let second = value
+        .get(17..19)
+        .and_then(|value| value.parse::<u32>().ok());
+    if !matches!(
+        (hour, minute, second),
+        (Some(0..=23), Some(0..=59), Some(0..=59))
+    ) {
+        return false;
+    }
+    let suffix = &value[19..];
+    if matches!(suffix, "Z" | "z") {
+        return true;
+    }
+    let timezone_start = suffix
+        .char_indices()
+        .find_map(|(index, character)| matches!(character, '+' | '-').then_some(index));
+    let Some(timezone_start) = timezone_start else {
+        return false;
+    };
+    let fraction = &suffix[..timezone_start];
+    if !fraction.is_empty()
+        && (!fraction.starts_with('.')
+            || fraction.len() == 1
+            || !fraction[1..]
+                .chars()
+                .all(|character| character.is_ascii_digit()))
+    {
+        return false;
+    }
+    let timezone = &suffix[timezone_start..];
+    timezone.len() == 6
+        && timezone.as_bytes().get(3) == Some(&b':')
+        && timezone
+            .get(1..3)
+            .and_then(|value| value.parse::<u32>().ok())
+            .is_some_and(|hour| hour <= 23)
+        && timezone
+            .get(4..6)
+            .and_then(|value| value.parse::<u32>().ok())
+            .is_some_and(|minute| minute <= 59)
+}
+
+fn sanitize_mcp_server_draft(mut draft: McpServerDraft) -> Result<McpServerDraft, String> {
+    draft.name = bounded_string(draft.name.trim().to_owned(), MAX_MCP_SERVER_FIELD_BYTES);
+    draft.command = bounded_string(draft.command.trim().to_owned(), MAX_MCP_SERVER_FIELD_BYTES);
+    draft.cwd = bounded_string(draft.cwd.trim().to_owned(), MAX_MCP_SERVER_FIELD_BYTES);
+    draft.url = bounded_string(draft.url.trim().to_owned(), MAX_MCP_SERVER_FIELD_BYTES);
+    draft.bearer_token_env_var = bounded_string(
+        draft.bearer_token_env_var.trim().to_owned(),
+        MAX_MCP_SERVER_FIELD_BYTES,
+    );
+    sanitize_mcp_string_list(&mut draft.args);
+    sanitize_mcp_string_list(&mut draft.env_vars);
+    sanitize_mcp_record(&mut draft.env);
+    sanitize_mcp_record(&mut draft.http_headers);
+    sanitize_mcp_record(&mut draft.env_http_headers);
+
+    if draft.name.is_empty() {
+        return Err("Enter an MCP server name.".to_owned());
+    }
+    match draft.transport {
+        McpTransportKind::Stdio if draft.command.is_empty() => {
+            Err("Enter the command used to launch the MCP server.".to_owned())
+        }
+        McpTransportKind::StreamableHttp if draft.url.is_empty() => {
+            Err("Enter the MCP server URL.".to_owned())
+        }
+        _ => Ok(draft),
+    }
+}
+
+fn sanitize_mcp_string_list(items: &mut Vec<String>) {
+    items.truncate(MAX_MCP_SERVER_LIST_ITEMS);
+    for item in items.iter_mut() {
+        *item = bounded_string(item.trim().to_owned(), MAX_MCP_SERVER_FIELD_BYTES);
+    }
+    items.retain(|item| !item.is_empty());
+}
+
+fn sanitize_mcp_record(items: &mut Vec<(String, String)>) {
+    items.truncate(MAX_MCP_SERVER_LIST_ITEMS);
+    for (key, value) in items.iter_mut() {
+        *key = bounded_string(key.trim().to_owned(), MAX_MCP_SERVER_FIELD_BYTES);
+        *value = bounded_string(value.trim().to_owned(), MAX_MCP_SERVER_FIELD_BYTES);
+    }
+    items.retain(|(key, value)| !key.is_empty() && !value.is_empty());
+}
+
+fn sanitize_mcp_inspection_field(value: &mut String, truncated: &mut bool) {
+    let normalized = value.trim().to_owned();
+    *truncated |= normalized.len() > MAX_MCP_SERVER_FIELD_BYTES;
+    *value = bounded_string(normalized, MAX_MCP_SERVER_FIELD_BYTES);
+}
+
+fn sanitize_mcp_optional_inspection_field(value: &mut Option<String>, truncated: &mut bool) {
+    if let Some(value) = value {
+        sanitize_mcp_inspection_field(value, truncated);
+    }
+    if value.as_ref().is_some_and(String::is_empty) {
+        *value = None;
+    }
+}
+
+fn next_mcp_server_key<'a>(label: &str, existing_keys: impl Iterator<Item = &'a str>) -> String {
+    let mut normalized = String::new();
+    let mut previous_whitespace = false;
+    for character in label.trim().chars() {
+        if character.is_whitespace() {
+            if !previous_whitespace {
+                normalized.push('_');
+            }
+            previous_whitespace = true;
+            continue;
+        }
+        previous_whitespace = false;
+        if character.is_ascii_alphanumeric() || character == '_' {
+            normalized.push(character.to_ascii_lowercase());
+        } else if character == '-' {
+            if !normalized.ends_with('-') {
+                normalized.push('-');
+            }
+        } else if !normalized.ends_with('-') {
+            normalized.push('-');
+        }
+    }
+    if normalized.is_empty() {
+        normalized = "custom-server".to_owned();
+    }
+
+    let existing_keys = existing_keys.collect::<Vec<_>>();
+    if !existing_keys.contains(&normalized.as_str()) {
+        return normalized;
+    }
+    let mut suffix = 2_u32;
+    loop {
+        let candidate = format!("{normalized}-{suffix}");
+        if !existing_keys.contains(&candidate.as_str()) {
+            return candidate;
+        }
+        suffix = suffix.saturating_add(1);
+    }
+}
+
+fn sanitize_mcp_servers(
+    servers: &mut Vec<McpServerCard>,
+    authorization_urls: &HashMap<String, String>,
+) {
+    servers.truncate(MAX_MCP_SERVER_ITEMS);
+    for server in servers.iter_mut() {
+        server.key = bounded_string(server.key.trim().to_owned(), 512);
+        server.name = bounded_string(server.name.trim().to_owned(), 512);
+        server.command =
+            bounded_string(server.command.trim().to_owned(), MAX_MCP_SERVER_FIELD_BYTES);
+        server.cwd = bounded_string(server.cwd.trim().to_owned(), MAX_MCP_SERVER_FIELD_BYTES);
+        server.url = bounded_string(server.url.trim().to_owned(), MAX_MCP_SERVER_FIELD_BYTES);
+        server.bearer_token_env_var = bounded_string(
+            server.bearer_token_env_var.trim().to_owned(),
+            MAX_MCP_SERVER_FIELD_BYTES,
+        );
+        sanitize_mcp_string_list(&mut server.args);
+        sanitize_mcp_string_list(&mut server.env_vars);
+        sanitize_mcp_record(&mut server.env);
+        sanitize_mcp_record(&mut server.http_headers);
+        sanitize_mcp_record(&mut server.env_http_headers);
+        server.startup_error = server
+            .startup_error
+            .take()
+            .map(|error| bounded_string(error.trim().to_owned(), 4 * 1024))
+            .filter(|error| !error.is_empty());
+        server.authorization_url = server
+            .authorization_url
+            .take()
+            .or_else(|| authorization_urls.get(&server.key).cloned())
+            .map(|url| bounded_string(url.trim().to_owned(), 8 * 1024))
+            .filter(|url| !url.is_empty());
+        let mut inspection_truncated = server.inspection_truncated
+            || server.tools.len() > MAX_MCP_SERVER_LIST_ITEMS
+            || server.resources.len() > MAX_MCP_SERVER_LIST_ITEMS
+            || server.resource_templates.len() > MAX_MCP_SERVER_LIST_ITEMS;
+        if let Some(info) = &mut server.server_info {
+            sanitize_mcp_inspection_field(&mut info.name, &mut inspection_truncated);
+            sanitize_mcp_inspection_field(&mut info.version, &mut inspection_truncated);
+            sanitize_mcp_optional_inspection_field(&mut info.title, &mut inspection_truncated);
+            sanitize_mcp_optional_inspection_field(
+                &mut info.description,
+                &mut inspection_truncated,
+            );
+            sanitize_mcp_optional_inspection_field(
+                &mut info.website_url,
+                &mut inspection_truncated,
+            );
+        }
+        server.tools.truncate(MAX_MCP_SERVER_LIST_ITEMS);
+        for tool in &mut server.tools {
+            sanitize_mcp_inspection_field(&mut tool.name, &mut inspection_truncated);
+            sanitize_mcp_optional_inspection_field(&mut tool.title, &mut inspection_truncated);
+            sanitize_mcp_optional_inspection_field(
+                &mut tool.description,
+                &mut inspection_truncated,
+            );
+            sanitize_mcp_inspection_field(&mut tool.input_schema, &mut inspection_truncated);
+            sanitize_mcp_optional_inspection_field(
+                &mut tool.output_schema,
+                &mut inspection_truncated,
+            );
+        }
+        server.tools.retain(|tool| !tool.name.is_empty());
+        server.resources.truncate(MAX_MCP_SERVER_LIST_ITEMS);
+        for resource in &mut server.resources {
+            sanitize_mcp_inspection_field(&mut resource.name, &mut inspection_truncated);
+            sanitize_mcp_inspection_field(&mut resource.uri, &mut inspection_truncated);
+            sanitize_mcp_optional_inspection_field(&mut resource.title, &mut inspection_truncated);
+            sanitize_mcp_optional_inspection_field(
+                &mut resource.description,
+                &mut inspection_truncated,
+            );
+            sanitize_mcp_optional_inspection_field(
+                &mut resource.mime_type,
+                &mut inspection_truncated,
+            );
+        }
+        server
+            .resources
+            .retain(|resource| !resource.name.is_empty() && !resource.uri.is_empty());
+        server
+            .resource_templates
+            .truncate(MAX_MCP_SERVER_LIST_ITEMS);
+        for template in &mut server.resource_templates {
+            sanitize_mcp_inspection_field(&mut template.name, &mut inspection_truncated);
+            sanitize_mcp_inspection_field(&mut template.uri_template, &mut inspection_truncated);
+            sanitize_mcp_optional_inspection_field(&mut template.title, &mut inspection_truncated);
+            sanitize_mcp_optional_inspection_field(
+                &mut template.description,
+                &mut inspection_truncated,
+            );
+            sanitize_mcp_optional_inspection_field(
+                &mut template.mime_type,
+                &mut inspection_truncated,
+            );
+        }
+        server
+            .resource_templates
+            .retain(|template| !template.name.is_empty() && !template.uri_template.is_empty());
+        server.inspection_truncated = inspection_truncated;
+    }
+    servers.retain(|server| !server.key.is_empty() && !server.name.is_empty());
+}
+
+fn composer_attachment(path: PathBuf) -> Option<ComposerAttachment> {
+    if !path.is_absolute() {
+        return None;
+    }
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| path.display().to_string());
+    let kind = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .filter(|extension| {
+            matches!(
+                extension.as_str(),
+                "avif" | "bmp" | "gif" | "jpeg" | "jpg" | "png" | "webp"
+            )
+        })
+        .map_or(ComposerAttachmentKind::Mention, |_| {
+            ComposerAttachmentKind::LocalImage
+        });
+    Some(ComposerAttachment {
+        path,
+        name: bounded_string(name, MAX_ATTACHMENT_LABEL_BYTES),
+        kind,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::sync::Arc;
 
     use super::{
-        Action, AppState, ComputerUseState, Effect, LoadStatus, MainRoute, TaskRunStatus,
-        TaskSummary, reduce, stable_reference,
+        APPEARANCE_CODE_THEMES, AccountAuthOperation, AccountCredits, AccountKind, AccountProfile,
+        Action, AgentConfigScope, AgentConfigScopeKind, AgentConfigurationMutationKind, AppCard,
+        AppDetailView, AppState, AppToolCard, AppearancePalette, AppearancePreferences,
+        AppearanceTheme, AppearanceVariant, ApprovalContext, ApprovalDecision, ApprovalKind,
+        ApprovalRequest, ApprovalsReviewer, ArchivedTaskDeleteKind, ArtifactPreview,
+        ArtifactPreviewKind, ArtifactState, BackgroundTerminal, BrowserApprovalMode,
+        BrowserDownloadPreferences, BrowserDownloadState, BrowserDownloadStatus, BrowserKeyInput,
+        BrowserMouseButton, BrowserOriginElicitationDecision, BrowserPermissionResource,
+        BrowserPermissionValue, BrowserPermissionsState, BrowserResourceElicitationDecision,
+        BrowserSitePermission, BrowserTabState, CommandApprovalContext, ComposerAttachment,
+        ComposerAttachmentKind, ComputerApplicationState, ComputerUseState, ConnectionStatus,
+        DiffMarkerStyle, Effect, FeedbackClassification, FuzzyFileMatchType, FuzzyFileResult,
+        GitCommitNextStep, GitCommitPhase, GitDiffScope, GitPreferences, GitPullRequestNextStep,
+        GitPullRequestPhase, GitPullRequestProvider, GitPullRequestState, GitReviewMode, GitState,
+        GitWorktreeState, HookCard, HookEventName, HookHandlerType, HookProjectEntry, HookSource,
+        HookTrustStatus, InspectorPane, IntegratedTerminalShell, KeyboardShortcutPreferences,
+        KeyboardShortcutUpdateTarget, LoadStatus, MAX_BROWSER_DOWNLOADS, MAX_COMPOSER_BYTES,
+        MAX_GIT_INSTRUCTIONS_BYTES, MAX_PLUGIN_DETAIL_ITEMS, MAX_TURN_DIFF_BYTES, MainRoute,
+        MarketplaceManageTab, MarketplaceSectionFilter, MarketplaceSourceCard, MarketplaceTab,
+        MarketplaceUpgradeFailure, McpAuthStatus, McpBrowserOriginElicitation,
+        McpBrowserResourceElicitation, McpElicitation, McpElicitationContent,
+        McpElicitationDecision, McpElicitationValue, McpFormElicitation, McpFormField,
+        McpFormFieldKind, McpFormImagePickerItem, McpFormOption, McpFormStringFormat,
+        McpResourceCard, McpResourceContentCard, McpServerCard, McpServerDraft,
+        McpServerStartupFailureReason, McpServerStartupState, McpTransportKind, McpUrlElicitation,
+        ModelOption, OutputArtifact, OutputArtifactKind, PendingWorktreeForkPhase,
+        PermissionProfileOption, PermissionRequirements, Personality, PersonalizationMutationKind,
+        PluginCard, PluginDetailItem, PluginDetailView, PluginDirectoryTab,
+        PluginScheduledTaskCard, PluginSkillDetail, PullRequestCiStatus, PullRequestDetail,
+        PullRequestDetailTab, PullRequestIdentity, PullRequestLifecycle, PullRequestMergeMethod,
+        PullRequestMutation, PullRequestMutationKind, PullRequestRelationship,
+        PullRequestReviewEvent, PullRequestState, PullRequestSummary, ReasoningEffortOption,
+        ServiceTierOption, SkillCard, SkillScope, TaskRunStatus, TaskSearchResult, TaskSummary,
+        TerminalDockLocation, ThreadGoal, ThreadGoalStatus, TimelineItem, TimelineKind,
+        UsageLimitWindow, UserInputAnswer, UserInputAnswers, UserInputOption, UserInputQuestion,
+        UserInputRequest, appearance_code_theme_supports_variant, computer_app_id_matches,
+        permission_mode_options, reduce, stable_reference, validate_mcp_form_content,
     };
 
     fn task(id: &str) -> TaskSummary {
@@ -1337,10 +14133,59 @@ mod tests {
             title: "Task".to_owned(),
             preview: String::new(),
             cwd: PathBuf::from("C:\\repo"),
+            created_at: 0,
             updated_at: 0,
             parent_task_id: None,
             forked_from_id: None,
             status: TaskRunStatus::Idle,
+        }
+    }
+
+    fn pull_request(number: u64) -> PullRequestSummary {
+        PullRequestSummary {
+            identity: PullRequestIdentity {
+                hostname: "github.com".to_owned(),
+                owner: "openai".to_owned(),
+                repository: "codex".to_owned(),
+                number,
+            },
+            node_id: format!("PR_{number}"),
+            title: "Native pull request inbox".to_owned(),
+            url: format!("https://github.com/openai/codex/pull/{number}"),
+            state: PullRequestState::Open,
+            is_draft: false,
+            author_login: Some("octocat".to_owned()),
+            base_branch: "main".to_owned(),
+            head_branch: "feature/native-inbox".to_owned(),
+            additions: 42,
+            deletions: 7,
+            created_at: "2026-07-24T00:00:00Z".to_owned(),
+            updated_at: "2026-07-25T00:00:00Z".to_owned(),
+            ci_status: PullRequestCiStatus::Passing,
+            is_author: false,
+        }
+    }
+
+    fn model(id: &str, is_default: bool, default_effort: &str) -> ModelOption {
+        ModelOption {
+            id: id.to_owned(),
+            display_name: id.to_owned(),
+            description: String::new(),
+            is_default,
+            default_effort: default_effort.to_owned(),
+            supported_efforts: ["low", "medium", "high", "xhigh"]
+                .into_iter()
+                .map(|effort| ReasoningEffortOption {
+                    id: effort.to_owned(),
+                    description: String::new(),
+                })
+                .collect(),
+            service_tiers: vec![ServiceTierOption {
+                id: "priority".to_owned(),
+                name: "Fast".to_owned(),
+                description: "1.5x speed, increased usage".to_owned(),
+            }],
+            default_service_tier: None,
         }
     }
 
@@ -1377,6 +14222,1862 @@ mod tests {
     }
 
     #[test]
+    fn approval_reducer_preserves_the_typed_stable_decision() {
+        let mut state = AppState {
+            tasks: vec![task("thread-1")],
+            ..AppState::default()
+        };
+        let amendment = vec!["cargo".to_owned(), "test".to_owned()];
+        let request = ApprovalRequest {
+            request_id: "approval-command-1".to_owned(),
+            task_id: "thread-1".to_owned(),
+            turn_id: Some("turn-1".to_owned()),
+            kind: ApprovalKind::Command,
+            title: "Allow ChatGPT to run this command?".to_owned(),
+            detail: "cargo test".to_owned(),
+            context: ApprovalContext::Command(CommandApprovalContext {
+                item_id: "command-1".to_owned(),
+                command: "cargo test".to_owned(),
+                reason: None,
+                network_approval_context: None,
+                proposed_execpolicy_amendment: Some(amendment.clone()),
+                proposed_network_policy_amendment: None,
+            }),
+        };
+
+        assert!(reduce(&mut state, Action::ApprovalRequested(request)).is_empty());
+        assert_eq!(state.tasks[0].status, TaskRunStatus::WaitingForApproval);
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::ResolveApproval {
+                    request_id: "approval-command-1".to_owned(),
+                    decision: ApprovalDecision::AcceptWithExecpolicyAmendment(amendment.clone()),
+                },
+            ),
+            vec![Effect::RespondApproval {
+                request_id: "approval-command-1".to_owned(),
+                decision: ApprovalDecision::AcceptWithExecpolicyAmendment(amendment),
+            }]
+        );
+        assert!(state.approvals.is_empty());
+    }
+
+    #[test]
+    fn structured_user_input_queues_and_returns_the_selected_answer() {
+        let mut state = AppState {
+            tasks: vec![task("thread-1")],
+            ..AppState::default()
+        };
+        let request = UserInputRequest {
+            request_id: "request-input-1".to_owned(),
+            task_id: "thread-1".to_owned(),
+            turn_id: "turn-1".to_owned(),
+            item_id: "item-1".to_owned(),
+            auto_resolution_ms: None,
+            questions: vec![UserInputQuestion {
+                id: "scope".to_owned(),
+                header: "Scope".to_owned(),
+                question: "How broad should the change be?".to_owned(),
+                options: vec![
+                    UserInputOption {
+                        label: "Focused (Recommended)".to_owned(),
+                        description: "Change only the affected path.".to_owned(),
+                    },
+                    UserInputOption {
+                        label: "Broad".to_owned(),
+                        description: "Refactor adjacent paths too.".to_owned(),
+                    },
+                ],
+                is_other: true,
+                is_secret: false,
+            }],
+        };
+
+        assert!(reduce(&mut state, Action::UserInputRequested(request)).is_empty());
+        assert_eq!(state.user_input_requests.len(), 1);
+        assert_eq!(state.tasks[0].status, TaskRunStatus::WaitingForApproval);
+
+        let answers = UserInputAnswers {
+            answers: vec![UserInputAnswer {
+                question_id: "scope".to_owned(),
+                answers: vec!["Focused (Recommended)".to_owned()],
+            }],
+        };
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::ResolveUserInput {
+                    request_id: "request-input-1".to_owned(),
+                    answers: answers.clone(),
+                }
+            ),
+            vec![Effect::RespondUserInput {
+                request_id: "request-input-1".to_owned(),
+                answers,
+            }]
+        );
+        assert!(state.user_input_requests.is_empty());
+    }
+
+    #[test]
+    fn structured_user_input_keeps_the_request_when_an_answer_is_invalid() {
+        let mut state = AppState::default();
+        let request = UserInputRequest {
+            request_id: "request-input-1".to_owned(),
+            task_id: "thread-1".to_owned(),
+            turn_id: "turn-1".to_owned(),
+            item_id: "item-1".to_owned(),
+            auto_resolution_ms: None,
+            questions: vec![UserInputQuestion {
+                id: "delivery".to_owned(),
+                header: "Delivery".to_owned(),
+                question: "How should this be delivered?".to_owned(),
+                options: vec![UserInputOption {
+                    label: "Patch".to_owned(),
+                    description: "Prepare a local patch.".to_owned(),
+                }],
+                is_other: false,
+                is_secret: false,
+            }],
+        };
+        reduce(&mut state, Action::UserInputRequested(request));
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::ResolveUserInput {
+                    request_id: "request-input-1".to_owned(),
+                    answers: UserInputAnswers {
+                        answers: vec![UserInputAnswer {
+                            question_id: "delivery".to_owned(),
+                            answers: vec!["Pull request".to_owned()],
+                        }],
+                    },
+                }
+            )
+            .is_empty()
+        );
+        assert_eq!(state.user_input_requests.len(), 1);
+        assert_eq!(
+            state.status_message.as_deref(),
+            Some("The structured input response is invalid.")
+        );
+    }
+
+    #[test]
+    fn mcp_url_elicitation_requires_open_before_accepting() {
+        let mut state = AppState {
+            tasks: vec![task("thread-1")],
+            ..AppState::default()
+        };
+        let request = McpUrlElicitation {
+            request_id: "request-1".to_owned(),
+            task_id: "thread-1".to_owned(),
+            turn_id: Some("turn-1".to_owned()),
+            server_name: "calendar".to_owned(),
+            elicitation_id: "elicitation-1".to_owned(),
+            message: "Connect your calendar.".to_owned(),
+            url: "https://example.com/connect".to_owned(),
+            link_opened: true,
+        };
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::McpElicitationRequested(McpElicitation::Url(request))
+            )
+            .is_empty()
+        );
+        assert_eq!(state.mcp_elicitations.len(), 1);
+        assert!(matches!(
+            &state.mcp_elicitations[0],
+            McpElicitation::Url(request) if !request.link_opened
+        ));
+        assert_eq!(state.tasks[0].status, TaskRunStatus::WaitingForApproval);
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::ResolveMcpElicitation {
+                    request_id: "request-1".to_owned(),
+                    decision: McpElicitationDecision::Accept,
+                    content: None,
+                }
+            )
+            .is_empty()
+        );
+        assert_eq!(state.mcp_elicitations.len(), 1);
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::MarkMcpUrlElicitationOpened {
+                    request_id: "request-1".to_owned(),
+                }
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::ResolveMcpElicitation {
+                    request_id: "request-1".to_owned(),
+                    decision: McpElicitationDecision::Accept,
+                    content: None,
+                }
+            ),
+            vec![Effect::RespondMcpElicitation {
+                request_id: "request-1".to_owned(),
+                decision: McpElicitationDecision::Accept,
+                content: None,
+            }]
+        );
+        assert!(state.mcp_elicitations.is_empty());
+    }
+
+    #[test]
+    fn browser_origin_elicitation_persists_only_the_selected_scope() {
+        let mut state = AppState {
+            tasks: vec![task("thread-1")],
+            browser_permissions: BrowserPermissionsState {
+                sites: vec![BrowserSitePermission {
+                    origin: "https://example.com".to_owned(),
+                    browse: BrowserPermissionValue::Default,
+                    download: BrowserPermissionValue::Block,
+                    upload: BrowserPermissionValue::Default,
+                    full_cdp: BrowserPermissionValue::Default,
+                }],
+                ..BrowserPermissionsState::default()
+            },
+            ..AppState::default()
+        };
+        let request = |request_id: &str| {
+            McpElicitation::BrowserOrigin(McpBrowserOriginElicitation {
+                request_id: request_id.to_owned(),
+                task_id: "thread-1".to_owned(),
+                turn_id: Some("turn-1".to_owned()),
+                server_name: "node_repl".to_owned(),
+                source_name: "Browser".to_owned(),
+                origin: "https://example.com".to_owned(),
+                reason: None,
+                message: "Allow Browser to access this site?".to_owned(),
+            })
+        };
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::McpElicitationRequested(request("browser-request-site"))
+            )
+            .is_empty()
+        );
+        let mut site_permissions = state.browser_permissions.clone();
+        site_permissions.sites[0].browse = BrowserPermissionValue::Allow;
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::ResolveBrowserOriginElicitation {
+                    request_id: "browser-request-site".to_owned(),
+                    decision: BrowserOriginElicitationDecision::AllowSite,
+                }
+            ),
+            [
+                Effect::PersistBrowserPermissions(site_permissions.clone()),
+                Effect::ConfigureBrowserPermissions(site_permissions.clone()),
+                Effect::RespondBrowserOriginElicitation {
+                    request_id: "browser-request-site".to_owned(),
+                    decision: BrowserOriginElicitationDecision::AllowSite,
+                },
+            ]
+        );
+        assert_eq!(state.browser_permissions, site_permissions);
+        assert_eq!(
+            state.browser_permissions.sites[0].download,
+            BrowserPermissionValue::Block
+        );
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::McpElicitationRequested(request("browser-request-all"))
+            )
+            .is_empty()
+        );
+        let mut all_permissions = site_permissions;
+        all_permissions.approval_mode = BrowserApprovalMode::NeverAsk;
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::ResolveBrowserOriginElicitation {
+                    request_id: "browser-request-all".to_owned(),
+                    decision: BrowserOriginElicitationDecision::AllowAll,
+                }
+            ),
+            [
+                Effect::PersistBrowserPermissions(all_permissions.clone()),
+                Effect::ConfigureBrowserPermissions(all_permissions.clone()),
+                Effect::RespondBrowserOriginElicitation {
+                    request_id: "browser-request-all".to_owned(),
+                    decision: BrowserOriginElicitationDecision::AllowAll,
+                },
+            ]
+        );
+        assert_eq!(state.browser_permissions, all_permissions);
+    }
+
+    #[test]
+    fn browser_resource_elicitation_persists_only_always_allow() {
+        let mut state = AppState {
+            tasks: vec![task("thread-1")],
+            browser_permissions: BrowserPermissionsState {
+                sites: vec![BrowserSitePermission {
+                    origin: "https://example.com".to_owned(),
+                    browse: BrowserPermissionValue::Default,
+                    download: BrowserPermissionValue::Default,
+                    upload: BrowserPermissionValue::Block,
+                    full_cdp: BrowserPermissionValue::Default,
+                }],
+                ..BrowserPermissionsState::default()
+            },
+            ..AppState::default()
+        };
+        let request = |request_id: &str, resource| {
+            McpElicitation::BrowserResource(McpBrowserResourceElicitation {
+                request_id: request_id.to_owned(),
+                task_id: "thread-1".to_owned(),
+                turn_id: Some("turn-1".to_owned()),
+                server_name: "node_repl".to_owned(),
+                source_name: "Browser".to_owned(),
+                origin: "https://example.com".to_owned(),
+                resource,
+                message: "Allow Browser permission?".to_owned(),
+                reason: None,
+                persist_session: true,
+                persist_always: true,
+                elevated_risk: false,
+            })
+        };
+
+        reduce(
+            &mut state,
+            Action::McpElicitationRequested(request(
+                "browser-resource-always",
+                BrowserPermissionResource::Download,
+            )),
+        );
+        let mut expected = state.browser_permissions.clone();
+        expected.sites[0].download = BrowserPermissionValue::Allow;
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::ResolveBrowserResourceElicitation {
+                    request_id: "browser-resource-always".to_owned(),
+                    decision: BrowserResourceElicitationDecision::AlwaysAllow,
+                }
+            ),
+            [
+                Effect::PersistBrowserPermissions(expected.clone()),
+                Effect::ConfigureBrowserPermissions(expected.clone()),
+                Effect::RespondBrowserResourceElicitation {
+                    request_id: "browser-resource-always".to_owned(),
+                    decision: BrowserResourceElicitationDecision::AlwaysAllow,
+                },
+            ]
+        );
+        assert_eq!(state.browser_permissions, expected);
+        assert_eq!(
+            state.browser_permissions.sites[0].upload,
+            BrowserPermissionValue::Block
+        );
+
+        reduce(
+            &mut state,
+            Action::McpElicitationRequested(request(
+                "browser-resource-session",
+                BrowserPermissionResource::Upload,
+            )),
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::ResolveBrowserResourceElicitation {
+                    request_id: "browser-resource-session".to_owned(),
+                    decision: BrowserResourceElicitationDecision::AllowConversation,
+                }
+            ),
+            [Effect::RespondBrowserResourceElicitation {
+                request_id: "browser-resource-session".to_owned(),
+                decision: BrowserResourceElicitationDecision::AllowConversation,
+            }]
+        );
+        assert_eq!(state.browser_permissions, expected);
+    }
+
+    #[test]
+    fn mcp_form_elicitation_validates_typed_content_before_accepting() {
+        let mut state = AppState {
+            tasks: vec![task("thread-1")],
+            ..AppState::default()
+        };
+        let request = McpFormElicitation {
+            request_id: "request-form-1".to_owned(),
+            task_id: "thread-1".to_owned(),
+            turn_id: Some("turn-1".to_owned()),
+            server_name: "calendar".to_owned(),
+            message: "Choose a calendar and date.".to_owned(),
+            openai: false,
+            unsupported_openai: false,
+            fields: vec![
+                McpFormField {
+                    name: "calendar".to_owned(),
+                    title: "Calendar".to_owned(),
+                    description: None,
+                    required: true,
+                    kind: McpFormFieldKind::SingleSelect {
+                        options: vec![
+                            McpFormOption {
+                                value: "work".to_owned(),
+                                label: "Work".to_owned(),
+                            },
+                            McpFormOption {
+                                value: "personal".to_owned(),
+                                label: "Personal".to_owned(),
+                            },
+                        ],
+                    },
+                    default: Some(McpElicitationValue::String("work".to_owned())),
+                },
+                McpFormField {
+                    name: "date".to_owned(),
+                    title: "Date".to_owned(),
+                    description: None,
+                    required: true,
+                    kind: McpFormFieldKind::String {
+                        min_length: None,
+                        max_length: None,
+                        format: Some(McpFormStringFormat::Date),
+                    },
+                    default: None,
+                },
+                McpFormField {
+                    name: "notify".to_owned(),
+                    title: "Notify me".to_owned(),
+                    description: None,
+                    required: false,
+                    kind: McpFormFieldKind::Boolean,
+                    default: None,
+                },
+            ],
+        };
+        assert!(
+            reduce(
+                &mut state,
+                Action::McpElicitationRequested(McpElicitation::Form(request))
+            )
+            .is_empty()
+        );
+
+        let invalid = McpElicitationContent {
+            fields: vec![
+                (
+                    "calendar".to_owned(),
+                    McpElicitationValue::String("work".to_owned()),
+                ),
+                (
+                    "date".to_owned(),
+                    McpElicitationValue::String("2026-02-30".to_owned()),
+                ),
+            ],
+        };
+        assert!(
+            reduce(
+                &mut state,
+                Action::ResolveMcpElicitation {
+                    request_id: "request-form-1".to_owned(),
+                    decision: McpElicitationDecision::Accept,
+                    content: Some(invalid),
+                }
+            )
+            .is_empty()
+        );
+        assert_eq!(state.mcp_elicitations.len(), 1);
+
+        let valid = McpElicitationContent {
+            fields: vec![
+                (
+                    "calendar".to_owned(),
+                    McpElicitationValue::String("work".to_owned()),
+                ),
+                (
+                    "date".to_owned(),
+                    McpElicitationValue::String("2026-02-28".to_owned()),
+                ),
+                ("notify".to_owned(), McpElicitationValue::Boolean(false)),
+            ],
+        };
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::ResolveMcpElicitation {
+                    request_id: "request-form-1".to_owned(),
+                    decision: McpElicitationDecision::Accept,
+                    content: Some(valid.clone()),
+                }
+            ),
+            vec![Effect::RespondMcpElicitation {
+                request_id: "request-form-1".to_owned(),
+                decision: McpElicitationDecision::Accept,
+                content: Some(valid),
+            }]
+        );
+        assert!(state.mcp_elicitations.is_empty());
+    }
+
+    #[test]
+    fn mcp_image_picker_accepts_only_a_known_item_id() {
+        let request = McpFormElicitation {
+            request_id: "request-image-picker".to_owned(),
+            task_id: "thread-1".to_owned(),
+            turn_id: None,
+            server_name: "templates".to_owned(),
+            message: "Choose a template.".to_owned(),
+            openai: true,
+            unsupported_openai: false,
+            fields: vec![McpFormField {
+                name: "template".to_owned(),
+                title: "Template".to_owned(),
+                description: None,
+                required: true,
+                kind: McpFormFieldKind::ImagePicker {
+                    items: vec![McpFormImagePickerItem {
+                        value: "clean".to_owned(),
+                        title: "Clean".to_owned(),
+                        image_data_url: Arc::from("data:image/png;base64,AA=="),
+                    }],
+                },
+                default: None,
+            }],
+        };
+        assert_eq!(
+            validate_mcp_form_content(
+                &request,
+                &McpElicitationContent {
+                    fields: vec![(
+                        "template".to_owned(),
+                        McpElicitationValue::String("unknown".to_owned()),
+                    )],
+                },
+            ),
+            vec!["template".to_owned()]
+        );
+        assert!(
+            validate_mcp_form_content(
+                &request,
+                &McpElicitationContent {
+                    fields: vec![(
+                        "template".to_owned(),
+                        McpElicitationValue::String("clean".to_owned()),
+                    )],
+                },
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn connected_loads_tasks_and_bounded_composer_catalogs() {
+        let mut state = AppState::default();
+
+        assert_eq!(
+            reduce(&mut state, Action::Connected),
+            [
+                Effect::LoadTasks {
+                    generation: 1,
+                    cursor: None,
+                },
+                Effect::LoadLoadedTasks,
+                Effect::LoadModels,
+                Effect::LoadPermissionProfiles { cwd: None },
+                Effect::LoadPersonalization,
+                Effect::RefreshSkills {
+                    cwds: Vec::new(),
+                    force_reload: false,
+                },
+                Effect::RefreshComposerPlugins {
+                    cwds: Vec::new(),
+                    force_refetch: false,
+                },
+                Effect::RefreshApps {
+                    force_refetch: false,
+                },
+                Effect::LoadComposerDesktopApps,
+                Effect::LoadComputerUsePolicy,
+            ]
+        );
+        assert_eq!(state.composer_controls.models_status, LoadStatus::Loading);
+        assert_eq!(
+            state.composer_controls.permission_profiles_status,
+            LoadStatus::Loading
+        );
+        assert_eq!(state.marketplace.skills_status, Some(LoadStatus::Loading));
+    }
+
+    #[test]
+    fn personalization_mutations_reload_authoritative_app_server_config() {
+        assert_eq!(Personality::from_config(Some("none")), Personality::None);
+        let mut state = AppState {
+            connection: ConnectionStatus::Online,
+            ..AppState::default()
+        };
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::PersonalizationLoaded {
+                    personality: Personality::Friendly,
+                    memory_available: true,
+                    memories_enabled: true,
+                    allow_memory_generation_from_tool_assisted_chats: true,
+                }
+            ),
+            []
+        );
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SelectPersonality(Personality::Pragmatic)
+            ),
+            [Effect::SetPersonality(Personality::Pragmatic)]
+        );
+        assert!(state.personalization.pending);
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::PersonalizationMutationFinished {
+                    kind: PersonalizationMutationKind::Personality,
+                    overridden: false,
+                }
+            ),
+            [Effect::LoadPersonalization]
+        );
+
+        reduce(
+            &mut state,
+            Action::PersonalizationLoaded {
+                personality: Personality::Pragmatic,
+                memory_available: true,
+                memories_enabled: true,
+                allow_memory_generation_from_tool_assisted_chats: true,
+            },
+        );
+        assert_eq!(
+            reduce(&mut state, Action::SetMemoriesEnabled(false)),
+            [Effect::SetMemoriesEnabled(false)]
+        );
+        reduce(
+            &mut state,
+            Action::PersonalizationMutationFinished {
+                kind: PersonalizationMutationKind::Memories,
+                overridden: false,
+            },
+        );
+        reduce(
+            &mut state,
+            Action::PersonalizationLoaded {
+                personality: Personality::Pragmatic,
+                memory_available: true,
+                memories_enabled: false,
+                allow_memory_generation_from_tool_assisted_chats: true,
+            },
+        );
+        assert!(reduce(&mut state, Action::SetToolAssistedMemoriesEnabled(false)).is_empty());
+
+        state.personalization.memories_enabled = true;
+        assert_eq!(
+            reduce(&mut state, Action::SetToolAssistedMemoriesEnabled(false)),
+            [Effect::SetToolAssistedMemoriesEnabled(false)]
+        );
+    }
+
+    #[test]
+    fn agent_configuration_uses_the_selected_layer_and_reloads_after_mutation() {
+        let root = if cfg!(windows) {
+            PathBuf::from(r"C:\repo")
+        } else {
+            PathBuf::from("/repo")
+        };
+        let project_config = root.join(".codex").join("config.toml");
+        let mut state = AppState {
+            connection: ConnectionStatus::Online,
+            ..AppState::default()
+        };
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::RefreshAgentConfiguration {
+                    cwd: Some(root.clone()),
+                }
+            ),
+            [Effect::LoadAgentConfiguration {
+                cwd: Some(root.clone())
+            }]
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::AgentConfigurationLoaded {
+                    cwd: Some(root.clone()),
+                    scopes: vec![
+                        AgentConfigScope {
+                            id: "project:repo".to_owned(),
+                            kind: AgentConfigScopeKind::Project,
+                            label: "repo".to_owned(),
+                            tooltip: project_config.display().to_string(),
+                            file_path: Some(project_config.clone()),
+                            expected_version: Some("sha256:project".to_owned()),
+                            approval_policy: None,
+                            sandbox_mode: Some("workspace-write".to_owned()),
+                            network_access: Some(false),
+                            disabled_reason: None,
+                        },
+                        AgentConfigScope {
+                            id: "user".to_owned(),
+                            kind: AgentConfigScopeKind::User,
+                            label: "User config".to_owned(),
+                            tooltip: "~/.codex/config.toml".to_owned(),
+                            file_path: None,
+                            expected_version: None,
+                            approval_policy: Some("on-request".to_owned()),
+                            sandbox_mode: None,
+                            network_access: None,
+                            disabled_reason: None,
+                        },
+                    ],
+                    effective_approval_policy: "on-request".to_owned(),
+                    effective_sandbox_mode: "workspace-write".to_owned(),
+                    effective_network_access: false,
+                    allowed_approval_policies: vec![
+                        "untrusted".to_owned(),
+                        "on-request".to_owned(),
+                        "never".to_owned(),
+                    ],
+                    allowed_sandbox_modes: vec![
+                        "read-only".to_owned(),
+                        "workspace-write".to_owned(),
+                    ],
+                    approval_managed: false,
+                    sandbox_managed: false,
+                    network_managed: false,
+                }
+            ),
+            []
+        );
+        assert_eq!(
+            state.agent_configuration.selected_scope_id.as_deref(),
+            Some("project:repo")
+        );
+        assert_eq!(
+            state.agent_configuration.displayed_approval_policy(),
+            "on-request"
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SetAgentApprovalPolicy("untrusted".to_owned())
+            ),
+            [Effect::SetAgentApprovalPolicy {
+                value: "untrusted".to_owned(),
+                file_path: Some(project_config),
+                expected_version: Some("sha256:project".to_owned()),
+            }]
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::AgentConfigurationMutationFinished {
+                    kind: AgentConfigurationMutationKind::ApprovalPolicy,
+                    overridden: false,
+                }
+            ),
+            [Effect::LoadAgentConfiguration {
+                cwd: Some(root.clone())
+            }]
+        );
+
+        state.agent_configuration.status = LoadStatus::Ready;
+        state.agent_configuration.approval_managed = true;
+        assert!(
+            reduce(
+                &mut state,
+                Action::SetAgentApprovalPolicy("never".to_owned())
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SelectAgentConfigScope("user".to_owned())
+            ),
+            []
+        );
+        state.agent_configuration.approval_managed = false;
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SetAgentApprovalPolicy("never".to_owned())
+            ),
+            [Effect::SetAgentApprovalPolicy {
+                value: "never".to_owned(),
+                file_path: None,
+                expected_version: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn composer_file_search_reuses_one_session_and_ignores_stale_updates() {
+        let root = if cfg!(windows) {
+            PathBuf::from(r"C:\repo")
+        } else {
+            PathBuf::from("/repo")
+        };
+        let mut state = AppState {
+            new_chat_cwd: Some(root.clone()),
+            ..AppState::default()
+        };
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::ComposerFileSearchChanged(Some("agents".to_owned()))
+            ),
+            [Effect::SearchFuzzyFiles {
+                session_id: "codexrs-fuzzy-file-search-1".to_owned(),
+                roots: vec![root.clone()],
+                query: "agents".to_owned(),
+                start_session: true,
+            }]
+        );
+        assert_eq!(state.fuzzy_file_search.status, LoadStatus::Loading);
+
+        let result = FuzzyFileResult {
+            name: "AGENTS.md".to_owned(),
+            path: root.join("AGENTS.md"),
+            detail: String::new(),
+            match_type: FuzzyFileMatchType::File,
+        };
+        reduce(
+            &mut state,
+            Action::FuzzyFileSearchUpdated {
+                session_id: "codexrs-fuzzy-file-search-1".to_owned(),
+                query: "stale".to_owned(),
+                results: vec![result.clone()],
+            },
+        );
+        assert!(state.fuzzy_file_search.results.is_empty());
+
+        reduce(
+            &mut state,
+            Action::FuzzyFileSearchUpdated {
+                session_id: "codexrs-fuzzy-file-search-1".to_owned(),
+                query: "agents".to_owned(),
+                results: vec![result.clone()],
+            },
+        );
+        assert_eq!(state.fuzzy_file_search.results, [result]);
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::ComposerFileSearchChanged(Some("agent".to_owned()))
+            ),
+            [Effect::SearchFuzzyFiles {
+                session_id: "codexrs-fuzzy-file-search-1".to_owned(),
+                roots: vec![root],
+                query: "agent".to_owned(),
+                start_session: false,
+            }]
+        );
+        assert_eq!(
+            reduce(&mut state, Action::ComposerFileSearchChanged(None)),
+            [Effect::StopFuzzyFileSearch {
+                session_id: "codexrs-fuzzy-file-search-1".to_owned()
+            }]
+        );
+        assert_eq!(state.fuzzy_file_search.status, LoadStatus::Idle);
+    }
+
+    #[test]
+    fn fuzzy_file_results_open_files_natively_and_directories_in_the_file_manager() {
+        let root = if cfg!(windows) {
+            PathBuf::from(r"C:\repo")
+        } else {
+            PathBuf::from("/repo")
+        };
+        let file = root.join("src").join("main.rs");
+        let directory = root.join("src");
+        let mut state = AppState {
+            new_chat_cwd: Some(root.clone()),
+            ..AppState::default()
+        };
+        state.fuzzy_file_search.roots = vec![root.clone()];
+        state.fuzzy_file_search.results = vec![
+            FuzzyFileResult {
+                name: "main.rs".to_owned(),
+                path: file.clone(),
+                detail: "src".to_owned(),
+                match_type: FuzzyFileMatchType::File,
+            },
+            FuzzyFileResult {
+                name: "src".to_owned(),
+                path: directory.clone(),
+                detail: String::new(),
+                match_type: FuzzyFileMatchType::Directory,
+            },
+        ];
+
+        assert_eq!(
+            reduce(&mut state, Action::OpenFuzzyFileResult(file.clone())),
+            [
+                Effect::PersistUiState {
+                    route: MainRoute::Tasks,
+                    inspector: InspectorPane::Files,
+                },
+                Effect::LoadWorkspaceFilePreview {
+                    root: root.clone(),
+                    path: file.clone(),
+                },
+            ]
+        );
+        assert_eq!(state.inspector, InspectorPane::Files);
+        assert_eq!(state.artifacts.status, LoadStatus::Loading);
+
+        reduce(
+            &mut state,
+            Action::WorkspaceFilePreviewLoaded {
+                requested_path: file.clone(),
+                preview: ArtifactPreview {
+                    path: file.clone(),
+                    file_name: "main.rs".to_owned(),
+                    extension: "rs".to_owned(),
+                    size_bytes: 13,
+                    kind: ArtifactPreviewKind::Text,
+                    text: Some("fn main() {}\n".to_owned()),
+                    truncated: false,
+                },
+            },
+        );
+        assert_eq!(state.artifacts.status, LoadStatus::Ready);
+        assert_eq!(
+            reduce(&mut state, Action::RevealWorkspaceFile(file.clone())),
+            [Effect::OpenWorkspacePath {
+                root: root.clone(),
+                path: file,
+            }]
+        );
+        assert_eq!(
+            reduce(&mut state, Action::OpenFuzzyFileResult(directory.clone())),
+            [Effect::OpenWorkspacePath {
+                root,
+                path: directory,
+            }]
+        );
+    }
+
+    #[test]
+    fn composer_selection_is_forwarded_to_new_threads_and_turns() {
+        let mut state = AppState::default();
+        state.tasks.push(task("t1"));
+        state.selected_task_id = Some("t1".to_owned());
+
+        reduce(
+            &mut state,
+            Action::ModelsLoaded(vec![
+                model("gpt-default", true, "medium"),
+                model("gpt-fast", false, "high"),
+            ]),
+        );
+        reduce(
+            &mut state,
+            Action::PermissionProfilesLoaded {
+                profiles: vec![
+                    PermissionProfileOption {
+                        id: ":read-only".to_owned(),
+                        description: None,
+                        allowed: true,
+                    },
+                    PermissionProfileOption {
+                        id: ":workspace".to_owned(),
+                        description: None,
+                        allowed: true,
+                    },
+                ],
+                requirements: PermissionRequirements::default(),
+            },
+        );
+        assert_eq!(
+            reduce(&mut state, Action::SelectModel("gpt-fast".to_owned())),
+            [Effect::UpdateThreadSettings {
+                task_id: "t1".to_owned(),
+                model: Some("gpt-fast".to_owned()),
+                effort: Some("medium".to_owned()),
+                service_tier: Some(None),
+                permissions: None,
+                approval_policy: None,
+                approvals_reviewer: None,
+            }]
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SelectReasoningEffort("xhigh".to_owned()),
+            ),
+            [Effect::UpdateThreadSettings {
+                task_id: "t1".to_owned(),
+                model: None,
+                effort: Some("xhigh".to_owned()),
+                service_tier: None,
+                permissions: None,
+                approval_policy: None,
+                approvals_reviewer: None,
+            }]
+        );
+        assert_eq!(
+            reduce(&mut state, Action::SelectServiceTier("priority".to_owned()),),
+            [Effect::UpdateThreadSettings {
+                task_id: "t1".to_owned(),
+                model: None,
+                effort: None,
+                service_tier: Some(Some("priority".to_owned())),
+                permissions: None,
+                approval_policy: None,
+                approvals_reviewer: None,
+            }]
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SelectPermissionMode("preset:auto-review".to_owned()),
+            ),
+            [Effect::UpdateThreadSettings {
+                task_id: "t1".to_owned(),
+                model: None,
+                effort: None,
+                service_tier: None,
+                permissions: Some(":workspace".to_owned()),
+                approval_policy: Some("on-request".to_owned()),
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            }]
+        );
+
+        reduce(
+            &mut state,
+            Action::ComposerChanged("inspect the diff".to_owned()),
+        );
+        assert_eq!(
+            reduce(&mut state, Action::SubmitComposer),
+            [Effect::StartTurn {
+                task_id: "t1".to_owned(),
+                text: "inspect the diff".to_owned(),
+                model: Some("gpt-fast".to_owned()),
+                effort: Some("xhigh".to_owned()),
+                service_tier: Some("priority".to_owned()),
+                permissions: Some(":workspace".to_owned()),
+                approval_policy: Some("on-request".to_owned()),
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                attachments: Vec::new(),
+                plan_mode: false,
+            }]
+        );
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::ThreadSettingsUpdateFailed {
+                    task_id: "t1".to_owned(),
+                    message: "settings rejected".to_owned(),
+                },
+            ),
+            [Effect::ResumeTask {
+                task_id: "t1".to_owned()
+            }]
+        );
+        assert_eq!(state.status_message.as_deref(), Some("settings rejected"));
+    }
+
+    #[test]
+    fn permission_modes_follow_app_server_requirements() {
+        let profiles = vec![
+            PermissionProfileOption {
+                id: ":workspace".to_owned(),
+                description: None,
+                allowed: true,
+            },
+            PermissionProfileOption {
+                id: ":danger-full-access".to_owned(),
+                description: None,
+                allowed: true,
+            },
+            PermissionProfileOption {
+                id: "locked-down".to_owned(),
+                description: Some("Managed profile".to_owned()),
+                allowed: true,
+            },
+        ];
+        let requirements = PermissionRequirements {
+            allowed_approval_policies: Some(vec!["on-request".to_owned()]),
+            allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::User]),
+            default_permissions: Some("locked-down".to_owned()),
+        };
+        let modes = permission_mode_options(&profiles, &requirements);
+
+        assert!(
+            modes
+                .iter()
+                .any(|mode| mode.id == "preset:ask-for-approval" && mode.allowed)
+        );
+        assert!(
+            modes
+                .iter()
+                .any(|mode| mode.id == "preset:auto-review" && !mode.allowed)
+        );
+        assert!(
+            modes
+                .iter()
+                .any(|mode| mode.id == "preset:full-access" && !mode.allowed)
+        );
+
+        let mut state = AppState::default();
+        reduce(
+            &mut state,
+            Action::PermissionProfilesLoaded {
+                profiles,
+                requirements,
+            },
+        );
+        assert_eq!(
+            state.composer_controls.selected_permission_mode.as_deref(),
+            Some("profile:locked-down")
+        );
+        reduce(
+            &mut state,
+            Action::SelectPermissionMode("preset:auto-review".to_owned()),
+        );
+        assert_eq!(
+            state.composer_controls.selected_permission_mode.as_deref(),
+            Some("profile:locked-down")
+        );
+    }
+
+    #[test]
+    fn resumed_task_settings_replace_the_composer_presets() {
+        let mut state = AppState {
+            selected_task_id: Some("t1".to_owned()),
+            ..AppState::default()
+        };
+        reduce(
+            &mut state,
+            Action::ModelsLoaded(vec![
+                model("gpt-default", true, "medium"),
+                model("gpt-fast", false, "high"),
+            ]),
+        );
+        reduce(
+            &mut state,
+            Action::PermissionProfilesLoaded {
+                profiles: vec![PermissionProfileOption {
+                    id: ":workspace".to_owned(),
+                    description: None,
+                    allowed: true,
+                }],
+                requirements: PermissionRequirements::default(),
+            },
+        );
+
+        reduce(
+            &mut state,
+            Action::TaskSettingsLoaded {
+                task_id: "t1".to_owned(),
+                model: Some("gpt-fast".to_owned()),
+                effort: Some("xhigh".to_owned()),
+                service_tier: Some("priority".to_owned()),
+                permissions: Some(":workspace".to_owned()),
+                approval_policy: Some("on-request".to_owned()),
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            },
+        );
+
+        assert_eq!(
+            state.composer_controls.selected_model.as_deref(),
+            Some("gpt-fast")
+        );
+        assert_eq!(
+            state.composer_controls.selected_effort.as_deref(),
+            Some("xhigh")
+        );
+        assert_eq!(
+            state.composer_controls.selected_service_tier.as_deref(),
+            Some("priority")
+        );
+        assert_eq!(
+            state.composer_controls.selected_permission_mode.as_deref(),
+            Some("preset:auto-review")
+        );
+    }
+
+    #[test]
+    fn new_chat_uses_app_server_config_defaults() {
+        let mut state = AppState::default();
+        let mut configured_model = model("gpt-fast", false, "high");
+        configured_model.default_service_tier = Some("priority".to_owned());
+        reduce(
+            &mut state,
+            Action::ModelsLoaded(vec![model("gpt-default", true, "medium"), configured_model]),
+        );
+        reduce(
+            &mut state,
+            Action::PermissionProfilesLoaded {
+                profiles: vec![PermissionProfileOption {
+                    id: ":workspace".to_owned(),
+                    description: None,
+                    allowed: true,
+                }],
+                requirements: PermissionRequirements::default(),
+            },
+        );
+
+        reduce(
+            &mut state,
+            Action::ComposerDefaultsLoaded {
+                model: Some("gpt-fast".to_owned()),
+                effort: Some("xhigh".to_owned()),
+                service_tier: None,
+                profile: Some("work".to_owned()),
+                has_managed_new_thread_settings: false,
+                permissions: Some(":workspace".to_owned()),
+                approval_policy: Some("on-request".to_owned()),
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            },
+        );
+
+        assert_eq!(
+            state.composer_controls.selected_model.as_deref(),
+            Some("gpt-fast")
+        );
+        assert_eq!(
+            state.composer_controls.selected_effort.as_deref(),
+            Some("xhigh")
+        );
+        assert_eq!(
+            state.composer_controls.selected_service_tier.as_deref(),
+            Some("priority")
+        );
+        assert_eq!(
+            state.composer_controls.selected_permission_mode.as_deref(),
+            Some("preset:auto-review")
+        );
+    }
+
+    #[test]
+    fn new_chat_model_effort_and_speed_changes_persist_unless_managed() {
+        let mut state = AppState::default();
+        reduce(
+            &mut state,
+            Action::ModelsLoaded(vec![
+                model("gpt-default", true, "medium"),
+                model("gpt-fast", false, "high"),
+            ]),
+        );
+        reduce(
+            &mut state,
+            Action::ComposerDefaultsLoaded {
+                model: Some("gpt-default".to_owned()),
+                effort: Some("medium".to_owned()),
+                service_tier: None,
+                profile: Some("work".to_owned()),
+                has_managed_new_thread_settings: false,
+                permissions: None,
+                approval_policy: None,
+                approvals_reviewer: None,
+            },
+        );
+
+        assert_eq!(
+            reduce(&mut state, Action::SelectModel("gpt-fast".to_owned())),
+            [Effect::PersistComposerModelDefaults {
+                model: "gpt-fast".to_owned(),
+                effort: "medium".to_owned(),
+                profile: Some("work".to_owned()),
+            }]
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SelectReasoningEffort("xhigh".to_owned()),
+            ),
+            [Effect::PersistComposerModelDefaults {
+                model: "gpt-fast".to_owned(),
+                effort: "xhigh".to_owned(),
+                profile: Some("work".to_owned()),
+            }]
+        );
+        assert_eq!(
+            reduce(&mut state, Action::SelectServiceTier("priority".to_owned()),),
+            [Effect::PersistComposerServiceTierDefault {
+                service_tier: Some("priority".to_owned()),
+                profile: Some("work".to_owned()),
+            }]
+        );
+
+        reduce(
+            &mut state,
+            Action::ComposerDefaultsLoaded {
+                model: Some("gpt-default".to_owned()),
+                effort: Some("medium".to_owned()),
+                service_tier: None,
+                profile: Some("work".to_owned()),
+                has_managed_new_thread_settings: true,
+                permissions: None,
+                approval_policy: None,
+                approvals_reviewer: None,
+            },
+        );
+        assert!(reduce(&mut state, Action::SelectModel("gpt-fast".to_owned())).is_empty());
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::ComposerDefaultsWriteFailed("failed to save new-chat defaults".to_owned(),),
+            ),
+            [Effect::LoadPermissionProfiles { cwd: None }]
+        );
+    }
+
+    #[test]
+    fn active_turn_submission_steers_and_stop_is_deduplicated() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(
+            &mut state,
+            Action::TurnStarted {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::ComposerChanged("focus on the failing test".to_owned()),
+        );
+
+        assert_eq!(
+            reduce(&mut state, Action::SubmitComposer),
+            [Effect::SteerTurn {
+                task_id: "t1".to_owned(),
+                expected_turn_id: "turn-1".to_owned(),
+                text: "focus on the failing test".to_owned(),
+                attachments: Vec::new(),
+            }]
+        );
+        assert_eq!(
+            reduce(&mut state, Action::InterruptActiveTurn),
+            [Effect::InterruptTurn {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+            }]
+        );
+        assert!(reduce(&mut state, Action::InterruptActiveTurn).is_empty());
+
+        reduce(
+            &mut state,
+            Action::TurnInterruptFailed {
+                task_id: "t1".to_owned(),
+                message: "failed to stop turn".to_owned(),
+            },
+        );
+        assert!(
+            state
+                .timelines
+                .get("t1")
+                .is_some_and(|timeline| !timeline.interrupt_pending)
+        );
+    }
+
+    #[test]
+    fn a_new_chat_is_created_only_when_its_first_message_is_submitted() {
+        let mut state = AppState::default();
+        state.tasks.push(task("t1"));
+        state.selected_task_id = Some("t1".to_owned());
+        state.composer_controls.selected_model = Some("gpt-fast".to_owned());
+        state.composer_controls.selected_effort = Some("high".to_owned());
+        reduce(
+            &mut state,
+            Action::PermissionProfilesLoaded {
+                profiles: vec![PermissionProfileOption {
+                    id: ":workspace".to_owned(),
+                    description: None,
+                    allowed: true,
+                }],
+                requirements: PermissionRequirements::default(),
+            },
+        );
+
+        assert_eq!(
+            reduce(&mut state, Action::BeginNewChat),
+            [
+                Effect::RefreshSkills {
+                    cwds: vec![PathBuf::from("C:\\repo")],
+                    force_reload: false,
+                },
+                Effect::RefreshComposerPlugins {
+                    cwds: vec![PathBuf::from("C:\\repo")],
+                    force_refetch: false,
+                },
+                Effect::PersistUiState {
+                    route: MainRoute::Tasks,
+                    inspector: InspectorPane::Hidden,
+                }
+            ]
+        );
+        assert_eq!(state.selected_task_id, None);
+
+        let document = if cfg!(windows) {
+            PathBuf::from(r"C:\repo\AGENTS.md")
+        } else {
+            PathBuf::from("/repo/AGENTS.md")
+        };
+        let image = if cfg!(windows) {
+            PathBuf::from(r"C:\repo\screen.png")
+        } else {
+            PathBuf::from("/repo/screen.png")
+        };
+        reduce(&mut state, Action::TogglePlanMode);
+        reduce(
+            &mut state,
+            Action::AddComposerAttachments(vec![document.clone(), image.clone()]),
+        );
+        reduce(
+            &mut state,
+            Action::ComposerChanged("start the implementation".to_owned()),
+        );
+        assert_eq!(
+            reduce(&mut state, Action::SubmitComposer),
+            [Effect::CreateTask {
+                cwd: Some(PathBuf::from("C:\\repo")),
+                model: Some("gpt-fast".to_owned()),
+                effort: Some("high".to_owned()),
+                service_tier: None,
+                permissions: Some(":workspace".to_owned()),
+                approval_policy: Some("on-request".to_owned()),
+                approvals_reviewer: Some(ApprovalsReviewer::User),
+                initial_message: "start the implementation".to_owned(),
+                attachments: vec![
+                    ComposerAttachment {
+                        path: document,
+                        name: "AGENTS.md".to_owned(),
+                        kind: ComposerAttachmentKind::Mention,
+                    },
+                    ComposerAttachment {
+                        path: image,
+                        name: "screen.png".to_owned(),
+                        kind: ComposerAttachmentKind::LocalImage,
+                    },
+                ],
+                plan_mode: true,
+                goal_objective: None,
+            }]
+        );
+        assert!(state.composer.is_empty());
+        assert!(state.composer_attachments.is_empty());
+    }
+
+    #[test]
+    fn enabled_composer_skills_are_validated_and_forwarded_as_typed_attachments() {
+        let mut state = AppState::default();
+        let path = if cfg!(windows) {
+            PathBuf::from(r"C:\skills\review\SKILL.md")
+        } else {
+            PathBuf::from("/skills/review/SKILL.md")
+        };
+        reduce(
+            &mut state,
+            Action::SkillsLoaded {
+                skills: vec![SkillCard {
+                    name: "review".to_owned(),
+                    display_name: "Code review".to_owned(),
+                    description: "Review the current changes".to_owned(),
+                    path: path.clone(),
+                    scope: SkillScope::User,
+                    enabled: true,
+                }],
+                errors: Vec::new(),
+            },
+        );
+
+        reduce(&mut state, Action::AddComposerSkill(path.clone()));
+        reduce(&mut state, Action::AddComposerSkill(path.clone()));
+        reduce(
+            &mut state,
+            Action::AddComposerSkill(PathBuf::from("relative/SKILL.md")),
+        );
+
+        assert_eq!(
+            state.composer_attachments,
+            [ComposerAttachment {
+                path: path.clone(),
+                name: "review".to_owned(),
+                kind: ComposerAttachmentKind::Skill,
+            }]
+        );
+        reduce(
+            &mut state,
+            Action::ComposerChanged("Use the selected workflow".to_owned()),
+        );
+        assert!(matches!(
+            reduce(&mut state, Action::SubmitComposer).as_slice(),
+            [Effect::CreateTask {
+                initial_message,
+                attachments,
+                ..
+            }] if initial_message == "Use the selected workflow"
+                && attachments == &vec![ComposerAttachment {
+                    path,
+                    name: "review".to_owned(),
+                    kind: ComposerAttachmentKind::Skill,
+                }]
+        ));
+    }
+
+    #[test]
+    fn composer_catalog_mentions_are_validated_deduplicated_and_uri_backed() {
+        let mut state = AppState::default();
+        reduce(
+            &mut state,
+            Action::AppsLoaded(vec![
+                AppCard {
+                    id: "calendar".to_owned(),
+                    name: "Calendar".to_owned(),
+                    description: "Read calendar events".to_owned(),
+                    plugin_display_names: Vec::new(),
+                    logo_url: None,
+                    logo_url_dark: None,
+                    install_url: None,
+                    is_accessible: true,
+                    enabled: true,
+                },
+                AppCard {
+                    id: "disabled".to_owned(),
+                    name: "Disabled".to_owned(),
+                    description: String::new(),
+                    plugin_display_names: Vec::new(),
+                    logo_url: None,
+                    logo_url_dark: None,
+                    install_url: None,
+                    is_accessible: true,
+                    enabled: false,
+                },
+            ]),
+        );
+        reduce(
+            &mut state,
+            Action::ComposerPluginsLoaded(vec![PluginCard {
+                id: "computer-use@openai".to_owned(),
+                install_name: "computer-use".to_owned(),
+                marketplace: "openai-curated".to_owned(),
+                name: "Computer Use".to_owned(),
+                description: "Control desktop applications".to_owned(),
+                category: None,
+                developer: None,
+                logo_url: None,
+                logo_url_dark: None,
+                default_prompt: None,
+                version: None,
+                installed: true,
+                enabled: true,
+                installable: true,
+                featured: false,
+                featured_rank: None,
+            }]),
+        );
+        reduce(
+            &mut state,
+            Action::ComposerDesktopAppsLoaded(vec![ComputerApplicationState {
+                id: r"C:\Windows\notepad.exe".to_owned(),
+                display_name: Some("Notepad".to_owned()),
+                last_used_date: None,
+                use_count: None,
+                is_running: true,
+                window_count: 1,
+            }]),
+        );
+
+        reduce(&mut state, Action::AddComposerApp("calendar".to_owned()));
+        reduce(&mut state, Action::AddComposerApp("calendar".to_owned()));
+        reduce(&mut state, Action::AddComposerApp("disabled".to_owned()));
+        reduce(
+            &mut state,
+            Action::AddComposerPlugin("computer-use@openai".to_owned()),
+        );
+        reduce(
+            &mut state,
+            Action::AddComposerDesktopApp(r"C:\Windows\notepad.exe".to_owned()),
+        );
+
+        assert_eq!(
+            state.composer_attachments,
+            [
+                ComposerAttachment {
+                    path: PathBuf::from("app://calendar"),
+                    name: "Calendar".to_owned(),
+                    kind: ComposerAttachmentKind::App,
+                },
+                ComposerAttachment {
+                    path: PathBuf::from("plugin://computer-use@openai"),
+                    name: "Computer".to_owned(),
+                    kind: ComposerAttachmentKind::Plugin,
+                },
+                ComposerAttachment {
+                    path: PathBuf::from(
+                        "plugin://computer-use@openai?app=C%3A%5CWindows%5Cnotepad.exe"
+                    ),
+                    name: "Notepad".to_owned(),
+                    kind: ComposerAttachmentKind::Plugin,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_projectless_chat_drops_the_current_and_remembered_workspaces() {
+        let mut state = AppState::default();
+        state.tasks.push(task("t1"));
+        state.selected_task_id = Some("t1".to_owned());
+        state.new_chat_cwd = Some(if cfg!(windows) {
+            PathBuf::from(r"C:\remembered")
+        } else {
+            PathBuf::from("/remembered")
+        });
+
+        assert_eq!(
+            reduce(&mut state, Action::BeginProjectlessChat),
+            [
+                Effect::RefreshSkills {
+                    cwds: Vec::new(),
+                    force_reload: false,
+                },
+                Effect::RefreshComposerPlugins {
+                    cwds: Vec::new(),
+                    force_refetch: false,
+                },
+                Effect::PersistUiState {
+                    route: MainRoute::Tasks,
+                    inspector: InspectorPane::Hidden,
+                }
+            ]
+        );
+        assert_eq!(state.selected_task_id, None);
+        assert_eq!(state.new_chat_cwd, None);
+
+        reduce(
+            &mut state,
+            Action::ComposerChanged("work without a project".to_owned()),
+        );
+        assert!(matches!(
+            reduce(&mut state, Action::SubmitComposer).as_slice(),
+            [Effect::CreateTask {
+                cwd: None,
+                initial_message,
+                ..
+            }] if initial_message == "work without a project"
+        ));
+    }
+
+    #[test]
+    fn a_selected_folder_becomes_the_explicit_workspace_for_the_next_chat() {
+        let mut state = AppState::default();
+        let workspace = if cfg!(windows) {
+            PathBuf::from(r"C:\repo")
+        } else {
+            PathBuf::from("/repo")
+        };
+
+        let effects = reduce(&mut state, Action::SelectWorkspace(workspace.clone()));
+
+        assert_eq!(state.route, MainRoute::Tasks);
+        assert_eq!(state.new_chat_cwd.as_ref(), Some(&workspace));
+        assert!(effects.contains(&Effect::RememberWorkspace {
+            path: workspace.clone()
+        }));
+        assert!(effects.contains(&Effect::PersistUiState {
+            route: MainRoute::Tasks,
+            inspector: InspectorPane::Hidden,
+        }));
+
+        reduce(&mut state, Action::ComposerChanged("start here".to_owned()));
+        assert!(matches!(
+            reduce(&mut state, Action::SubmitComposer).as_slice(),
+            [Effect::CreateTask {
+                cwd: Some(path),
+                initial_message,
+                ..
+            }] if path == &workspace && initial_message == "start here"
+        ));
+
+        let prior_workspace = state.new_chat_cwd.clone();
+        assert!(
+            reduce(
+                &mut state,
+                Action::SelectWorkspace(PathBuf::from("relative"))
+            )
+            .is_empty()
+        );
+        assert_eq!(state.new_chat_cwd, prior_workspace);
+    }
+
+    #[test]
+    fn project_picker_changes_the_new_chat_workspace_without_clearing_the_draft() {
+        let mut state = AppState::default();
+        let workspace = if cfg!(windows) {
+            PathBuf::from(r"C:\repo")
+        } else {
+            PathBuf::from("/repo")
+        };
+        let attachment = ComposerAttachment {
+            path: workspace.join("AGENTS.md"),
+            name: "AGENTS.md".to_owned(),
+            kind: ComposerAttachmentKind::Mention,
+        };
+        state.composer = "keep this draft".to_owned();
+        state.composer_attachments.push(attachment.clone());
+        state.composer_controls.plan_mode = true;
+
+        let effects = reduce(
+            &mut state,
+            Action::SelectComposerWorkspace(workspace.clone()),
+        );
+
+        assert_eq!(state.new_chat_cwd.as_ref(), Some(&workspace));
+        assert_eq!(state.composer, "keep this draft");
+        assert_eq!(state.composer_attachments, [attachment]);
+        assert!(state.composer_controls.plan_mode);
+        assert!(effects.contains(&Effect::RefreshSkills {
+            cwds: vec![workspace.clone()],
+            force_reload: false,
+        }));
+        assert!(effects.contains(&Effect::RefreshComposerPlugins {
+            cwds: vec![workspace.clone()],
+            force_refetch: false,
+        }));
+        assert!(effects.contains(&Effect::RememberWorkspace {
+            path: workspace.clone(),
+        }));
+
+        state.selected_task_id = Some("thread-1".to_owned());
+        let prior_workspace = state.new_chat_cwd.clone();
+        assert!(
+            reduce(
+                &mut state,
+                Action::SelectComposerWorkspace(if cfg!(windows) {
+                    PathBuf::from(r"D:\other")
+                } else {
+                    PathBuf::from("/other")
+                }),
+            )
+            .is_empty()
+        );
+        assert_eq!(state.new_chat_cwd, prior_workspace);
+    }
+
+    #[test]
+    fn a_worktree_becomes_the_explicit_workspace_for_the_next_chat() {
+        let mut state = AppState::default();
+        let worktree = PathBuf::from("C:\\repo-feature");
+        state.git.worktrees.push(GitWorktreeState {
+            path: worktree.clone(),
+            branch: Some("feature/native-ui".to_owned()),
+            bare: false,
+            detached: false,
+            locked: false,
+        });
+
+        assert_eq!(
+            reduce(&mut state, Action::UseGitWorktree(worktree.clone())),
+            [
+                Effect::RefreshSkills {
+                    cwds: vec![worktree.clone()],
+                    force_reload: false,
+                },
+                Effect::RefreshComposerPlugins {
+                    cwds: vec![worktree.clone()],
+                    force_refetch: false,
+                },
+                Effect::PersistUiState {
+                    route: MainRoute::Tasks,
+                    inspector: InspectorPane::Hidden,
+                }
+            ]
+        );
+        assert_eq!(state.new_chat_cwd.as_ref(), Some(&worktree));
+
+        reduce(
+            &mut state,
+            Action::ComposerChanged("continue here".to_owned()),
+        );
+        assert!(matches!(
+            reduce(&mut state, Action::SubmitComposer).as_slice(),
+            [Effect::CreateTask {
+                cwd: Some(path),
+                initial_message,
+                ..
+            }] if path == &worktree && initial_message == "continue here"
+        ));
+    }
+
+    #[test]
+    fn goal_mode_uses_the_goal_command_for_new_chats_and_direct_set_for_existing_chats() {
+        let mut state = AppState::default();
+        state.composer_controls.selected_model = Some("gpt-fast".to_owned());
+        reduce(&mut state, Action::ToggleGoalMode);
+        reduce(
+            &mut state,
+            Action::ComposerChanged("Reach native parity".to_owned()),
+        );
+
+        assert_eq!(
+            reduce(&mut state, Action::SubmitComposer),
+            [Effect::CreateTask {
+                cwd: None,
+                model: Some("gpt-fast".to_owned()),
+                effort: None,
+                service_tier: None,
+                permissions: None,
+                approval_policy: None,
+                approvals_reviewer: None,
+                initial_message: "/goal Reach native parity".to_owned(),
+                attachments: Vec::new(),
+                plan_mode: false,
+                goal_objective: Some("Reach native parity".to_owned()),
+            }]
+        );
+        assert!(!state.composer_controls.goal_mode);
+
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(&mut state, Action::ToggleGoalMode);
+        reduce(
+            &mut state,
+            Action::ComposerChanged("Finish the release".to_owned()),
+        );
+        assert_eq!(
+            reduce(&mut state, Action::SubmitComposer),
+            [Effect::SetGoal {
+                task_id: "t1".to_owned(),
+                objective: Some("Finish the release".to_owned()),
+                status: Some(ThreadGoalStatus::Active),
+                token_budget: None,
+            }]
+        );
+    }
+
+    #[test]
     fn selecting_an_unloaded_task_requests_one_timeline_page() {
         let mut state = AppState::default();
         state.tasks.push(task("t1"));
@@ -1386,10 +16087,16 @@ mod tests {
         assert_eq!(
             effects,
             [
+                Effect::ResumeTask {
+                    task_id: "t1".to_owned(),
+                },
                 Effect::LoadTimeline {
                     task_id: "t1".to_owned(),
                     generation: 1,
                     cursor: None,
+                },
+                Effect::LoadGoal {
+                    task_id: "t1".to_owned(),
                 },
                 Effect::RememberWorkspace {
                     path: PathBuf::from("C:\\repo"),
@@ -1397,17 +16104,1088 @@ mod tests {
                 Effect::RefreshGit {
                     cwd: PathBuf::from("C:\\repo"),
                 },
+                Effect::RefreshSkills {
+                    cwds: vec![PathBuf::from("C:\\repo")],
+                    force_reload: false,
+                },
+                Effect::RefreshComposerPlugins {
+                    cwds: vec![PathBuf::from("C:\\repo")],
+                    force_refetch: false,
+                },
             ]
         );
         assert_eq!(
             state.timelines.get("t1").map(|timeline| timeline.status),
             Some(LoadStatus::Loading)
         );
+        assert_eq!(
+            state.goals.get("t1").map(|goal| goal.status),
+            Some(LoadStatus::Loading)
+        );
+
+        reduce(
+            &mut state,
+            Action::TimelineLoaded {
+                task_id: "t1".to_owned(),
+                generation: 1,
+                items: Vec::new(),
+                next_cursor: Some("next-page".to_owned()),
+                append: false,
+            },
+        );
+        assert_eq!(
+            reduce(&mut state, Action::LoadMoreTimeline),
+            [Effect::LoadTimeline {
+                task_id: "t1".to_owned(),
+                generation: 1,
+                cursor: Some("next-page".to_owned()),
+            }]
+        );
+    }
+
+    #[test]
+    fn process_manager_pages_and_stops_only_the_selected_chat_terminals() {
+        let mut state = AppState::default();
+        state.tasks.push(task("t1"));
+        reduce(&mut state, Action::SelectTask("t1".to_owned()));
+
+        assert_eq!(
+            reduce(&mut state, Action::RefreshBackgroundTerminals),
+            [Effect::LoadBackgroundTerminals {
+                task_id: "t1".to_owned(),
+                cursor: None,
+            }]
+        );
+        reduce(
+            &mut state,
+            Action::BackgroundTerminalsLoaded {
+                task_id: "t1".to_owned(),
+                terminals: vec![BackgroundTerminal {
+                    item_id: "item-1".to_owned(),
+                    process_id: "process-1".to_owned(),
+                    command: "python -m http.server".to_owned(),
+                    cwd: PathBuf::from(r"C:\repo"),
+                    os_pid: Some(4242),
+                    cpu_percent: Some(1.25),
+                    rss_kb: Some(2048),
+                }],
+                next_cursor: Some("next".to_owned()),
+                append: false,
+            },
+        );
+        assert_eq!(
+            reduce(&mut state, Action::LoadMoreBackgroundTerminals),
+            [Effect::LoadBackgroundTerminals {
+                task_id: "t1".to_owned(),
+                cursor: Some("next".to_owned()),
+            }]
+        );
+        reduce(
+            &mut state,
+            Action::BackgroundTerminalsLoaded {
+                task_id: "t1".to_owned(),
+                terminals: vec![BackgroundTerminal {
+                    item_id: "item-2".to_owned(),
+                    process_id: "process-2".to_owned(),
+                    command: "cargo watch".to_owned(),
+                    cwd: PathBuf::from(r"C:\repo"),
+                    os_pid: None,
+                    cpu_percent: None,
+                    rss_kb: None,
+                }],
+                next_cursor: None,
+                append: true,
+            },
+        );
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::TerminateBackgroundTerminal("process-1".to_owned()),
+            ),
+            [Effect::TerminateBackgroundTerminal {
+                task_id: "t1".to_owned(),
+                process_id: "process-1".to_owned(),
+            }]
+        );
+        reduce(
+            &mut state,
+            Action::BackgroundTerminalTerminated {
+                task_id: "t1".to_owned(),
+                process_id: "process-1".to_owned(),
+                terminated: true,
+            },
+        );
+        assert_eq!(state.process_manager.terminals.len(), 1);
+
+        assert_eq!(
+            reduce(&mut state, Action::CleanBackgroundTerminals),
+            [Effect::CleanBackgroundTerminals {
+                task_id: "t1".to_owned(),
+            }]
+        );
+        reduce(
+            &mut state,
+            Action::BackgroundTerminalsCleaned {
+                task_id: "t1".to_owned(),
+            },
+        );
+        assert!(state.process_manager.terminals.is_empty());
+        assert_eq!(state.process_manager.status, LoadStatus::Ready);
+    }
+
+    #[test]
+    fn outputs_are_latest_first_deduplicated_and_open_through_the_selected_workspace() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        let timeline = state.timelines.entry("t1".to_owned()).or_default();
+        timeline.active_turn_id = Some("turn-active".to_owned());
+        timeline.items = vec![
+            TimelineItem {
+                id: "older".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                kind: TimelineKind::Agent,
+                text: String::new(),
+                detail: None,
+                process_id: None,
+                memory_citations: Vec::new(),
+                sources: Vec::new(),
+                attachments: Vec::new(),
+                output_artifacts: vec![OutputArtifact {
+                    path: PathBuf::from("reports/a.md"),
+                    kind: OutputArtifactKind::File,
+                }],
+                edit_supported: false,
+                completed: true,
+            },
+            TimelineItem {
+                id: "newer".to_owned(),
+                turn_id: "turn-2".to_owned(),
+                kind: TimelineKind::Agent,
+                text: String::new(),
+                detail: None,
+                process_id: None,
+                memory_citations: Vec::new(),
+                sources: Vec::new(),
+                attachments: Vec::new(),
+                output_artifacts: vec![
+                    OutputArtifact {
+                        path: PathBuf::from("reports/a.md"),
+                        kind: OutputArtifactKind::File,
+                    },
+                    OutputArtifact {
+                        path: PathBuf::from("reports/b.csv"),
+                        kind: OutputArtifactKind::File,
+                    },
+                ],
+                edit_supported: false,
+                completed: true,
+            },
+            TimelineItem {
+                id: "active".to_owned(),
+                turn_id: "turn-active".to_owned(),
+                kind: TimelineKind::Agent,
+                text: String::new(),
+                detail: None,
+                process_id: None,
+                memory_citations: Vec::new(),
+                sources: Vec::new(),
+                attachments: Vec::new(),
+                output_artifacts: vec![
+                    OutputArtifact {
+                        path: PathBuf::from("reports/in-progress.md"),
+                        kind: OutputArtifactKind::File,
+                    },
+                    OutputArtifact {
+                        path: PathBuf::from("reports/generated.png"),
+                        kind: OutputArtifactKind::GeneratedImage,
+                    },
+                ],
+                edit_supported: false,
+                completed: false,
+            },
+        ];
+
+        assert_eq!(
+            timeline
+                .output_artifacts()
+                .into_iter()
+                .map(|artifact| artifact.path)
+                .collect::<Vec<_>>(),
+            [
+                PathBuf::from("reports/generated.png"),
+                PathBuf::from("reports/b.csv"),
+                PathBuf::from("reports/a.md"),
+            ]
+        );
+
+        let output = PathBuf::from("reports/b.csv");
+        assert_eq!(
+            reduce(&mut state, Action::OpenOutput(output.clone())),
+            [
+                Effect::PersistUiState {
+                    route: MainRoute::Tasks,
+                    inspector: InspectorPane::Outputs,
+                },
+                Effect::LoadOutputPreview {
+                    task_id: "t1".to_owned(),
+                    root: PathBuf::from("C:\\repo"),
+                    path: output.clone(),
+                },
+            ]
+        );
+        assert_eq!(state.inspector, InspectorPane::Outputs);
+        assert_eq!(state.artifacts.status, LoadStatus::Loading);
+
+        reduce(
+            &mut state,
+            Action::OutputPreviewLoaded {
+                task_id: "t1".to_owned(),
+                requested_path: output,
+                preview: ArtifactPreview {
+                    path: PathBuf::from(r"C:\repo\reports\b.csv"),
+                    file_name: "b.csv".to_owned(),
+                    extension: "csv".to_owned(),
+                    size_bytes: 12,
+                    kind: ArtifactPreviewKind::Text,
+                    text: Some("a,b".to_owned()),
+                    truncated: false,
+                },
+            },
+        );
+        assert_eq!(state.artifacts.status, LoadStatus::Ready);
+        assert!(reduce(&mut state, Action::CloseOutput).is_empty());
+        assert_eq!(state.artifacts, ArtifactState::default());
+    }
+
+    #[test]
+    fn editing_the_latest_user_message_rolls_back_once_and_preserves_attachments() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        let attachment = ComposerAttachment {
+            path: PathBuf::from("C:\\repo\\design.png"),
+            name: "design.png".to_owned(),
+            kind: ComposerAttachmentKind::LocalImage,
+        };
+        state.timelines.entry("t1".to_owned()).or_default().items = vec![
+            TimelineItem {
+                id: "user-1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                kind: TimelineKind::User,
+                text: "Original".to_owned(),
+                detail: None,
+                process_id: None,
+                memory_citations: Vec::new(),
+                sources: Vec::new(),
+                attachments: vec![attachment.clone()],
+                output_artifacts: Vec::new(),
+                edit_supported: true,
+                completed: true,
+            },
+            TimelineItem {
+                id: "agent-1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                kind: TimelineKind::Agent,
+                text: "Response".to_owned(),
+                detail: None,
+                process_id: None,
+                memory_citations: Vec::new(),
+                sources: Vec::new(),
+                attachments: Vec::new(),
+                output_artifacts: Vec::new(),
+                edit_supported: false,
+                completed: true,
+            },
+        ];
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::EditLastUserMessage {
+                    task_id: "t1".to_owned(),
+                    turn_id: "turn-1".to_owned(),
+                    text: "Edited".to_owned(),
+                },
+            ),
+            [Effect::EditLastUserMessage {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                text: "Edited".to_owned(),
+                attachments: vec![attachment.clone()],
+                rollback_required: true,
+                model: None,
+                effort: None,
+                service_tier: None,
+                permissions: None,
+                approval_policy: None,
+                approvals_reviewer: None,
+                plan_mode: false,
+            }]
+        );
+        reduce(
+            &mut state,
+            Action::LastUserMessageRollbackApplied {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::LastUserMessageEditFailed {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                rollback_applied: true,
+                message: "turn could not be restarted".to_owned(),
+            },
+        );
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::EditLastUserMessage {
+                    task_id: "t1".to_owned(),
+                    turn_id: "turn-1".to_owned(),
+                    text: "Edited again".to_owned(),
+                },
+            ),
+            [Effect::EditLastUserMessage {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                text: "Edited again".to_owned(),
+                attachments: vec![attachment],
+                rollback_required: false,
+                model: None,
+                effort: None,
+                service_tier: None,
+                permissions: None,
+                approval_policy: None,
+                approvals_reviewer: None,
+                plan_mode: false,
+            }]
+        );
+        reduce(
+            &mut state,
+            Action::LastUserMessageEditSucceeded {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+            },
+        );
+        assert!(state.timelines["t1"].items.is_empty());
+        assert!(state.timelines["t1"].message_edit.is_none());
+    }
+
+    #[test]
+    fn compact_slash_command_is_idle_only_and_single_flight() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(&mut state, Action::ComposerChanged("/compact".to_owned()));
+
+        assert_eq!(
+            reduce(&mut state, Action::SubmitComposer),
+            [Effect::CompactThread {
+                task_id: "t1".to_owned(),
+            }]
+        );
+        assert!(state.composer.is_empty());
+        assert!(state.timelines["t1"].compaction_in_flight);
+
+        reduce(&mut state, Action::ComposerChanged("/compact".to_owned()));
+        assert!(reduce(&mut state, Action::SubmitComposer).is_empty());
+        assert_eq!(
+            state.composer_error.as_deref(),
+            Some("Context compaction is already in progress.")
+        );
+
+        reduce(
+            &mut state,
+            Action::CompactThreadFailed {
+                task_id: "t1".to_owned(),
+                message: "compaction rejected".to_owned(),
+            },
+        );
+        assert!(!state.timelines["t1"].compaction_in_flight);
+
+        state
+            .timelines
+            .entry("t1".to_owned())
+            .or_default()
+            .active_turn_id = Some("turn-1".to_owned());
+        reduce(&mut state, Action::ComposerChanged("/compact".to_owned()));
+        assert!(reduce(&mut state, Action::SubmitComposer).is_empty());
+        assert_eq!(
+            state.composer_error.as_deref(),
+            Some("Compact is disabled while a chat is in progress.")
+        );
+    }
+
+    #[test]
+    fn new_and_fork_slash_commands_reuse_the_existing_chat_actions() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+
+        reduce(&mut state, Action::ComposerChanged("/fork".to_owned()));
+        assert_eq!(
+            reduce(&mut state, Action::SubmitComposer),
+            [Effect::ForkTask {
+                task_id: "t1".to_owned(),
+                cwd: Some(PathBuf::from("C:\\repo")),
+                title: "Task".to_owned(),
+            }]
+        );
+        assert!(state.composer.is_empty());
+        assert_eq!(state.selected_task_id.as_deref(), Some("t1"));
+
+        reduce(&mut state, Action::ComposerChanged("/new".to_owned()));
+        assert_eq!(
+            reduce(&mut state, Action::SubmitComposer),
+            [
+                Effect::RefreshSkills {
+                    cwds: vec![PathBuf::from("C:\\repo")],
+                    force_reload: false,
+                },
+                Effect::RefreshComposerPlugins {
+                    cwds: vec![PathBuf::from("C:\\repo")],
+                    force_refetch: false,
+                },
+                Effect::PersistUiState {
+                    route: MainRoute::Tasks,
+                    inspector: InspectorPane::Hidden,
+                }
+            ]
+        );
+        assert!(state.composer.is_empty());
+        assert!(state.selected_task_id.is_none());
+    }
+
+    #[test]
+    fn fork_destinations_keep_the_source_workspace_and_title() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        let worktrees_root = if cfg!(windows) {
+            PathBuf::from(r"E:\codex-worktrees")
+        } else {
+            PathBuf::from("/tmp/codex-worktrees")
+        };
+        state.git_preferences.worktree_root = Some(worktrees_root.clone());
+
+        assert_eq!(
+            reduce(&mut state, Action::ForkSelectedTaskIntoWorktree),
+            [Effect::ForkTaskIntoWorktree {
+                task_id: "t1".to_owned(),
+                cwd: PathBuf::from("C:\\repo"),
+                title: "Task".to_owned(),
+                worktrees_root: Some(worktrees_root),
+            }]
+        );
+        assert_eq!(state.status_message.as_deref(), Some("Creating worktree…"));
+        assert_eq!(
+            state
+                .pending_worktree_fork
+                .as_ref()
+                .map(|pending| pending.phase),
+            Some(PendingWorktreeForkPhase::CreatingWorktree)
+        );
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::ForkTaskInCurrentWorkspace("t1".to_owned())
+            ),
+            [Effect::ForkTask {
+                task_id: "t1".to_owned(),
+                cwd: Some(PathBuf::from("C:\\repo")),
+                title: "Task".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn failed_worktree_conversation_retries_in_the_existing_worktree() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(&mut state, Action::ForkSelectedTaskIntoWorktree);
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::PendingWorktreeForkReady {
+                    workspace_root: PathBuf::from("C:\\managed\\repo\\nested"),
+                    git_root: PathBuf::from("C:\\managed\\repo"),
+                },
+            ),
+            [Effect::RetryPendingWorktreeFork {
+                task_id: "t1".to_owned(),
+                cwd: PathBuf::from("C:\\managed\\repo\\nested"),
+                title: "Task".to_owned(),
+            }]
+        );
+        reduce(
+            &mut state,
+            Action::PendingWorktreeForkConversationFailed("request rejected".to_owned()),
+        );
+
+        assert_eq!(
+            state
+                .pending_worktree_fork
+                .as_ref()
+                .map(|pending| pending.phase),
+            Some(PendingWorktreeForkPhase::FailedStartingConversation)
+        );
+        assert_eq!(
+            reduce(&mut state, Action::RetryPendingWorktreeFork),
+            [Effect::RetryPendingWorktreeFork {
+                task_id: "t1".to_owned(),
+                cwd: PathBuf::from("C:\\managed\\repo\\nested"),
+                title: "Task".to_owned(),
+            }]
+        );
+        let Some(pending) = state.pending_worktree_fork.as_ref() else {
+            panic!("the retry should remain visible until the conversation starts");
+        };
+        assert_eq!(
+            pending.phase,
+            PendingWorktreeForkPhase::StartingConversation
+        );
+        assert_eq!(pending.attempt, 2);
+        assert_eq!(
+            pending.git_root.as_deref(),
+            Some(std::path::Path::new("C:\\managed\\repo"))
+        );
+
+        reduce(
+            &mut state,
+            Action::PendingWorktreeForkConversationFailed("still unavailable".to_owned()),
+        );
+        reduce(&mut state, Action::DismissPendingWorktreeFork);
+        assert!(state.pending_worktree_fork.is_none());
+        assert_eq!(
+            state.status_message.as_deref(),
+            Some("Worktree kept at C:\\managed\\repo")
+        );
+    }
+
+    #[test]
+    fn cancelling_pending_worktree_ignores_a_stale_ready_event() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(&mut state, Action::ForkSelectedTaskIntoWorktree);
+
+        assert_eq!(
+            reduce(&mut state, Action::CancelPendingWorktreeFork),
+            [Effect::CancelPendingWorktreeFork]
+        );
+        assert!(state.pending_worktree_fork.is_none());
+        assert!(state.status_message.is_none());
+        assert!(
+            reduce(
+                &mut state,
+                Action::PendingWorktreeForkReady {
+                    workspace_root: PathBuf::from("C:\\managed\\repo"),
+                    git_root: PathBuf::from("C:\\managed\\repo"),
+                },
+            )
+            .is_empty()
+        );
+        assert!(state.pending_worktree_fork.is_none());
+    }
+
+    #[test]
+    fn token_usage_uses_the_last_turn_and_stable_percentage_rounding() {
+        let mut state = AppState::default();
+
+        reduce(
+            &mut state,
+            Action::ThreadTokenUsageUpdated {
+                task_id: "t1".to_owned(),
+                last_total_tokens: 125,
+                model_context_window: Some(1000),
+            },
+        );
+        let Some(usage) = state.timelines["t1"].context_window_usage else {
+            panic!("valid usage should be retained");
+        };
+        assert_eq!(usage.used_tokens, 125);
+        assert_eq!(usage.context_window, 1000);
+        assert_eq!(usage.used_tokens(), 125);
+        assert_eq!(usage.context_window(), 1000);
+        assert_eq!(usage.rounded_percent(), 13);
+        assert_eq!(usage.rounded_remaining_percent(), 88);
+
+        reduce(
+            &mut state,
+            Action::ThreadTokenUsageUpdated {
+                task_id: "t1".to_owned(),
+                last_total_tokens: 1200,
+                model_context_window: Some(1000),
+            },
+        );
+        assert_eq!(
+            state.timelines["t1"]
+                .context_window_usage
+                .map(|usage| usage.rounded_percent()),
+            Some(100)
+        );
+
+        reduce(
+            &mut state,
+            Action::ThreadTokenUsageUpdated {
+                task_id: "t1".to_owned(),
+                last_total_tokens: -1,
+                model_context_window: Some(1000),
+            },
+        );
+        assert!(state.timelines["t1"].context_window_usage.is_none());
+    }
+
+    #[test]
+    fn resumed_active_turn_restores_stop_and_steer_state() {
+        let mut state = AppState::default();
+        state.tasks.push(task("t1"));
+
+        reduce(
+            &mut state,
+            Action::TaskRuntimeLoaded {
+                task_id: "t1".to_owned(),
+                active_turn_id: Some("turn-active".to_owned()),
+                run_status: Some(TaskRunStatus::Running),
+            },
+        );
+
+        assert_eq!(
+            state
+                .timelines
+                .get("t1")
+                .and_then(|timeline| timeline.active_turn_id.as_deref()),
+            Some("turn-active")
+        );
+        assert_eq!(state.tasks[0].status, TaskRunStatus::Running);
+    }
+
+    #[test]
+    fn loaded_threads_are_prioritized_and_resumed_once_after_reconnect() {
+        let mut background = task("background");
+        background.status = TaskRunStatus::Running;
+        let mut selected = task("selected");
+        selected.status = TaskRunStatus::WaitingForApproval;
+        let mut state = AppState {
+            tasks: vec![task("older"), task("selected")],
+            selected_task_id: Some("selected".to_owned()),
+            ..AppState::default()
+        };
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::LoadedTasksRestored {
+                    tasks: vec![background, selected],
+                    truncated: true,
+                },
+            ),
+            [Effect::ResumeTask {
+                task_id: "background".to_owned(),
+            }]
+        );
+        assert_eq!(
+            state
+                .tasks
+                .iter()
+                .take(2)
+                .map(|task| task.id.as_str())
+                .collect::<Vec<_>>(),
+            ["background", "selected"]
+        );
+        assert_eq!(state.tasks[0].status, TaskRunStatus::Running);
+        assert_eq!(
+            state.status_message.as_deref(),
+            Some("Restored the first 20 loaded chats.")
+        );
+    }
+
+    #[test]
+    fn goal_mutations_are_validated_and_wait_for_app_server_confirmation() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SetGoal {
+                    objective: "  Reach native parity  ".to_owned(),
+                    token_budget: Some(Some(50_000)),
+                }
+            ),
+            [Effect::SetGoal {
+                task_id: "t1".to_owned(),
+                objective: Some("Reach native parity".to_owned()),
+                status: Some(ThreadGoalStatus::Active),
+                token_budget: Some(Some(50_000)),
+            }]
+        );
+        assert_eq!(
+            state.goals.get("t1").map(|goal| goal.status),
+            Some(LoadStatus::Loading)
+        );
+
+        reduce(
+            &mut state,
+            Action::GoalUpdated(ThreadGoal {
+                task_id: "t1".to_owned(),
+                objective: "Reach native parity".to_owned(),
+                status: ThreadGoalStatus::Active,
+                tokens_used: 1_000,
+                token_budget: Some(50_000),
+                time_used_seconds: 120,
+                created_at: 10,
+                updated_at: 20,
+            }),
+        );
+        assert_eq!(
+            reduce(&mut state, Action::SetGoalStatus(ThreadGoalStatus::Paused)),
+            [Effect::SetGoal {
+                task_id: "t1".to_owned(),
+                objective: None,
+                status: Some(ThreadGoalStatus::Paused),
+                token_budget: None,
+            }]
+        );
+        reduce(
+            &mut state,
+            Action::GoalUpdated(ThreadGoal {
+                task_id: "t1".to_owned(),
+                objective: "Reach native parity".to_owned(),
+                status: ThreadGoalStatus::Paused,
+                tokens_used: 1_000,
+                token_budget: Some(50_000),
+                time_used_seconds: 120,
+                created_at: 10,
+                updated_at: 30,
+            }),
+        );
+        assert_eq!(
+            reduce(&mut state, Action::ClearGoal),
+            [Effect::ClearGoal {
+                task_id: "t1".to_owned(),
+            }]
+        );
+
+        reduce(
+            &mut state,
+            Action::GoalCleared {
+                task_id: "t1".to_owned(),
+            },
+        );
+        assert!(
+            state
+                .goals
+                .get("t1")
+                .is_some_and(|goal| goal.goal.is_none() && goal.status == LoadStatus::Ready)
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::SetGoal {
+                    objective: "invalid budget".to_owned(),
+                    token_budget: Some(Some(0)),
+                }
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn completed_goal_is_cleared_once_and_stays_attributed_to_its_final_response() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(
+            &mut state,
+            Action::UpsertTimelineItem {
+                task_id: "t1".to_owned(),
+                item: TimelineItem {
+                    id: "answer-1".to_owned(),
+                    turn_id: "turn-7".to_owned(),
+                    kind: TimelineKind::Agent,
+                    text: "The goal is complete.".to_owned(),
+                    detail: None,
+                    process_id: None,
+                    memory_citations: Vec::new(),
+                    sources: Vec::new(),
+                    attachments: Vec::new(),
+                    output_artifacts: Vec::new(),
+                    edit_supported: false,
+                    completed: true,
+                },
+            },
+        );
+        let completed = ThreadGoal {
+            task_id: "t1".to_owned(),
+            objective: "Reach native parity".to_owned(),
+            status: ThreadGoalStatus::Complete,
+            tokens_used: 4_000,
+            token_budget: Some(50_000),
+            time_used_seconds: 180,
+            created_at: 10,
+            updated_at: 40,
+        };
+
+        assert_eq!(
+            reduce(&mut state, Action::GoalUpdated(completed.clone())),
+            [Effect::ClearGoal {
+                task_id: "t1".to_owned(),
+            }]
+        );
+        let Some(goal_state) = state.goals.get("t1") else {
+            panic!("goal state");
+        };
+        assert_eq!(goal_state.goal.as_ref(), Some(&completed));
+        assert_eq!(goal_state.completed_goal.as_ref(), Some(&completed));
+        assert_eq!(goal_state.completed_goal_turn_id.as_deref(), Some("turn-7"));
+        assert!(
+            reduce(&mut state, Action::GoalUpdated(completed.clone())).is_empty(),
+            "duplicate completion must not clear twice"
+        );
+
+        reduce(
+            &mut state,
+            Action::GoalCleared {
+                task_id: "t1".to_owned(),
+            },
+        );
+        let Some(goal_state) = state.goals.get("t1") else {
+            panic!("goal state");
+        };
+        assert!(goal_state.goal.is_none());
+        assert_eq!(goal_state.completed_goal.as_ref(), Some(&completed));
+        assert!(
+            reduce(&mut state, Action::GoalUpdated(completed.clone())).is_empty(),
+            "a late duplicate must not revive a cleared completed goal"
+        );
+        assert!(
+            state
+                .goals
+                .get("t1")
+                .is_some_and(|goal| goal.goal.is_none())
+        );
+
+        let mut replacement = completed;
+        replacement.status = ThreadGoalStatus::Active;
+        replacement.updated_at = 41;
+        reduce(&mut state, Action::GoalUpdated(replacement));
+        let Some(goal_state) = state.goals.get("t1") else {
+            panic!("goal state");
+        };
+        assert!(goal_state.completed_goal.is_none());
+        assert!(goal_state.completed_goal_turn_id.is_none());
+    }
+
+    #[test]
+    fn command_output_deltas_stay_out_of_the_activity_summary() {
+        let mut state = AppState::default();
+        for delta in ["first line\n", "second line"] {
+            reduce(
+                &mut state,
+                Action::TimelineDelta {
+                    task_id: "t1".to_owned(),
+                    turn_id: "turn-1".to_owned(),
+                    item_id: "command-1".to_owned(),
+                    kind: TimelineKind::Command,
+                    delta: delta.to_owned(),
+                },
+            );
+        }
+
+        let Some(item) = state
+            .timelines
+            .get("t1")
+            .and_then(|timeline| timeline.items.first())
+        else {
+            panic!("command output should create one timeline item");
+        };
+        assert_eq!(item.text, "Running command");
+        assert_eq!(item.detail.as_deref(), Some("first line\nsecond line"));
+    }
+
+    #[test]
+    fn turn_diff_tracks_only_the_latest_turn_and_stays_bounded() {
+        let mut state = AppState::default();
+        reduce(
+            &mut state,
+            Action::TurnStarted {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::TurnDiffUpdated {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                diff: "diff --git a/a.txt b/a.txt\n+first".to_owned(),
+                truncated: false,
+            },
+        );
+        assert_eq!(
+            state
+                .timelines
+                .get("t1")
+                .and_then(|timeline| timeline.last_turn_diff.as_ref())
+                .map(|diff| diff.unified_diff.as_str()),
+            Some("diff --git a/a.txt b/a.txt\n+first")
+        );
+
+        reduce(
+            &mut state,
+            Action::TurnStarted {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-2".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::TurnDiffUpdated {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                diff: "late old diff".to_owned(),
+                truncated: false,
+            },
+        );
+        let oversized = "x".repeat(MAX_TURN_DIFF_BYTES + 1);
+        reduce(
+            &mut state,
+            Action::TurnDiffUpdated {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-2".to_owned(),
+                diff: oversized,
+                truncated: false,
+            },
+        );
+        let Some(diff) = state
+            .timelines
+            .get("t1")
+            .and_then(|timeline| timeline.last_turn_diff.as_ref())
+        else {
+            panic!("latest turn diff");
+        };
+        assert_eq!(diff.turn_id, "turn-2");
+        assert_eq!(diff.unified_diff.len(), MAX_TURN_DIFF_BYTES);
+        assert!(diff.truncated);
+    }
+
+    #[test]
+    fn active_goal_continuation_is_delayed_deduplicated_and_guarded() {
+        let mut state = AppState {
+            connection: ConnectionStatus::Online,
+            ..AppState::default()
+        };
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(
+            &mut state,
+            Action::TurnStarted {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+            },
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::GoalLoaded {
+                    task_id: "t1".to_owned(),
+                    goal: Some(ThreadGoal {
+                        task_id: "t1".to_owned(),
+                        objective: "Reach native parity".to_owned(),
+                        status: ThreadGoalStatus::Active,
+                        tokens_used: 1_000,
+                        token_budget: Some(50_000),
+                        time_used_seconds: 120,
+                        created_at: 10,
+                        updated_at: 20,
+                    }),
+                }
+            )
+            .is_empty()
+        );
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::TurnCompleted {
+                    task_id: "t1".to_owned(),
+                    turn_id: "turn-1".to_owned(),
+                    failed: false,
+                }
+            ),
+            [Effect::ScheduleGoalContinuation {
+                task_id: "t1".to_owned(),
+            }]
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::MaybeContinueGoal {
+                    task_id: "t1".to_owned(),
+                }
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::GoalContinuationDue {
+                    task_id: "t1".to_owned(),
+                }
+            ),
+            [Effect::ContinueGoal {
+                task_id: "t1".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn stopping_a_turn_pauses_its_active_goal_first() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(
+            &mut state,
+            Action::TurnStarted {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::GoalUpdated(ThreadGoal {
+                task_id: "t1".to_owned(),
+                objective: "Reach native parity".to_owned(),
+                status: ThreadGoalStatus::Active,
+                tokens_used: 1_000,
+                token_budget: Some(50_000),
+                time_used_seconds: 120,
+                created_at: 10,
+                updated_at: 20,
+            }),
+        );
+
+        assert_eq!(
+            reduce(&mut state, Action::InterruptActiveTurn),
+            [
+                Effect::SetGoal {
+                    task_id: "t1".to_owned(),
+                    objective: None,
+                    status: Some(ThreadGoalStatus::Paused),
+                    token_budget: None,
+                },
+                Effect::InterruptTurn {
+                    task_id: "t1".to_owned(),
+                    turn_id: "turn-1".to_owned(),
+                },
+            ]
+        );
     }
 
     #[test]
     fn navigation_persists_only_codexrs_owned_ui_state() {
         let mut state = AppState::default();
+        assert_eq!(state.inspector, InspectorPane::Hidden);
+        assert!(!state.terminal_dock_open);
 
         let effects = reduce(&mut state, Action::Navigate(MainRoute::Repository));
 
@@ -1418,6 +17196,922 @@ mod tests {
                 inspector: state.inspector,
             }]
         );
+
+        assert_eq!(
+            reduce(&mut state, Action::ShowInspector(InspectorPane::Changes)),
+            [Effect::PersistUiState {
+                route: MainRoute::Repository,
+                inspector: InspectorPane::Changes,
+            }]
+        );
+        assert_eq!(state.inspector, InspectorPane::Changes);
+        assert_eq!(
+            reduce(&mut state, Action::ShowInspector(InspectorPane::Hidden)),
+            [Effect::PersistUiState {
+                route: MainRoute::Repository,
+                inspector: InspectorPane::Hidden,
+            }]
+        );
+
+        assert!(reduce(&mut state, Action::ToggleTerminalDock).is_empty());
+        assert!(state.terminal_dock_open);
+        assert!(reduce(&mut state, Action::ToggleTerminalDock).is_empty());
+        assert!(!state.terminal_dock_open);
+    }
+
+    #[test]
+    fn pull_request_route_loads_the_default_bounded_inbox() {
+        let mut state = AppState {
+            tasks: vec![task("active")],
+            selected_task_id: Some("active".to_owned()),
+            ..AppState::default()
+        };
+
+        assert_eq!(
+            reduce(&mut state, Action::Navigate(MainRoute::PullRequests)),
+            [
+                Effect::PersistUiState {
+                    route: MainRoute::PullRequests,
+                    inspector: InspectorPane::Hidden,
+                },
+                Effect::SearchPullRequests {
+                    generation: 1,
+                    cwd: PathBuf::from("C:\\repo"),
+                    relationship: PullRequestRelationship::ReviewRequested,
+                    lifecycle: PullRequestLifecycle::Open,
+                    query: String::new(),
+                    cursor: None,
+                    append: false,
+                },
+            ]
+        );
+        assert_eq!(state.pull_requests.status, LoadStatus::Loading);
+    }
+
+    #[test]
+    fn pull_request_search_debounces_and_ignores_stale_generations() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::Navigate(MainRoute::PullRequests));
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::PullRequestQueryChanged("native inbox".to_owned())
+            ),
+            [Effect::SchedulePullRequestSearch { generation: 2 }]
+        );
+        assert!(reduce(&mut state, Action::PullRequestSearchDue { generation: 1 }).is_empty());
+        assert_eq!(
+            reduce(&mut state, Action::PullRequestSearchDue { generation: 2 }),
+            [Effect::SearchPullRequests {
+                generation: 2,
+                cwd: PathBuf::from("."),
+                relationship: PullRequestRelationship::ReviewRequested,
+                lifecycle: PullRequestLifecycle::Open,
+                query: "native inbox".to_owned(),
+                cursor: None,
+                append: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn pull_request_selection_and_pagination_keep_identity_and_generation_guards() {
+        let mut state = AppState {
+            route: MainRoute::PullRequests,
+            ..AppState::default()
+        };
+        state.pull_requests.generation = 4;
+        let summary = pull_request(42);
+        let identity = summary.identity.clone();
+        reduce(
+            &mut state,
+            Action::PullRequestsLoaded {
+                generation: 4,
+                account_login: "octocat".to_owned(),
+                account_avatar_url: None,
+                items: vec![summary.clone()],
+                total_count: 2,
+                next_cursor: Some("cursor-1".to_owned()),
+                truncated: false,
+                append: false,
+            },
+        );
+
+        assert_eq!(
+            reduce(&mut state, Action::LoadMorePullRequests),
+            [Effect::SearchPullRequests {
+                generation: 4,
+                cwd: PathBuf::from("."),
+                relationship: PullRequestRelationship::ReviewRequested,
+                lifecycle: PullRequestLifecycle::Open,
+                query: String::new(),
+                cursor: Some("cursor-1".to_owned()),
+                append: true,
+            }]
+        );
+        assert_eq!(
+            reduce(&mut state, Action::SelectPullRequest(identity.clone())),
+            [Effect::LoadPullRequestDetail {
+                generation: 1,
+                cwd: PathBuf::from("."),
+                identity: identity.clone(),
+                account_login: "octocat".to_owned(),
+            }]
+        );
+
+        let detail = PullRequestDetail {
+            summary,
+            body: "Summary body".to_owned(),
+            head_revision: "abc123".to_owned(),
+            review_decision: Some("REVIEW_REQUIRED".to_owned()),
+            mergeable: Some("MERGEABLE".to_owned()),
+            merge_state_status: Some("CLEAN".to_owned()),
+            checks: Vec::new(),
+            activity: Vec::new(),
+            checks_partial: false,
+            activity_partial: false,
+        };
+        assert!(
+            reduce(
+                &mut state,
+                Action::PullRequestDetailLoaded {
+                    generation: 0,
+                    detail: detail.clone(),
+                }
+            )
+            .is_empty()
+        );
+        assert_eq!(state.pull_requests.detail_status, LoadStatus::Loading);
+        assert!(
+            reduce(
+                &mut state,
+                Action::PullRequestDetailLoaded {
+                    generation: 1,
+                    detail: detail.clone(),
+                }
+            )
+            .is_empty()
+        );
+        assert_eq!(state.pull_requests.detail, Some(detail));
+        assert_eq!(state.pull_requests.detail_status, LoadStatus::Ready);
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SelectPullRequestDetailTab(PullRequestDetailTab::Code)
+            ),
+            [Effect::LoadPullRequestDiff {
+                generation: 1,
+                cwd: PathBuf::from("."),
+                identity: identity.clone(),
+            }]
+        );
+        assert_eq!(state.pull_requests.diff_status, LoadStatus::Loading);
+        assert!(
+            reduce(
+                &mut state,
+                Action::PullRequestDiffLoaded {
+                    generation: 0,
+                    identity: identity.clone(),
+                    head_revision: "abc123".to_owned(),
+                    unified_diff: "+stale".to_owned(),
+                }
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::PullRequestDiffLoaded {
+                    generation: 1,
+                    identity,
+                    head_revision: "abc123".to_owned(),
+                    unified_diff: "@@ -0,0 +1 @@\n+native\n".to_owned(),
+                }
+            ),
+            []
+        );
+        assert_eq!(state.pull_requests.diff_status, LoadStatus::Ready);
+        assert_eq!(state.pull_requests.unified_diff, "@@ -0,0 +1 @@\n+native\n");
+    }
+
+    #[test]
+    fn pull_request_reviews_use_the_loaded_head_and_refresh_after_success() {
+        let summary = pull_request(42);
+        let identity = summary.identity.clone();
+        let mut state = AppState::default();
+        state.pull_requests.account_login = Some("reviewer".to_owned());
+        state.pull_requests.selected = Some(identity.clone());
+        state.pull_requests.detail_status = LoadStatus::Ready;
+        state.pull_requests.detail = Some(PullRequestDetail {
+            summary,
+            body: String::new(),
+            head_revision: "abc123".to_owned(),
+            review_decision: Some("REVIEW_REQUIRED".to_owned()),
+            mergeable: Some("MERGEABLE".to_owned()),
+            merge_state_status: Some("CLEAN".to_owned()),
+            checks: Vec::new(),
+            activity: Vec::new(),
+            checks_partial: false,
+            activity_partial: false,
+        });
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SubmitPullRequestMutation(PullRequestMutation::Review {
+                    event: PullRequestReviewEvent::Approve,
+                    body: String::new(),
+                })
+            ),
+            [Effect::MutatePullRequest {
+                generation: 1,
+                cwd: PathBuf::from("."),
+                identity: identity.clone(),
+                expected_head_revision: "abc123".to_owned(),
+                mutation: PullRequestMutation::Review {
+                    event: PullRequestReviewEvent::Approve,
+                    body: String::new(),
+                },
+            }]
+        );
+        assert_eq!(
+            state.pull_requests.pending_mutation,
+            Some(PullRequestMutationKind::Approve)
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::PullRequestMutationCompleted {
+                    generation: 1,
+                    identity: identity.clone(),
+                }
+            ),
+            [Effect::LoadPullRequestDetail {
+                generation: 1,
+                cwd: PathBuf::from("."),
+                identity,
+                account_login: "reviewer".to_owned(),
+            }]
+        );
+        assert_eq!(state.pull_requests.pending_mutation, None);
+        assert_eq!(state.pull_requests.detail_status, LoadStatus::Loading);
+    }
+
+    #[test]
+    fn legacy_terminal_inspector_restores_as_bottom_dock() {
+        let mut state = AppState::default();
+
+        reduce(
+            &mut state,
+            Action::StorageOpened {
+                path: PathBuf::from("C:\\codexrs\\state.sqlite"),
+                route: Some(MainRoute::Tasks),
+                inspector: Some(InspectorPane::Terminal),
+                appearance_theme: None,
+                terminal_location: Some(TerminalDockLocation::Right),
+                terminal_bottom_height: Some(404),
+                terminal_right_width: Some(704),
+                git_include_unstaged: Some(false),
+                pinned_task_ids: Vec::new(),
+                recent_workspace: None,
+            },
+        );
+
+        assert_eq!(state.inspector, InspectorPane::Hidden);
+        assert!(state.terminal_dock_open);
+        assert_eq!(state.terminal.location, TerminalDockLocation::Right);
+        assert_eq!(state.terminal.bottom_panel_height, 404);
+        assert_eq!(state.terminal.right_panel_width, 704);
+        assert!(!state.git_include_unstaged);
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SetTerminalDockLocation(TerminalDockLocation::Bottom)
+            ),
+            [Effect::PersistTerminalDockLocation(
+                TerminalDockLocation::Bottom
+            )]
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SetTerminalDockSize {
+                    location: TerminalDockLocation::Bottom,
+                    size: 412,
+                }
+            ),
+            [Effect::PersistTerminalDockSize {
+                location: TerminalDockLocation::Bottom,
+                size: 412,
+            }]
+        );
+    }
+
+    #[test]
+    fn appearance_theme_restores_and_persists_only_changes() {
+        let mut state = AppState::default();
+
+        reduce(
+            &mut state,
+            Action::StorageOpened {
+                path: PathBuf::from("C:\\codexrs\\state.sqlite"),
+                route: None,
+                inspector: None,
+                appearance_theme: Some(AppearanceTheme::Dark),
+                terminal_location: None,
+                terminal_bottom_height: None,
+                terminal_right_width: None,
+                git_include_unstaged: None,
+                pinned_task_ids: Vec::new(),
+                recent_workspace: None,
+            },
+        );
+
+        assert_eq!(state.appearance_theme, AppearanceTheme::Dark);
+        assert!(
+            reduce(
+                &mut state,
+                Action::SetAppearanceTheme(AppearanceTheme::Dark)
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SetAppearanceTheme(AppearanceTheme::System)
+            ),
+            [Effect::PersistAppearanceTheme(AppearanceTheme::System)]
+        );
+        assert_eq!(state.appearance_theme, AppearanceTheme::System);
+    }
+
+    #[test]
+    fn appearance_preferences_restore_normalized_values_and_persist_only_changes() {
+        let mut state = AppState::default();
+        let mut preferences = AppearancePreferences {
+            ui_font_size: 99,
+            code_font_size: 1,
+            diff_marker_style: DiffMarkerStyle::Symbols,
+            ..AppearancePreferences::default()
+        };
+        preferences.light.code_theme_id = "unsupported".to_owned();
+        preferences.light.ui_font = Some("  Inter  ".to_owned());
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::AppearancePreferencesLoaded(preferences.clone())
+            )
+            .is_empty()
+        );
+        assert_eq!(state.appearance_preferences.ui_font_size, 16);
+        assert_eq!(state.appearance_preferences.code_font_size, 8);
+        assert_eq!(state.appearance_preferences.light.code_theme_id, "codex");
+        assert_eq!(
+            state.appearance_preferences.light.ui_font.as_deref(),
+            Some("Inter")
+        );
+        assert_eq!(
+            state.appearance_preferences.diff_marker_style,
+            DiffMarkerStyle::Symbols
+        );
+
+        let restored = state.appearance_preferences.clone();
+        assert!(
+            reduce(
+                &mut state,
+                Action::SetAppearancePreferences(restored.clone())
+            )
+            .is_empty()
+        );
+
+        let mut changed = restored;
+        changed.use_pointer_cursors = true;
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SetAppearancePreferences(changed.clone())
+            ),
+            [Effect::PersistAppearancePreferences(changed)]
+        );
+    }
+
+    #[test]
+    fn git_preferences_restore_normalized_values_and_persist_only_changes() {
+        let mut state = AppState::default();
+        let worktree_root = if cfg!(windows) {
+            PathBuf::from(r"E:\codex-worktrees")
+        } else {
+            PathBuf::from("/tmp/codex-worktrees")
+        };
+        let preferences = GitPreferences {
+            branch_prefix: "  team/\0  ".to_owned(),
+            always_force_push: true,
+            create_pull_request_as_draft: true,
+            pull_request_merge_method: PullRequestMergeMethod::Squash,
+            review_mode: GitReviewMode::Full,
+            commit_instructions: format!("{}\0tail", "x".repeat(MAX_GIT_INSTRUCTIONS_BYTES)),
+            pull_request_instructions: "Use the repository template.".to_owned(),
+            worktree_root: Some(worktree_root.clone()),
+        };
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::GitPreferencesLoaded(preferences.clone())
+            )
+            .is_empty()
+        );
+        assert_eq!(state.git_preferences.branch_prefix, "team/");
+        assert!(!state.git_preferences.commit_instructions.contains('\0'));
+        assert!(state.git_preferences.commit_instructions.len() <= MAX_GIT_INSTRUCTIONS_BYTES);
+        assert_eq!(
+            state.git_preferences.pull_request_merge_method,
+            PullRequestMergeMethod::Squash
+        );
+        assert_eq!(
+            state.git_preferences.worktree_root.as_ref(),
+            Some(&worktree_root)
+        );
+
+        let restored = state.git_preferences.clone();
+        assert!(reduce(&mut state, Action::SetGitPreferences(restored.clone())).is_empty());
+
+        let mut changed = restored;
+        changed.always_force_push = false;
+        assert_eq!(
+            reduce(&mut state, Action::SetGitPreferences(changed.clone())),
+            [Effect::PersistGitPreferences(changed)]
+        );
+    }
+
+    #[test]
+    fn disabling_git_review_keeps_last_turn_as_the_only_selectable_source() {
+        let mut state = AppState::default();
+        let mut preferences = state.git_preferences.clone();
+        preferences.review_mode = GitReviewMode::LastTurnOnly;
+
+        assert_eq!(
+            reduce(&mut state, Action::SetGitPreferences(preferences.clone())),
+            [Effect::PersistGitPreferences(preferences)]
+        );
+        assert_eq!(state.git.selected_scope, GitDiffScope::LastTurn);
+        assert!(
+            reduce(
+                &mut state,
+                Action::SelectGitDiffScope(GitDiffScope::Unstaged)
+            )
+            .is_empty()
+        );
+        assert_eq!(state.git.selected_scope, GitDiffScope::LastTurn);
+
+        let mut preferences = state.git_preferences.clone();
+        preferences.review_mode = GitReviewMode::Full;
+        reduce(&mut state, Action::SetGitPreferences(preferences));
+        reduce(&mut state, Action::SelectGitDiffScope(GitDiffScope::Staged));
+        assert_eq!(state.git.selected_scope, GitDiffScope::Staged);
+    }
+
+    #[test]
+    fn keyboard_shortcut_preferences_are_bounded_and_persist_only_changes() {
+        let mut state = AppState::default();
+        let preferences = KeyboardShortcutPreferences {
+            overrides: [
+                (
+                    "openCommandMenu".to_owned(),
+                    vec![
+                        " Ctrl+Shift+K ".to_owned(),
+                        "ctrl+shift+k".to_owned(),
+                        "\n".to_owned(),
+                    ],
+                ),
+                ("toggleTerminal".to_owned(), Vec::new()),
+                ("unknownCommand".to_owned(), vec!["Ctrl+U".to_owned()]),
+            ]
+            .into_iter()
+            .collect(),
+        };
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::KeyboardShortcutPreferencesLoaded(preferences)
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state
+                .keyboard_shortcut_preferences
+                .bindings_for("openCommandMenu"),
+            Some(["Ctrl+Shift+K".to_owned()].as_slice())
+        );
+        assert_eq!(
+            state
+                .keyboard_shortcut_preferences
+                .bindings_for("toggleTerminal"),
+            Some([].as_slice())
+        );
+        assert!(
+            state
+                .keyboard_shortcut_preferences
+                .bindings_for("unknownCommand")
+                .is_none()
+        );
+
+        let restored = state.keyboard_shortcut_preferences.clone();
+        assert!(
+            reduce(
+                &mut state,
+                Action::SetKeyboardShortcutPreferences {
+                    preferences: restored.clone(),
+                    target: KeyboardShortcutUpdateTarget::Command("openCommandMenu".to_owned()),
+                }
+            )
+            .is_empty()
+        );
+
+        let previous = restored.clone();
+        let mut changed = restored;
+        changed.overrides.remove("toggleTerminal");
+        let target = KeyboardShortcutUpdateTarget::Command("toggleTerminal".to_owned());
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SetKeyboardShortcutPreferences {
+                    preferences: changed.clone(),
+                    target: target.clone(),
+                }
+            ),
+            [Effect::PersistKeyboardShortcutPreferences {
+                preferences: changed,
+                previous: previous.clone(),
+                target: target.clone(),
+            }]
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::KeyboardShortcutPreferencesPersistFailed {
+                    previous: previous.clone(),
+                    target,
+                }
+            )
+            .is_empty()
+        );
+        assert_eq!(state.keyboard_shortcut_preferences, previous);
+        assert_eq!(
+            state.status_message.as_deref(),
+            Some("Failed to update shortcut")
+        );
+    }
+
+    #[test]
+    fn code_theme_selection_uses_stable_variant_seeds_and_theme_specific_overrides() {
+        assert_eq!(
+            APPEARANCE_CODE_THEMES
+                .iter()
+                .filter(|(theme_id, _)| appearance_code_theme_supports_variant(
+                    theme_id,
+                    AppearanceVariant::Light
+                ))
+                .count(),
+            16
+        );
+        assert_eq!(
+            APPEARANCE_CODE_THEMES
+                .iter()
+                .filter(|(theme_id, _)| appearance_code_theme_supports_variant(
+                    theme_id,
+                    AppearanceVariant::Dark
+                ))
+                .count(),
+            27
+        );
+
+        let mut proof = AppearancePalette::codex(AppearanceVariant::Light);
+        proof.code_font = Some("Custom Mono".to_owned());
+        proof.ui_font = Some("Custom Sans".to_owned());
+        assert!(proof.select_code_theme("proof", AppearanceVariant::Light));
+        assert_eq!(proof, AppearancePalette::proof_light());
+        assert_eq!(proof.semantic_colors.diff_added, 0x3d_75_5d);
+        assert_eq!(proof.semantic_colors.skill, 0x5f_6a_c2);
+
+        let mut vercel = AppearancePalette::codex(AppearanceVariant::Dark);
+        assert!(vercel.select_code_theme("vercel", AppearanceVariant::Dark));
+        assert_eq!(vercel.accent, 0x00_6e_fe);
+        assert_eq!(vercel.contrast, 50);
+        assert_eq!(vercel.surface, 0x00_00_00);
+        assert_eq!(vercel.ui_font.as_deref(), Some("Geist, Inter"));
+        assert!(vercel.opaque_windows);
+
+        let unchanged = vercel.clone();
+        assert!(!vercel.select_code_theme("proof", AppearanceVariant::Dark));
+        assert_eq!(vercel, unchanged);
+    }
+
+    #[test]
+    fn review_tab_toggle_is_scoped_to_git_backed_task_chats() {
+        let mut state = AppState::default();
+        assert!(reduce(&mut state, Action::ToggleReviewTab).is_empty());
+
+        state.tasks.push(task("t1"));
+        state.selected_task_id = Some("t1".to_owned());
+        assert!(reduce(&mut state, Action::ToggleReviewTab).is_empty());
+        assert_eq!(state.inspector, InspectorPane::Hidden);
+
+        state.git.repository_root = Some(PathBuf::from("C:\\repo"));
+        state.inspector = InspectorPane::Outputs;
+        state.last_side_panel = InspectorPane::Outputs;
+        state.terminal.location = TerminalDockLocation::Right;
+        state.terminal_dock_open = true;
+        assert_eq!(
+            reduce(&mut state, Action::ToggleReviewTab),
+            [Effect::PersistUiState {
+                route: MainRoute::Tasks,
+                inspector: InspectorPane::Changes,
+            }]
+        );
+        assert_eq!(state.inspector, InspectorPane::Changes);
+        assert_eq!(state.last_side_panel, InspectorPane::Changes);
+        assert!(!state.terminal_dock_open);
+
+        assert_eq!(
+            reduce(&mut state, Action::ToggleReviewTab),
+            [Effect::PersistUiState {
+                route: MainRoute::Tasks,
+                inspector: InspectorPane::Hidden,
+            }]
+        );
+        assert_eq!(state.inspector, InspectorPane::Hidden);
+        assert_eq!(state.last_side_panel, InspectorPane::Changes);
+
+        state.route = MainRoute::Settings;
+        assert!(reduce(&mut state, Action::ToggleReviewTab).is_empty());
+        assert_eq!(state.inspector, InspectorPane::Hidden);
+    }
+
+    #[test]
+    fn side_panel_full_width_requires_an_open_task_panel_and_resets_on_close() {
+        let mut state = AppState::default();
+        assert!(reduce(&mut state, Action::ToggleMaximizeSidePanel).is_empty());
+        assert!(!state.side_panel_full_width);
+
+        state.tasks.push(task("t1"));
+        state.selected_task_id = Some("t1".to_owned());
+        state.inspector = InspectorPane::Outputs;
+        assert!(reduce(&mut state, Action::ToggleMaximizeSidePanel).is_empty());
+        assert!(state.side_panel_full_width);
+        assert!(reduce(&mut state, Action::ToggleMaximizeSidePanel).is_empty());
+        assert!(!state.side_panel_full_width);
+
+        assert!(reduce(&mut state, Action::ToggleMaximizeSidePanel).is_empty());
+        assert!(state.side_panel_full_width);
+        assert_eq!(
+            reduce(&mut state, Action::ShowInspector(InspectorPane::Hidden)),
+            [Effect::PersistUiState {
+                route: MainRoute::Tasks,
+                inspector: InspectorPane::Hidden,
+            }]
+        );
+        assert!(!state.side_panel_full_width);
+
+        state.route = MainRoute::Settings;
+        state.inspector = InspectorPane::Changes;
+        assert!(reduce(&mut state, Action::ToggleMaximizeSidePanel).is_empty());
+        assert!(!state.side_panel_full_width);
+    }
+
+    #[test]
+    fn review_panel_toggle_restores_the_active_right_panel_tab() {
+        let mut state = AppState::default();
+        assert!(reduce(&mut state, Action::ToggleReviewPanel).is_empty());
+        assert_eq!(state.inspector, InspectorPane::Hidden);
+
+        state.tasks.push(task("t1"));
+        state.selected_task_id = Some("t1".to_owned());
+        assert_eq!(
+            reduce(&mut state, Action::ToggleReviewPanel),
+            [Effect::PersistUiState {
+                route: MainRoute::Tasks,
+                inspector: InspectorPane::Changes,
+            }]
+        );
+        assert_eq!(state.last_side_panel, InspectorPane::Changes);
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::ShowInspector(InspectorPane::ComputerUse)
+            ),
+            [Effect::PersistUiState {
+                route: MainRoute::Tasks,
+                inspector: InspectorPane::ComputerUse,
+            }]
+        );
+        assert_eq!(
+            reduce(&mut state, Action::ToggleReviewPanel),
+            [Effect::PersistUiState {
+                route: MainRoute::Tasks,
+                inspector: InspectorPane::Hidden,
+            }]
+        );
+        assert_eq!(state.last_side_panel, InspectorPane::ComputerUse);
+        assert_eq!(
+            reduce(&mut state, Action::ToggleReviewPanel),
+            [Effect::PersistUiState {
+                route: MainRoute::Tasks,
+                inspector: InspectorPane::ComputerUse,
+            }]
+        );
+
+        assert_eq!(
+            reduce(&mut state, Action::ShowInspector(InspectorPane::Hidden)),
+            [Effect::PersistUiState {
+                route: MainRoute::Tasks,
+                inspector: InspectorPane::Hidden,
+            }]
+        );
+        state.terminal.location = TerminalDockLocation::Right;
+        assert_eq!(
+            reduce(&mut state, Action::SpawnTerminal),
+            [Effect::SpawnTerminal {
+                tab_id: 1,
+                cwd: PathBuf::from("C:\\repo"),
+                shell: None,
+            }]
+        );
+        assert!(reduce(&mut state, Action::ToggleTerminalDock).is_empty());
+        assert!(state.terminal_dock_open);
+        assert_eq!(state.inspector, InspectorPane::Hidden);
+        assert_eq!(state.last_side_panel, InspectorPane::Terminal);
+
+        assert!(reduce(&mut state, Action::ToggleReviewPanel).is_empty());
+        assert!(!state.terminal_dock_open);
+        assert!(reduce(&mut state, Action::ToggleReviewPanel).is_empty());
+        assert!(state.terminal_dock_open);
+        assert_eq!(state.terminal.tabs.len(), 1);
+        assert_eq!(state.inspector, InspectorPane::Hidden);
+    }
+
+    #[test]
+    fn bottom_panel_toggle_only_changes_an_existing_bottom_tab() {
+        let mut state = AppState::default();
+        state.tasks.push(task("t1"));
+        state.selected_task_id = Some("t1".to_owned());
+
+        assert!(reduce(&mut state, Action::ToggleBottomPanel).is_empty());
+        assert!(!state.terminal_dock_open);
+        assert!(state.terminal.tabs.is_empty());
+
+        assert_eq!(
+            reduce(&mut state, Action::SpawnTerminal),
+            [Effect::SpawnTerminal {
+                tab_id: 1,
+                cwd: PathBuf::from("C:\\repo"),
+                shell: None,
+            }]
+        );
+        assert!(!state.terminal_dock_open);
+
+        assert!(reduce(&mut state, Action::ToggleBottomPanel).is_empty());
+        assert!(state.terminal_dock_open);
+        assert!(reduce(&mut state, Action::ToggleBottomPanel).is_empty());
+        assert!(!state.terminal_dock_open);
+
+        state.terminal.location = TerminalDockLocation::Right;
+        state.terminal_dock_open = true;
+        assert!(reduce(&mut state, Action::ToggleBottomPanel).is_empty());
+        assert!(state.terminal_dock_open);
+        assert_eq!(state.terminal.tabs.len(), 1);
+    }
+
+    #[test]
+    fn terminal_tabs_route_input_and_close_without_stopping_other_sessions() {
+        let mut state = AppState::default();
+        state.tasks.push(task("t1"));
+        state.selected_task_id = Some("t1".to_owned());
+        assert!(
+            reduce(
+                &mut state,
+                Action::TerminalShellsDetected {
+                    available: vec![
+                        IntegratedTerminalShell::PowerShell,
+                        IntegratedTerminalShell::CommandPrompt,
+                    ],
+                    preferred: Some(IntegratedTerminalShell::CommandPrompt),
+                },
+            )
+            .is_empty()
+        );
+
+        assert_eq!(
+            reduce(&mut state, Action::ToggleTerminalDock),
+            [Effect::SpawnTerminal {
+                tab_id: 1,
+                cwd: PathBuf::from("C:\\repo"),
+                shell: Some(IntegratedTerminalShell::CommandPrompt),
+            }]
+        );
+        reduce(
+            &mut state,
+            Action::TerminalStarted {
+                tab_id: 1,
+                process_id: "101".to_owned(),
+            },
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SetIntegratedTerminalShell(IntegratedTerminalShell::PowerShell),
+            ),
+            [Effect::PersistIntegratedTerminalShell(
+                IntegratedTerminalShell::PowerShell,
+            )]
+        );
+        assert_eq!(
+            state
+                .terminal
+                .tabs
+                .iter()
+                .find(|tab| tab.id == 1)
+                .map(|tab| tab.shell),
+            Some(Some(IntegratedTerminalShell::CommandPrompt))
+        );
+        assert_eq!(
+            reduce(&mut state, Action::SpawnTerminal),
+            [Effect::SpawnTerminal {
+                tab_id: 2,
+                cwd: PathBuf::from("C:\\repo"),
+                shell: Some(IntegratedTerminalShell::PowerShell),
+            }]
+        );
+        reduce(
+            &mut state,
+            Action::TerminalStarted {
+                tab_id: 2,
+                process_id: "102".to_owned(),
+            },
+        );
+
+        reduce(&mut state, Action::SelectTerminalTab(1));
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SubmitTerminalInput("cargo test".to_owned())
+            ),
+            [Effect::WriteTerminal {
+                tab_id: 1,
+                input: "cargo test".to_owned(),
+            }]
+        );
+        assert_eq!(
+            reduce(&mut state, Action::CloseTerminalTab(1)),
+            [Effect::StopTerminal { tab_id: 1 }]
+        );
+        assert_eq!(state.terminal.active_tab_ids.get("t1"), Some(&2));
+        assert_eq!(state.terminal.tabs.len(), 1);
+        assert_eq!(
+            reduce(&mut state, Action::RestartTerminal),
+            [Effect::RestartTerminal {
+                tab_id: 2,
+                cwd: PathBuf::from("C:\\repo"),
+                shell: Some(IntegratedTerminalShell::PowerShell),
+            }]
+        );
+        assert_eq!(
+            reduce(&mut state, Action::CloseTerminalTab(2)),
+            [Effect::StopTerminal { tab_id: 2 }]
+        );
+        assert!(!state.terminal_dock_open);
+        assert!(state.terminal.tabs.is_empty());
+    }
+
+    #[test]
+    fn the_most_recent_workspace_restores_the_new_chat_context() {
+        let mut state = AppState::default();
+        let workspace = if cfg!(windows) {
+            PathBuf::from(r"C:\repo")
+        } else {
+            PathBuf::from("/repo")
+        };
+
+        reduce(
+            &mut state,
+            Action::StorageOpened {
+                path: PathBuf::from("state.sqlite"),
+                route: Some(MainRoute::Tasks),
+                inspector: None,
+                appearance_theme: None,
+                terminal_location: None,
+                terminal_bottom_height: None,
+                terminal_right_width: None,
+                git_include_unstaged: None,
+                pinned_task_ids: Vec::new(),
+                recent_workspace: Some(workspace.clone()),
+            },
+        );
+
+        assert_eq!(state.new_chat_cwd.as_ref(), Some(&workspace));
     }
 
     #[test]
@@ -1430,10 +18124,313 @@ mod tests {
                 path: PathBuf::from("C:\\codexrs\\state.sqlite"),
                 route: Some(MainRoute::Repository),
                 inspector: None,
+                appearance_theme: None,
+                terminal_location: None,
+                terminal_bottom_height: None,
+                terminal_right_width: None,
+                git_include_unstaged: None,
+                pinned_task_ids: Vec::new(),
+                recent_workspace: None,
             },
         );
 
         assert_eq!(state.route, MainRoute::Tasks);
+    }
+
+    #[test]
+    fn git_diff_selection_keeps_staged_and_unstaged_requests_separate() {
+        let mut state = AppState::default();
+        state.git.repository_root = Some(PathBuf::from("C:\\repo"));
+        let path = PathBuf::from("src\\lib.rs");
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SelectDiffPath {
+                    path: path.clone(),
+                    scope: GitDiffScope::Staged,
+                },
+            ),
+            [Effect::LoadDiff {
+                generation: 1,
+                root: PathBuf::from("C:\\repo"),
+                path: path.clone(),
+                staged: true,
+            }]
+        );
+        assert_eq!(state.git.selected_scope, GitDiffScope::Staged);
+        assert_eq!(state.git.selected_path.as_ref(), Some(&path));
+
+        reduce(
+            &mut state,
+            Action::DiffLoaded {
+                generation: 1,
+                text: "staged patch".to_owned(),
+                truncated: false,
+            },
+        );
+        reduce(
+            &mut state,
+            Action::SelectGitDiffScope(GitDiffScope::Unstaged),
+        );
+
+        assert_eq!(state.git.selected_scope, GitDiffScope::Unstaged);
+        assert!(state.git.selected_path.is_none());
+        assert!(state.git.unified_diff.is_empty());
+        assert_eq!(state.git.diff_generation, 2);
+        assert_eq!(
+            reduce(&mut state, Action::StageAll),
+            [Effect::StageAll {
+                root: PathBuf::from("C:\\repo"),
+            }]
+        );
+        assert_eq!(
+            reduce(&mut state, Action::UnstageAll),
+            [Effect::UnstageAll {
+                root: PathBuf::from("C:\\repo"),
+            }]
+        );
+    }
+
+    #[test]
+    fn git_commit_tracks_generation_and_selected_change_scope() {
+        let mut state = AppState::default();
+        state.git.repository_root = Some(PathBuf::from("C:\\repo"));
+        state.git.branch = Some("feature/native-ui".to_owned());
+        state.git.changed_files = 2;
+        state.git.staged_files = 1;
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::CommitGit {
+                    message: String::new(),
+                    include_unstaged: true,
+                    next_step: GitCommitNextStep::CommitAndPush,
+                },
+            ),
+            [Effect::CommitGit {
+                root: PathBuf::from("C:\\repo"),
+                branch: Some("feature/native-ui".to_owned()),
+                message: String::new(),
+                include_unstaged: true,
+                next_step: GitCommitNextStep::CommitAndPush,
+                force_push: false,
+                commit_instructions: String::new(),
+            }]
+        );
+        assert_eq!(
+            state.git.pending_commit,
+            Some(GitCommitPhase::GeneratingMessage)
+        );
+
+        reduce(&mut state, Action::GitCommitMessageGenerated);
+        assert_eq!(state.git.pending_commit, Some(GitCommitPhase::Committing));
+        reduce(&mut state, Action::GitPushStarted);
+        assert_eq!(state.git.pending_commit, Some(GitCommitPhase::Pushing));
+        reduce(
+            &mut state,
+            Action::GitCommitCompleted {
+                branch: Some("feature/native-ui".to_owned()),
+                pushed: true,
+            },
+        );
+        assert!(state.git.pending_commit.is_none());
+        assert_eq!(
+            state.status_message.as_deref(),
+            Some("Pushed feature/native-ui")
+        );
+
+        assert_eq!(
+            reduce(&mut state, Action::SetGitIncludeUnstaged(false)),
+            [Effect::PersistGitIncludeUnstaged(false)]
+        );
+        state.git.staged_files = 0;
+        assert!(
+            reduce(
+                &mut state,
+                Action::CommitGit {
+                    message: "Commit staged changes".to_owned(),
+                    include_unstaged: false,
+                    next_step: GitCommitNextStep::Commit,
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.git.commit_error.as_deref(),
+            Some("No staged changes to commit.")
+        );
+
+        state.git.ahead = 1;
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::CommitGit {
+                    message: String::new(),
+                    include_unstaged: false,
+                    next_step: GitCommitNextStep::Push,
+                },
+            ),
+            [Effect::CommitGit {
+                root: PathBuf::from("C:\\repo"),
+                branch: Some("feature/native-ui".to_owned()),
+                message: String::new(),
+                include_unstaged: false,
+                next_step: GitCommitNextStep::Push,
+                force_push: false,
+                commit_instructions: String::new(),
+            }]
+        );
+        assert_eq!(state.git.pending_commit, Some(GitCommitPhase::Pushing));
+    }
+
+    #[test]
+    fn git_pull_request_status_and_commit_push_workflow_are_branch_scoped() {
+        let mut state = AppState {
+            connection: ConnectionStatus::Online,
+            ..AppState::default()
+        };
+        let git = GitState {
+            repository_root: Some(PathBuf::from("C:\\repo")),
+            branch: Some("feature/native-pr".to_owned()),
+            default_branch: Some("main".to_owned()),
+            changed_files: 2,
+            ..GitState::default()
+        };
+        assert_eq!(
+            reduce(&mut state, Action::GitSnapshotLoaded(git)),
+            [Effect::LoadGitPullRequest {
+                root: PathBuf::from("C:\\repo"),
+                branch: "feature/native-pr".to_owned(),
+            }]
+        );
+        assert_eq!(
+            state.git.pull_request_provider,
+            GitPullRequestProvider::Loading
+        );
+        reduce(
+            &mut state,
+            Action::GitPullRequestStatusLoaded {
+                branch: "feature/native-pr".to_owned(),
+                provider: GitPullRequestProvider::Available,
+                pull_request: None,
+            },
+        );
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::CreateGitPullRequest {
+                    title: String::new(),
+                    body: String::new(),
+                    include_local_changes: true,
+                    is_draft: true,
+                    open_in_browser: false,
+                },
+            ),
+            [Effect::CreateGitPullRequest {
+                root: PathBuf::from("C:\\repo"),
+                branch: "feature/native-pr".to_owned(),
+                base_branch: "main".to_owned(),
+                title: String::new(),
+                body: String::new(),
+                include_local_changes: true,
+                next_step: GitPullRequestNextStep::CommitPushAndCreate,
+                is_draft: true,
+                open_in_browser: false,
+                force_push: false,
+                commit_instructions: String::new(),
+                pull_request_instructions: String::new(),
+            }]
+        );
+        assert_eq!(
+            state.git.pending_pull_request,
+            Some(GitPullRequestPhase::GeneratingMessages)
+        );
+        reduce(&mut state, Action::GitPullRequestCommitStarted);
+        assert_eq!(
+            state.git.pending_pull_request,
+            Some(GitPullRequestPhase::Committing)
+        );
+        reduce(&mut state, Action::GitPullRequestPushStarted);
+        assert_eq!(
+            state.git.pending_pull_request,
+            Some(GitPullRequestPhase::Pushing)
+        );
+        reduce(&mut state, Action::GitPullRequestCreateStarted);
+        assert_eq!(
+            state.git.pending_pull_request,
+            Some(GitPullRequestPhase::Creating)
+        );
+        reduce(
+            &mut state,
+            Action::GitPullRequestCompleted {
+                pull_request: GitPullRequestState {
+                    number: Some(42),
+                    title: "Add native PR flow".to_owned(),
+                    url: "https://github.com/Kiwunaka/codexRS/pull/42".to_owned(),
+                    base_branch: "main".to_owned(),
+                    head_branch: "feature/native-pr".to_owned(),
+                    is_draft: true,
+                },
+                open_in_browser: false,
+            },
+        );
+        assert!(state.git.pending_pull_request.is_none());
+        assert_eq!(
+            state.status_message.as_deref(),
+            Some("Created PR for feature/native-pr")
+        );
+        assert_eq!(
+            state
+                .git
+                .pull_request
+                .as_ref()
+                .and_then(|pull_request| pull_request.number),
+            Some(42)
+        );
+    }
+
+    #[test]
+    fn git_pull_request_can_create_from_an_already_pushed_branch_without_generation() {
+        let mut state = AppState::default();
+        state.git.repository_root = Some(PathBuf::from("C:\\repo"));
+        state.git.branch = Some("feature/manual-pr".to_owned());
+        state.git.default_branch = Some("main".to_owned());
+        state.git.upstream_ref = Some("origin/feature/manual-pr".to_owned());
+        state.git.pull_request_provider = GitPullRequestProvider::Available;
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::CreateGitPullRequest {
+                    title: "Native PR".to_owned(),
+                    body: "## Summary\n- Add native PR workflow".to_owned(),
+                    include_local_changes: false,
+                    is_draft: false,
+                    open_in_browser: false,
+                },
+            ),
+            [Effect::CreateGitPullRequest {
+                root: PathBuf::from("C:\\repo"),
+                branch: "feature/manual-pr".to_owned(),
+                base_branch: "main".to_owned(),
+                title: "Native PR".to_owned(),
+                body: "## Summary\n- Add native PR workflow".to_owned(),
+                include_local_changes: false,
+                next_step: GitPullRequestNextStep::Create,
+                is_draft: false,
+                open_in_browser: false,
+                force_push: false,
+                commit_instructions: String::new(),
+                pull_request_instructions: String::new(),
+            }]
+        );
+        assert_eq!(
+            state.git.pending_pull_request,
+            Some(GitPullRequestPhase::Creating)
+        );
     }
 
     #[test]
@@ -1451,6 +18448,42 @@ mod tests {
                 branch: "feature/native-ui".to_owned(),
             }]
         );
+        assert!(state.git.pending_branch_operation.is_some());
+        reduce(
+            &mut state,
+            Action::GitBranchMutationCompleted {
+                message: "Switched".to_owned(),
+            },
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::CreateGitBranch("codex/new-native-ui".to_owned())
+            ),
+            [Effect::CreateGitBranch {
+                root: PathBuf::from("C:\\repo"),
+                branch: "codex/new-native-ui".to_owned(),
+            }]
+        );
+        reduce(
+            &mut state,
+            Action::GitBranchSwitchBlocked {
+                branch: "codex/new-native-ui".to_owned(),
+                create_branch: true,
+                paths: vec![PathBuf::from("src/lib.rs")],
+                truncated: false,
+            },
+        );
+        assert_eq!(
+            state
+                .git
+                .branch_conflict
+                .as_ref()
+                .map(|conflict| conflict.paths.as_slice()),
+            Some([PathBuf::from("src/lib.rs")].as_slice())
+        );
+        reduce(&mut state, Action::DismissGitBranchConflict);
+        assert!(state.git.branch_conflict.is_none());
         assert_eq!(
             reduce(
                 &mut state,
@@ -1490,6 +18523,112 @@ mod tests {
     }
 
     #[test]
+    fn chat_search_trims_queries_and_ignores_stale_debounce_events() {
+        let mut state = AppState::default();
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::TaskSearchQueryChanged("  native  ".to_owned())
+            ),
+            [Effect::ScheduleTaskSearch {
+                generation: 1,
+                query: "native".to_owned(),
+            }]
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::TaskSearchQueryChanged("native ui".to_owned())
+            ),
+            [Effect::ScheduleTaskSearch {
+                generation: 2,
+                query: "native ui".to_owned(),
+            }]
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::TaskSearchDue {
+                    generation: 1,
+                    query: "native".to_owned(),
+                }
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::TaskSearchDue {
+                    generation: 2,
+                    query: "native ui".to_owned(),
+                }
+            ),
+            [Effect::SearchTasks {
+                generation: 2,
+                query: "native ui".to_owned(),
+                cursor: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn chat_search_results_are_deduplicated_and_selectable_before_list_refresh() {
+        let mut state = AppState::default();
+        reduce(
+            &mut state,
+            Action::TaskSearchQueryChanged("content".to_owned()),
+        );
+        reduce(
+            &mut state,
+            Action::TaskSearchResultsLoaded {
+                generation: 1,
+                results: vec![TaskSearchResult {
+                    task: task("found"),
+                    snippet: "matching content".to_owned(),
+                }],
+                next_cursor: Some("next".to_owned()),
+                append: false,
+            },
+        );
+        let mut updated = task("found");
+        updated.title = "Updated".to_owned();
+        reduce(
+            &mut state,
+            Action::TaskSearchResultsLoaded {
+                generation: 1,
+                results: vec![
+                    TaskSearchResult {
+                        task: updated,
+                        snippet: "new snippet".to_owned(),
+                    },
+                    TaskSearchResult {
+                        task: task("second"),
+                        snippet: "another match".to_owned(),
+                    },
+                ],
+                next_cursor: None,
+                append: true,
+            },
+        );
+
+        assert_eq!(state.task_search.results.len(), 2);
+        assert_eq!(state.task_search.results[0].task.title, "Updated");
+        assert!(state.tasks.is_empty());
+
+        let effects = reduce(&mut state, Action::SelectTask("found".to_owned()));
+
+        assert_eq!(
+            state.tasks.first().map(|task| task.id.as_str()),
+            Some("found")
+        );
+        assert_eq!(state.selected_task_id.as_deref(), Some("found"));
+        assert!(effects.contains(&Effect::RememberWorkspace {
+            path: PathBuf::from("C:\\repo"),
+        }));
+    }
+
+    #[test]
     fn computer_input_requires_a_capable_task_and_selected_window() {
         let mut state = AppState::default();
 
@@ -1525,6 +18664,7 @@ mod tests {
                 task_id: "t1".to_owned(),
                 window_id: "42".to_owned(),
                 title: "Editor".to_owned(),
+                application_id: "Editor.EXE".to_owned(),
             },
         );
         reduce(
@@ -1539,6 +18679,152 @@ mod tests {
                 .computer_use
                 .get("t1")
                 .is_some_and(|state| state.input_authorized_for_session)
+        );
+    }
+
+    #[test]
+    fn installed_computer_app_launch_is_single_flight_and_refreshes_windows() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(
+            &mut state,
+            Action::ComputerUseAvailable {
+                task_id: "t1".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::ToggleComputerUse {
+                task_id: "t1".to_owned(),
+                enabled: true,
+            },
+        );
+        reduce(
+            &mut state,
+            Action::ComputerWindowsLoaded {
+                task_id: "t1".to_owned(),
+                applications: vec![ComputerApplicationState {
+                    id: "aumid:contoso.editor!app".to_owned(),
+                    display_name: Some("Editor".to_owned()),
+                    last_used_date: None,
+                    use_count: None,
+                    is_running: false,
+                    window_count: 0,
+                }],
+                windows: Vec::new(),
+            },
+        );
+
+        let launch = Action::LaunchComputerApp {
+            task_id: "t1".to_owned(),
+            application_id: "AUMID:Contoso.Editor!App".to_owned(),
+        };
+        assert_eq!(
+            reduce(&mut state, launch.clone()),
+            [Effect::LaunchComputerApp {
+                task_id: "t1".to_owned(),
+                application_id: "aumid:contoso.editor!app".to_owned(),
+            }]
+        );
+        assert!(reduce(&mut state, launch).is_empty());
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::ComputerAppLaunchFinished {
+                    task_id: "t1".to_owned(),
+                    application_id: "aumid:contoso.editor!app".to_owned(),
+                    error: None,
+                }
+            ),
+            [Effect::LoadComputerWindows {
+                task_id: "t1".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn configured_executable_name_authorizes_the_canonical_windows_process_id() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(
+            &mut state,
+            Action::ComputerUseAvailable {
+                task_id: "t1".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::ToggleComputerUse {
+                task_id: "t1".to_owned(),
+                enabled: true,
+            },
+        );
+        reduce(
+            &mut state,
+            Action::ComputerUsePolicyLoaded(vec!["mspaint.exe".to_owned()]),
+        );
+        reduce(
+            &mut state,
+            Action::SelectComputerUseWindow {
+                task_id: "t1".to_owned(),
+                window_id: "42".to_owned(),
+                title: "Paint".to_owned(),
+                application_id: r"process:C:\Windows\System32\mspaint.exe".to_owned(),
+            },
+        );
+
+        assert!(
+            state
+                .computer_use
+                .get("t1")
+                .is_some_and(|computer_use| computer_use.input_authorized_for_session)
+        );
+        assert!(computer_app_id_matches(
+            "mspaint.exe",
+            r"process:c:\windows\system32\mspaint.exe"
+        ));
+        assert!(!computer_app_id_matches(
+            r"c:\tools\mspaint.exe",
+            r"process:c:\windows\system32\mspaint.exe"
+        ));
+    }
+
+    #[test]
+    fn computer_use_policy_is_bounded_and_removable_through_config_effects() {
+        let mut state = AppState::default();
+        reduce(
+            &mut state,
+            Action::ComputerUsePolicyLoaded(vec![
+                " MSPaint.EXE ".to_owned(),
+                "mspaint.exe".to_owned(),
+                "notepad.exe".to_owned(),
+            ]),
+        );
+        assert_eq!(
+            state.computer_use_settings.always_allowed_app_ids,
+            ["mspaint.exe", "notepad.exe"]
+        );
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::RemoveComputerUseAllowedApp("MSPAINT.EXE".to_owned())
+            ),
+            [Effect::RemoveComputerUseAllowedApp {
+                app_id: "mspaint.exe".to_owned(),
+                remaining_app_ids: vec!["notepad.exe".to_owned()],
+            }]
+        );
+        reduce(
+            &mut state,
+            Action::ComputerUseAllowedAppRemoved {
+                app_id: "mspaint.exe".to_owned(),
+                overridden: false,
+            },
+        );
+        assert_eq!(
+            state.computer_use_settings.always_allowed_app_ids,
+            ["notepad.exe"]
         );
     }
 
@@ -1563,5 +18849,2295 @@ mod tests {
             Some("new")
         );
         assert_eq!(state.selected_task_id.as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn archive_removes_only_after_app_server_confirmation() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+
+        assert_eq!(
+            reduce(&mut state, Action::ArchiveTask("t1".to_owned())),
+            [Effect::ArchiveTask {
+                task_id: "t1".to_owned(),
+            }]
+        );
+        assert_eq!(state.selected_task_id.as_deref(), Some("t1"));
+
+        reduce(&mut state, Action::TaskArchived("t1".to_owned()));
+
+        assert!(state.tasks.is_empty());
+        assert!(state.timelines.is_empty());
+        assert_eq!(state.selected_task_id, None);
+    }
+
+    #[test]
+    fn rename_validates_and_commits_the_confirmed_title() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::RenameTask {
+                    task_id: "t1".to_owned(),
+                    name: "  Native parity  ".to_owned(),
+                }
+            ),
+            [Effect::RenameTask {
+                task_id: "t1".to_owned(),
+                name: "Native parity".to_owned(),
+            }]
+        );
+        reduce(
+            &mut state,
+            Action::TaskRenamed {
+                task_id: "t1".to_owned(),
+                name: "Native parity".to_owned(),
+            },
+        );
+
+        assert_eq!(state.tasks[0].title, "Native parity");
+        assert!(
+            reduce(
+                &mut state,
+                Action::RenameTask {
+                    task_id: "t1".to_owned(),
+                    name: "   ".to_owned(),
+                }
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn settings_loads_archived_chats_through_a_bounded_page_effect() {
+        let mut state = AppState::default();
+
+        assert_eq!(
+            reduce(&mut state, Action::Navigate(MainRoute::Settings)),
+            [
+                Effect::PersistUiState {
+                    route: MainRoute::Settings,
+                    inspector: state.inspector,
+                },
+                Effect::LoadArchivedTasks {
+                    generation: 1,
+                    cursor: None,
+                },
+                Effect::LoadComputerUsePolicy,
+            ]
+        );
+        assert_eq!(state.archived_tasks.status, LoadStatus::Loading);
+    }
+
+    #[test]
+    fn account_usage_refresh_is_single_effect_and_bounds_provider_fields() {
+        let mut state = AppState::default();
+
+        assert_eq!(
+            reduce(&mut state, Action::RefreshAccount),
+            [Effect::LoadAccount]
+        );
+        assert_eq!(state.account.status, LoadStatus::Loading);
+
+        reduce(
+            &mut state,
+            Action::AccountLoaded {
+                profile: Some(AccountProfile {
+                    kind: AccountKind::ChatGpt,
+                    email: Some(format!("{}@example.com", "a".repeat(600))),
+                    plan: Some(" plus ".to_owned()),
+                }),
+                requires_openai_auth: true,
+                usage_limits: vec![
+                    UsageLimitWindow {
+                        used_percent: 25,
+                        window_duration_mins: Some(300),
+                        resets_at: Some(1_900_000_000),
+                    },
+                    UsageLimitWindow {
+                        used_percent: 50,
+                        window_duration_mins: Some(10_080),
+                        resets_at: None,
+                    },
+                    UsageLimitWindow {
+                        used_percent: 75,
+                        window_duration_mins: Some(43_200),
+                        resets_at: None,
+                    },
+                ],
+                credits: Some(AccountCredits {
+                    has_credits: true,
+                    unlimited: false,
+                    balance: Some(format!("  {}  ", "9".repeat(600))),
+                }),
+                usage_error: None,
+            },
+        );
+
+        assert_eq!(state.account.status, LoadStatus::Ready);
+        assert_eq!(state.account.usage_limits.len(), 2);
+        assert_eq!(
+            state
+                .account
+                .profile
+                .as_ref()
+                .and_then(|profile| profile.plan.as_deref()),
+            Some("plus")
+        );
+        assert!(
+            state
+                .account
+                .profile
+                .as_ref()
+                .and_then(|profile| profile.email.as_ref())
+                .is_some_and(|email| email.len() <= 512)
+        );
+        assert!(
+            state
+                .account
+                .credits
+                .as_ref()
+                .and_then(|credits| credits.balance.as_ref())
+                .is_some_and(|balance| balance.len() <= 512)
+        );
+    }
+
+    #[test]
+    fn account_authentication_is_single_flight_and_refreshes_after_completion() {
+        let mut state = AppState::default();
+
+        assert_eq!(
+            reduce(&mut state, Action::StartAccountLogin),
+            [Effect::StartAccountLogin]
+        );
+        assert!(reduce(&mut state, Action::StartAccountLogin).is_empty());
+        reduce(
+            &mut state,
+            Action::AccountLoginStarted {
+                login_id: "login-1".to_owned(),
+                authorization_url: "https://auth.openai.com/".to_owned(),
+            },
+        );
+        assert_eq!(
+            state.account.auth_operation,
+            AccountAuthOperation::AwaitingLogin
+        );
+        assert_eq!(
+            reduce(&mut state, Action::CancelAccountLogin),
+            [Effect::CancelAccountLogin {
+                login_id: "login-1".to_owned(),
+            }]
+        );
+        assert!(reduce(&mut state, Action::CancelAccountLogin).is_empty());
+        reduce(
+            &mut state,
+            Action::AccountLoginCanceled {
+                login_id: "login-1".to_owned(),
+            },
+        );
+        assert_eq!(state.account.auth_operation, AccountAuthOperation::Idle);
+
+        reduce(&mut state, Action::StartAccountLogin);
+        reduce(
+            &mut state,
+            Action::AccountLoginStarted {
+                login_id: "login-2".to_owned(),
+                authorization_url: "https://auth.openai.com/".to_owned(),
+            },
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::AccountLoginCompleted {
+                    login_id: Some("login-2".to_owned()),
+                    success: true,
+                },
+            ),
+            [Effect::LoadAccount]
+        );
+        assert_eq!(state.account.status, LoadStatus::Loading);
+
+        reduce(
+            &mut state,
+            Action::AccountLoaded {
+                profile: Some(AccountProfile {
+                    kind: AccountKind::ChatGpt,
+                    email: Some("developer@example.com".to_owned()),
+                    plan: Some("Plus".to_owned()),
+                }),
+                requires_openai_auth: true,
+                usage_limits: Vec::new(),
+                credits: None,
+                usage_error: None,
+            },
+        );
+        assert_eq!(
+            reduce(&mut state, Action::LogoutAccount),
+            [Effect::LogoutAccount]
+        );
+        assert!(reduce(&mut state, Action::LogoutAccount).is_empty());
+        assert_eq!(
+            reduce(&mut state, Action::AccountLoggedOut),
+            [Effect::LoadAccount]
+        );
+        assert!(state.account.profile.is_none());
+    }
+
+    #[test]
+    fn feedback_upload_is_validated_bounded_and_single_flight() {
+        let mut state = AppState {
+            selected_task_id: Some("thread-1".to_owned()),
+            ..AppState::default()
+        };
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::SubmitFeedback {
+                    classification: FeedbackClassification::Bug,
+                    reason: "   ".to_owned(),
+                    include_logs: true,
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.feedback.error.as_deref(),
+            Some("Share details before submitting.")
+        );
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SubmitFeedback {
+                    classification: FeedbackClassification::BadResult,
+                    reason: "  The result missed the requested file.  ".to_owned(),
+                    include_logs: true,
+                },
+            ),
+            [Effect::SubmitFeedback {
+                classification: FeedbackClassification::BadResult,
+                reason: "The result missed the requested file.".to_owned(),
+                include_logs: true,
+                thread_id: Some("thread-1".to_owned()),
+            }]
+        );
+        assert!(state.feedback.pending);
+        assert!(
+            reduce(
+                &mut state,
+                Action::SubmitFeedback {
+                    classification: FeedbackClassification::Other,
+                    reason: "second request".to_owned(),
+                    include_logs: false,
+                },
+            )
+            .is_empty()
+        );
+
+        reduce(
+            &mut state,
+            Action::FeedbackSubmitted {
+                feedback_id: "feedback-1".to_owned(),
+            },
+        );
+        assert!(!state.feedback.pending);
+        assert_eq!(state.feedback.feedback_id.as_deref(), Some("feedback-1"));
+        assert_eq!(state.status_message.as_deref(), Some("Feedback uploaded"));
+    }
+
+    #[test]
+    fn marketplace_tabs_load_the_stable_catalog_for_the_active_project() {
+        let mut state = AppState {
+            tasks: vec![task("active")],
+            selected_task_id: Some("active".to_owned()),
+            ..AppState::default()
+        };
+
+        assert_eq!(
+            reduce(&mut state, Action::Navigate(MainRoute::Marketplace)),
+            [
+                Effect::PersistUiState {
+                    route: MainRoute::Marketplace,
+                    inspector: InspectorPane::Hidden,
+                },
+                Effect::RefreshMarketplace {
+                    cwds: vec![PathBuf::from("C:\\repo")],
+                    directory_tab: PluginDirectoryTab::CuratedByOpenAi,
+                    force_refetch: false,
+                    include_all_marketplaces: false,
+                },
+            ]
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SelectMarketplaceTab(MarketplaceTab::Skills)
+            ),
+            [Effect::RefreshSkills {
+                cwds: vec![PathBuf::from("C:\\repo")],
+                force_reload: false,
+            }]
+        );
+        assert_eq!(state.marketplace.skills_status, Some(LoadStatus::Loading));
+        assert_eq!(
+            reduce(&mut state, Action::RefreshSkills),
+            [Effect::RefreshSkills {
+                cwds: vec![PathBuf::from("C:\\repo")],
+                force_reload: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn plugin_directory_tabs_request_the_matching_stable_catalog() {
+        let mut state = AppState::default();
+        state.marketplace.selected_section = Some(MarketplaceSectionFilter::Featured);
+        state.marketplace.selected_plugin_id = Some("gmail@openai".to_owned());
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SelectPluginDirectoryTab(PluginDirectoryTab::SharedWithYou),
+            ),
+            [Effect::RefreshMarketplace {
+                cwds: Vec::new(),
+                directory_tab: PluginDirectoryTab::SharedWithYou,
+                force_refetch: false,
+                include_all_marketplaces: false,
+            }]
+        );
+        assert_eq!(
+            state.marketplace.selected_directory_tab,
+            PluginDirectoryTab::SharedWithYou
+        );
+        assert!(state.marketplace.selected_section.is_none());
+        assert!(state.marketplace.selected_plugin_id.is_none());
+        assert_eq!(state.marketplace.status, Some(LoadStatus::Loading));
+        assert!(
+            reduce(
+                &mut state,
+                Action::SelectPluginDirectoryTab(PluginDirectoryTab::SharedWithYou),
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn marketplace_management_uses_the_typed_add_effect_and_refreshes_after_success() {
+        let mut state = AppState::default();
+
+        assert_eq!(
+            reduce(&mut state, Action::SetMarketplaceManageMode(true)),
+            [
+                Effect::RefreshMarketplace {
+                    cwds: Vec::new(),
+                    directory_tab: PluginDirectoryTab::CuratedByOpenAi,
+                    force_refetch: false,
+                    include_all_marketplaces: true,
+                },
+                Effect::RefreshApps {
+                    force_refetch: false,
+                },
+                Effect::RefreshMcpServers { cwd: None },
+                Effect::RefreshSkills {
+                    cwds: Vec::new(),
+                    force_reload: false,
+                },
+            ]
+        );
+        assert!(state.marketplace.manage_mode);
+        assert_eq!(state.marketplace.apps_status, Some(LoadStatus::Loading));
+        assert_eq!(state.marketplace.mcp_status, Some(LoadStatus::Loading));
+        assert_eq!(state.marketplace.skills_status, Some(LoadStatus::Loading));
+        assert!(
+            reduce(
+                &mut state,
+                Action::SelectMarketplaceManageTab(MarketplaceManageTab::Skills),
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.marketplace.selected_manage_tab,
+            MarketplaceManageTab::Skills
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::AddMarketplace {
+                    source: "  openai/plugins  ".to_owned(),
+                    ref_name: Some(" main ".to_owned()),
+                    sparse_paths: vec![" plugins/codex ".to_owned(), " ".to_owned()],
+                },
+            ),
+            [Effect::AddMarketplace {
+                source: "openai/plugins".to_owned(),
+                ref_name: Some("main".to_owned()),
+                sparse_paths: Some(vec!["plugins/codex".to_owned()]),
+            }]
+        );
+        assert!(state.marketplace.marketplace_add_pending);
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::MarketplaceAdded {
+                    marketplace_name: "openai-plugins".to_owned(),
+                    already_added: false,
+                },
+            ),
+            [Effect::RefreshMarketplace {
+                cwds: Vec::new(),
+                directory_tab: PluginDirectoryTab::CuratedByOpenAi,
+                force_refetch: true,
+                include_all_marketplaces: true,
+            }]
+        );
+        assert!(!state.marketplace.marketplace_add_pending);
+        assert!(state.marketplace.marketplace_add_error.is_none());
+        assert_eq!(
+            state.status_message.as_deref(),
+            Some("Added marketplace openai-plugins.")
+        );
+    }
+
+    #[test]
+    fn installed_apps_load_and_toggle_through_the_stable_config_path() {
+        let mut state = AppState::default();
+        state.marketplace.manage_mode = true;
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::AppsLoaded(vec![AppCard {
+                    id: "connector_calendar".to_owned(),
+                    name: "Calendar".to_owned(),
+                    description: "Read and update calendar events.".to_owned(),
+                    plugin_display_names: Vec::new(),
+                    logo_url: Some("https://example.com/calendar.png".to_owned()),
+                    logo_url_dark: None,
+                    install_url: Some("https://example.com/calendar".to_owned()),
+                    is_accessible: true,
+                    enabled: true,
+                }]),
+            )
+            .is_empty()
+        );
+        assert_eq!(state.marketplace.apps_status, Some(LoadStatus::Ready));
+        assert!(
+            reduce(
+                &mut state,
+                Action::SelectMarketplaceManageTab(MarketplaceManageTab::Apps),
+            )
+            .is_empty()
+        );
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SetAppEnabled {
+                    app_id: "connector_calendar".to_owned(),
+                    enabled: false,
+                },
+            ),
+            [Effect::SetAppEnabled {
+                app_id: "connector_calendar".to_owned(),
+                enabled: false,
+            }]
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::SetAppEnabled {
+                    app_id: "connector_calendar".to_owned(),
+                    enabled: true,
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::AppEnabledChanged {
+                    app_id: "connector_calendar".to_owned(),
+                    enabled: false,
+                    overridden: false,
+                },
+            ),
+            [Effect::RefreshApps {
+                force_refetch: false,
+            }]
+        );
+        assert!(!state.marketplace.apps[0].enabled);
+        assert!(state.marketplace.pending_app_id.is_none());
+        assert_eq!(
+            reduce(&mut state, Action::RefreshApps),
+            [Effect::RefreshApps {
+                force_refetch: true,
+            }]
+        );
+        state.marketplace.apps[0].is_accessible = false;
+        assert!(
+            reduce(
+                &mut state,
+                Action::SetAppEnabled {
+                    app_id: "connector_calendar".to_owned(),
+                    enabled: true,
+                },
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn app_details_load_tools_through_the_stable_read_contract() {
+        let mut state = AppState::default();
+        state.marketplace.apps = vec![AppCard {
+            id: "connector_calendar".to_owned(),
+            name: "Calendar".to_owned(),
+            description: "Read and update calendar events.".to_owned(),
+            plugin_display_names: Vec::new(),
+            logo_url: Some("https://example.com/calendar.png".to_owned()),
+            logo_url_dark: None,
+            install_url: Some("https://chatgpt.com/apps/calendar".to_owned()),
+            is_accessible: true,
+            enabled: true,
+        }];
+        state.marketplace.selected_plugin_id = Some("calendar-plugin".to_owned());
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::OpenAppDetails {
+                    app_id: "connector_calendar".to_owned(),
+                },
+            ),
+            [Effect::ReadApp {
+                app_id: "connector_calendar".to_owned(),
+            }]
+        );
+        assert_eq!(
+            state.marketplace.app_detail_status,
+            Some(LoadStatus::Loading)
+        );
+        assert!(state.marketplace.selected_plugin_id.is_none());
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::AppDetailLoaded {
+                    app_id: "connector_stale".to_owned(),
+                    detail: AppDetailView {
+                        app_id: "connector_stale".to_owned(),
+                        name: "Stale".to_owned(),
+                        description: String::new(),
+                        logo_url: None,
+                        logo_url_dark: None,
+                        install_url: None,
+                        distribution_channel: None,
+                        plugin_display_names: Vec::new(),
+                        tools: Vec::new(),
+                    },
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.marketplace.app_detail_status,
+            Some(LoadStatus::Loading)
+        );
+
+        let tools = (0..=MAX_PLUGIN_DETAIL_ITEMS)
+            .map(|index| AppToolCard {
+                name: format!(" tool_{index} "),
+                title: String::new(),
+                description: " Lists events. ".to_owned(),
+            })
+            .collect();
+        assert!(
+            reduce(
+                &mut state,
+                Action::AppDetailLoaded {
+                    app_id: "connector_calendar".to_owned(),
+                    detail: AppDetailView {
+                        app_id: "wrong".to_owned(),
+                        name: " Calendar ".to_owned(),
+                        description: String::new(),
+                        logo_url: None,
+                        logo_url_dark: None,
+                        install_url: None,
+                        distribution_channel: Some(" openai ".to_owned()),
+                        plugin_display_names: vec![" Calendar plugin ".to_owned(), " ".to_owned(),],
+                        tools,
+                    },
+                },
+            )
+            .is_empty()
+        );
+        let Some(detail) = state.marketplace.app_detail.as_ref() else {
+            panic!("expected app detail");
+        };
+        assert_eq!(detail.app_id, "connector_calendar");
+        assert_eq!(detail.name, "Calendar");
+        assert_eq!(detail.description, "Read and update calendar events.");
+        assert_eq!(
+            detail.install_url.as_deref(),
+            Some("https://chatgpt.com/apps/calendar")
+        );
+        assert_eq!(detail.plugin_display_names, ["Calendar plugin"]);
+        assert_eq!(detail.tools.len(), MAX_PLUGIN_DETAIL_ITEMS);
+        assert_eq!(detail.tools[0].title, "tool_0");
+        assert_eq!(detail.tools[0].description, "Lists events.");
+
+        assert!(reduce(&mut state, Action::CloseAppDetails).is_empty());
+        assert!(state.marketplace.selected_app_id.is_none());
+        assert!(state.marketplace.app_detail.is_none());
+    }
+
+    #[test]
+    fn mcp_servers_use_config_toggle_and_oauth_reload_contracts() {
+        let mut state = AppState::default();
+        state.marketplace.manage_mode = true;
+        assert!(
+            reduce(
+                &mut state,
+                Action::McpServersLoaded {
+                    servers: vec![McpServerCard {
+                        key: "calendar".to_owned(),
+                        name: "Calendar".to_owned(),
+                        enabled: true,
+                        read_only: false,
+                        transport: Some(McpTransportKind::Stdio),
+                        command: "calendar-mcp".to_owned(),
+                        args: Vec::new(),
+                        env: Vec::new(),
+                        env_vars: Vec::new(),
+                        cwd: String::new(),
+                        url: String::new(),
+                        bearer_token_env_var: String::new(),
+                        http_headers: Vec::new(),
+                        env_http_headers: Vec::new(),
+                        auth_status: McpAuthStatus::NotLoggedIn,
+                        authorization_url: None,
+                        startup_state: None,
+                        startup_error: None,
+                        startup_failure_reason: None,
+                        server_info: None,
+                        tools: Vec::new(),
+                        resources: vec![McpResourceCard {
+                            name: "today".to_owned(),
+                            uri: "calendar://today".to_owned(),
+                            title: None,
+                            description: None,
+                            mime_type: Some("application/json".to_owned()),
+                            size: None,
+                        }],
+                        resource_templates: Vec::new(),
+                        inspection_truncated: false,
+                    }],
+                    plugin_servers: vec![McpServerCard {
+                        key: "plugin-runtime".to_owned(),
+                        name: "plugin-runtime".to_owned(),
+                        enabled: true,
+                        read_only: true,
+                        transport: None,
+                        command: String::new(),
+                        args: Vec::new(),
+                        env: Vec::new(),
+                        env_vars: Vec::new(),
+                        cwd: String::new(),
+                        url: String::new(),
+                        bearer_token_env_var: String::new(),
+                        http_headers: Vec::new(),
+                        env_http_headers: Vec::new(),
+                        auth_status: McpAuthStatus::Unsupported,
+                        authorization_url: None,
+                        startup_state: None,
+                        startup_error: None,
+                        startup_failure_reason: None,
+                        server_info: None,
+                        tools: Vec::new(),
+                        resources: Vec::new(),
+                        resource_templates: Vec::new(),
+                        inspection_truncated: false,
+                    }],
+                    warnings: Vec::new(),
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(state.marketplace.mcp_status, Some(LoadStatus::Ready));
+        assert_eq!(state.marketplace.mcp_servers.len(), 1);
+        assert_eq!(state.marketplace.plugin_mcp_servers.len(), 1);
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::ReadMcpResource {
+                    server: "calendar".to_owned(),
+                    uri: "calendar://today".to_owned(),
+                },
+            ),
+            [Effect::ReadMcpResource {
+                server: "calendar".to_owned(),
+                uri: "calendar://today".to_owned(),
+            }]
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::McpResourceLoaded {
+                    server: "calendar".to_owned(),
+                    uri: "calendar://today".to_owned(),
+                    contents: vec![McpResourceContentCard {
+                        uri: "calendar://today".to_owned(),
+                        mime_type: Some("application/json".to_owned()),
+                        text: Some("x".repeat(MAX_COMPOSER_BYTES + 1)),
+                        blob_bytes: None,
+                        truncated: false,
+                    }],
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.marketplace.mcp_resource_read.status,
+            Some(LoadStatus::Ready)
+        );
+        assert_eq!(
+            state.marketplace.mcp_resource_read.contents[0]
+                .text
+                .as_ref()
+                .map(String::len),
+            Some(MAX_COMPOSER_BYTES)
+        );
+        assert!(state.marketplace.mcp_resource_read.contents[0].truncated);
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SetMcpServerEnabled {
+                    key: "calendar".to_owned(),
+                    enabled: false,
+                },
+            ),
+            [Effect::SetMcpServerEnabled {
+                key: "calendar".to_owned(),
+                enabled: false,
+            }]
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::McpServerEnabledChanged {
+                    key: "calendar".to_owned(),
+                    enabled: false,
+                    overridden: false,
+                },
+            ),
+            [Effect::RefreshMcpServers { cwd: None }]
+        );
+        assert!(!state.marketplace.mcp_servers[0].enabled);
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::AuthenticateMcpServer {
+                    name: "calendar".to_owned(),
+                },
+            ),
+            [Effect::AuthenticateMcpServer {
+                name: "calendar".to_owned(),
+            }]
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::McpServerAuthenticationStarted {
+                    name: "calendar".to_owned(),
+                    authorization_url: "https://example.com/oauth".to_owned(),
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.marketplace.mcp_servers[0]
+                .authorization_url
+                .as_deref(),
+            Some("https://example.com/oauth")
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::AuthenticateMcpServer {
+                    name: "calendar".to_owned(),
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::McpServerAuthenticationCompleted {
+                    name: "calendar".to_owned(),
+                    success: true,
+                    error: None,
+                },
+            ),
+            [Effect::ReloadMcpServers { cwd: None }]
+        );
+        assert!(state.marketplace.mcp_servers[0].authorization_url.is_none());
+    }
+
+    #[test]
+    fn mcp_server_editor_uses_stable_keys_and_surfaces_reauthentication() {
+        let mut state = AppState::default();
+        let draft = McpServerDraft {
+            name: " My / MCP ".to_owned(),
+            transport: McpTransportKind::Stdio,
+            command: " cargo ".to_owned(),
+            args: vec![" run ".to_owned(), String::new()],
+            env: vec![(" TOKEN ".to_owned(), " local ".to_owned())],
+            env_vars: vec![" PATH ".to_owned()],
+            cwd: " C:\\work ".to_owned(),
+            url: String::new(),
+            bearer_token_env_var: String::new(),
+            http_headers: Vec::new(),
+            env_http_headers: Vec::new(),
+        };
+        let effects = reduce(
+            &mut state,
+            Action::SaveMcpServer {
+                existing_key: None,
+                draft,
+            },
+        );
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::SaveMcpServer {
+                existing_key: None,
+                key,
+                draft,
+                cwd: None,
+            }] if key == "my_-_mcp"
+                && draft.name == "My / MCP"
+                && draft.command == "cargo"
+                && draft.args == ["run"]
+        ));
+        assert_eq!(
+            state.marketplace.pending_mcp_key.as_deref(),
+            Some("my_-_mcp")
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::McpServerSaved {
+                    key: "my_-_mcp".to_owned(),
+                    overridden: false,
+                },
+            ),
+            [Effect::ReloadMcpServers { cwd: None }]
+        );
+
+        let server = McpServerCard {
+            key: "my_-_mcp".to_owned(),
+            name: "my_-_mcp".to_owned(),
+            enabled: true,
+            read_only: false,
+            transport: Some(McpTransportKind::Stdio),
+            command: "cargo".to_owned(),
+            args: vec!["run".to_owned()],
+            env: vec![("TOKEN".to_owned(), "local".to_owned())],
+            env_vars: vec!["PATH".to_owned()],
+            cwd: "C:\\work".to_owned(),
+            url: String::new(),
+            bearer_token_env_var: String::new(),
+            http_headers: Vec::new(),
+            env_http_headers: Vec::new(),
+            auth_status: McpAuthStatus::OAuth,
+            authorization_url: Some("https://example.com/old".to_owned()),
+            startup_state: None,
+            startup_error: None,
+            startup_failure_reason: None,
+            server_info: None,
+            tools: Vec::new(),
+            resources: Vec::new(),
+            resource_templates: Vec::new(),
+            inspection_truncated: false,
+        };
+        assert!(
+            reduce(
+                &mut state,
+                Action::McpServersLoaded {
+                    servers: vec![server.clone()],
+                    plugin_servers: Vec::new(),
+                    warnings: Vec::new(),
+                },
+            )
+            .is_empty()
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::McpServerStartupStatusUpdated {
+                    name: "my_-_mcp".to_owned(),
+                    status: McpServerStartupState::Failed,
+                    error: Some("expired credentials".to_owned()),
+                    failure_reason: Some(McpServerStartupFailureReason::ReauthenticationRequired,),
+                },
+            )
+            .is_empty()
+        );
+        let server = state.marketplace.mcp_servers[0].clone();
+        assert_eq!(server.auth_status, McpAuthStatus::NotLoggedIn);
+        assert!(server.authorization_url.is_none());
+        assert_eq!(
+            server.startup_failure_reason,
+            Some(McpServerStartupFailureReason::ReauthenticationRequired)
+        );
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::RemoveMcpServer {
+                    key: "my_-_mcp".to_owned(),
+                },
+            ),
+            [Effect::RemoveMcpServer {
+                key: "my_-_mcp".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn marketplace_sources_remove_and_upgrade_through_single_flight_effects() {
+        let source = MarketplaceSourceCard {
+            name: "team-plugins".to_owned(),
+            path: Some(PathBuf::from(
+                "C:\\codex\\plugins\\marketplaces\\team-plugins",
+            )),
+            plugin_count: 3,
+            removable: true,
+        };
+        let mut state = AppState::default();
+        state.marketplace.manage_mode = true;
+        state.marketplace.selected_manage_tab = MarketplaceManageTab::Marketplaces;
+        state.marketplace.marketplace_sources = vec![source];
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::RemoveMarketplace(" team-plugins ".to_owned()),
+            ),
+            [Effect::RemoveMarketplace {
+                marketplace_name: "team-plugins".to_owned(),
+            }]
+        );
+        assert_eq!(
+            state.marketplace.pending_marketplace_remove.as_deref(),
+            Some("team-plugins")
+        );
+        assert!(reduce(&mut state, Action::UpgradeMarketplaces(None)).is_empty());
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::MarketplaceRemoved("team-plugins".to_owned()),
+            ),
+            [Effect::RefreshMarketplace {
+                cwds: Vec::new(),
+                directory_tab: PluginDirectoryTab::CuratedByOpenAi,
+                force_refetch: true,
+                include_all_marketplaces: true,
+            }]
+        );
+        assert!(state.marketplace.pending_marketplace_remove.is_none());
+
+        assert_eq!(
+            reduce(&mut state, Action::UpgradeMarketplaces(None)),
+            [Effect::UpgradeMarketplaces {
+                marketplace_name: None,
+            }]
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::MarketplacesUpgraded {
+                    selected_marketplaces: vec!["team-plugins".to_owned()],
+                    upgraded_count: 0,
+                    errors: vec![MarketplaceUpgradeFailure {
+                        marketplace_name: "team-plugins".to_owned(),
+                        message: "network unavailable".to_owned(),
+                    }],
+                },
+            ),
+            [Effect::RefreshMarketplace {
+                cwds: Vec::new(),
+                directory_tab: PluginDirectoryTab::CuratedByOpenAi,
+                force_refetch: true,
+                include_all_marketplaces: true,
+            }]
+        );
+        assert!(!state.marketplace.marketplace_upgrade_pending);
+        assert_eq!(
+            state.marketplace.marketplace_mutation_error.as_deref(),
+            Some("team-plugins: network unavailable")
+        );
+    }
+
+    #[test]
+    fn restored_marketplace_route_loads_after_the_app_server_connects() {
+        let mut state = AppState::default();
+        assert!(
+            reduce(
+                &mut state,
+                Action::StorageOpened {
+                    path: PathBuf::from("C:\\codexrs\\state.sqlite"),
+                    route: Some(MainRoute::Marketplace),
+                    inspector: None,
+                    appearance_theme: None,
+                    terminal_location: None,
+                    terminal_bottom_height: None,
+                    terminal_right_width: None,
+                    git_include_unstaged: None,
+                    pinned_task_ids: Vec::new(),
+                    recent_workspace: None,
+                },
+            )
+            .is_empty()
+        );
+
+        let effects = reduce(&mut state, Action::Connected);
+        assert!(effects.contains(&Effect::RefreshMarketplace {
+            cwds: Vec::new(),
+            directory_tab: PluginDirectoryTab::CuratedByOpenAi,
+            force_refetch: false,
+            include_all_marketplaces: false,
+        }));
+        assert_eq!(state.marketplace.status, Some(LoadStatus::Loading));
+    }
+
+    #[test]
+    fn marketplace_section_filter_accepts_only_catalog_sections_and_resets_when_removed() {
+        let plugin = PluginCard {
+            id: "code@openai".to_owned(),
+            install_name: "code".to_owned(),
+            marketplace: "openai".to_owned(),
+            name: "Code".to_owned(),
+            description: "Coding tools".to_owned(),
+            category: Some("Coding".to_owned()),
+            developer: None,
+            logo_url: None,
+            logo_url_dark: None,
+            default_prompt: None,
+            version: None,
+            installed: false,
+            enabled: false,
+            installable: true,
+            featured: true,
+            featured_rank: Some(0),
+        };
+        let mut state = AppState::default();
+        reduce(
+            &mut state,
+            Action::MarketplaceLoaded {
+                plugins: vec![plugin],
+                sources: Vec::new(),
+            },
+        );
+
+        reduce(
+            &mut state,
+            Action::SelectMarketplaceSection(Some(MarketplaceSectionFilter::Category(
+                "coding".to_owned(),
+            ))),
+        );
+        assert_eq!(
+            state.marketplace.selected_section,
+            Some(MarketplaceSectionFilter::Category("coding".to_owned()))
+        );
+        reduce(
+            &mut state,
+            Action::SelectMarketplaceSection(Some(MarketplaceSectionFilter::Category(
+                "missing".to_owned(),
+            ))),
+        );
+        assert!(state.marketplace.selected_section.is_none());
+
+        reduce(
+            &mut state,
+            Action::SelectMarketplaceSection(Some(MarketplaceSectionFilter::Featured)),
+        );
+        assert_eq!(
+            state.marketplace.selected_section,
+            Some(MarketplaceSectionFilter::Featured)
+        );
+        reduce(
+            &mut state,
+            Action::MarketplaceLoaded {
+                plugins: Vec::new(),
+                sources: Vec::new(),
+            },
+        );
+        assert!(state.marketplace.selected_section.is_none());
+    }
+
+    #[test]
+    fn plugin_details_use_the_selected_stable_catalog_entry_and_ignore_stale_results() {
+        let mut state = AppState::default();
+        state.marketplace.plugins = vec![PluginCard {
+            id: "gmail@openai-curated-remote".to_owned(),
+            install_name: "gmail".to_owned(),
+            marketplace: "openai-curated-remote".to_owned(),
+            name: "Gmail".to_owned(),
+            description: "Work with Gmail".to_owned(),
+            category: Some("Productivity".to_owned()),
+            developer: Some("OpenAI".to_owned()),
+            logo_url: None,
+            logo_url_dark: None,
+            default_prompt: Some("Draft replies".to_owned()),
+            version: Some("1.0.0".to_owned()),
+            installed: false,
+            enabled: true,
+            installable: true,
+            featured: true,
+            featured_rank: Some(0),
+        }];
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::OpenPluginDetails {
+                    plugin_id: "gmail@openai-curated-remote".to_owned(),
+                },
+            ),
+            [Effect::ReadPlugin {
+                plugin_id: "gmail@openai-curated-remote".to_owned(),
+                plugin_name: "gmail".to_owned(),
+                marketplace: "openai-curated-remote".to_owned(),
+            }]
+        );
+        assert_eq!(
+            state.marketplace.plugin_detail_status,
+            Some(LoadStatus::Loading)
+        );
+
+        let detail = PluginDetailView {
+            plugin_id: "gmail@openai-curated-remote".to_owned(),
+            description: "Search mail and draft replies.".to_owned(),
+            capabilities: vec!["Search".to_owned(), "Draft".to_owned()],
+            website_url: Some("https://example.test".to_owned()),
+            privacy_policy_url: None,
+            terms_of_service_url: None,
+            skills: vec![PluginSkillDetail {
+                name: "draft-reply".to_owned(),
+                display_name: "Draft replies".to_owned(),
+                description: "Draft contextual replies".to_owned(),
+                enabled: true,
+            }],
+            apps: vec![PluginDetailItem {
+                name: "Gmail".to_owned(),
+                description: "Connect Gmail".to_owned(),
+            }],
+            app_templates: Vec::new(),
+            hooks: Vec::new(),
+            mcp_servers: vec!["gmail".to_owned()],
+            scheduled_tasks: vec![PluginScheduledTaskCard {
+                name: "Daily inbox".to_owned(),
+                prompt: "Summarize new mail".to_owned(),
+                schedule: "Daily at 09:00".to_owned(),
+            }],
+        };
+        assert!(
+            reduce(
+                &mut state,
+                Action::PluginDetailLoaded {
+                    plugin_id: "stale-plugin".to_owned(),
+                    detail: detail.clone(),
+                },
+            )
+            .is_empty()
+        );
+        assert!(state.marketplace.plugin_detail.is_none());
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::PluginDetailLoaded {
+                    plugin_id: "gmail@openai-curated-remote".to_owned(),
+                    detail: detail.clone(),
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(state.marketplace.plugin_detail, Some(detail));
+        assert_eq!(
+            state.marketplace.plugin_detail_status,
+            Some(LoadStatus::Ready)
+        );
+
+        assert!(reduce(&mut state, Action::ClosePluginDetails).is_empty());
+        assert!(state.marketplace.selected_plugin_id.is_none());
+        assert!(state.marketplace.plugin_detail.is_none());
+    }
+
+    #[test]
+    fn installed_plugin_skills_write_by_name_and_keep_the_effective_state() {
+        let plugin_id = "review@openai-curated-remote".to_owned();
+        let mut state = AppState::default();
+        state.marketplace.selected_plugin_id = Some(plugin_id.clone());
+        state.marketplace.plugins = vec![PluginCard {
+            id: plugin_id.clone(),
+            install_name: "review".to_owned(),
+            marketplace: "openai-curated-remote".to_owned(),
+            name: "Code review".to_owned(),
+            description: "Review changes".to_owned(),
+            category: Some("Developer tools".to_owned()),
+            developer: Some("OpenAI".to_owned()),
+            logo_url: None,
+            logo_url_dark: None,
+            default_prompt: None,
+            version: Some("1.0.0".to_owned()),
+            installed: true,
+            enabled: true,
+            installable: true,
+            featured: false,
+            featured_rank: None,
+        }];
+        state.marketplace.plugin_detail = Some(PluginDetailView {
+            plugin_id: plugin_id.clone(),
+            description: "Review changes".to_owned(),
+            capabilities: vec!["Read".to_owned()],
+            website_url: None,
+            privacy_policy_url: None,
+            terms_of_service_url: None,
+            skills: vec![PluginSkillDetail {
+                name: "review-diff".to_owned(),
+                display_name: "Review diff".to_owned(),
+                description: "Review the current diff".to_owned(),
+                enabled: true,
+            }],
+            apps: Vec::new(),
+            app_templates: Vec::new(),
+            hooks: Vec::new(),
+            mcp_servers: Vec::new(),
+            scheduled_tasks: Vec::new(),
+        });
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SetPluginSkillEnabled {
+                    plugin_id: plugin_id.clone(),
+                    skill_name: "review-diff".to_owned(),
+                    enabled: false,
+                },
+            ),
+            [Effect::SetPluginSkillEnabled {
+                plugin_id: plugin_id.clone(),
+                skill_name: "review-diff".to_owned(),
+                enabled: false,
+            }]
+        );
+        assert_eq!(
+            state.marketplace.pending_plugin_skill_name.as_deref(),
+            Some("review-diff")
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::SetPluginSkillEnabled {
+                    plugin_id: plugin_id.clone(),
+                    skill_name: "review-diff".to_owned(),
+                    enabled: true,
+                },
+            )
+            .is_empty()
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::PluginSkillEnabledChanged {
+                    plugin_id,
+                    skill_name: "review-diff".to_owned(),
+                    requested_enabled: false,
+                    effective_enabled: false,
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state
+                .marketplace
+                .plugin_detail
+                .as_ref()
+                .and_then(|detail| detail.skills.first())
+                .map(|skill| skill.enabled),
+            Some(false)
+        );
+        assert!(state.marketplace.pending_plugin_skill_name.is_none());
+    }
+
+    #[test]
+    fn plugin_and_skill_mutations_are_single_flight_and_refresh_actual_state() {
+        let plugin = PluginCard {
+            id: "computer-use@openai".to_owned(),
+            install_name: "computer-use".to_owned(),
+            marketplace: "openai-curated".to_owned(),
+            name: "Computer Use".to_owned(),
+            description: "Control desktop apps".to_owned(),
+            category: Some("Productivity".to_owned()),
+            developer: Some("OpenAI".to_owned()),
+            logo_url: None,
+            logo_url_dark: None,
+            default_prompt: None,
+            version: Some("1.0.0".to_owned()),
+            installed: false,
+            enabled: false,
+            installable: true,
+            featured: true,
+            featured_rank: Some(0),
+        };
+        let skill_path = PathBuf::from("C:\\repo\\.agents\\skills\\review\\SKILL.md");
+        let skill = SkillCard {
+            name: "review".to_owned(),
+            display_name: "Code review".to_owned(),
+            description: "Review changes".to_owned(),
+            path: skill_path.clone(),
+            scope: SkillScope::Repo,
+            enabled: true,
+        };
+        let mut state = AppState::default();
+        reduce(
+            &mut state,
+            Action::MarketplaceLoaded {
+                plugins: vec![plugin],
+                sources: Vec::new(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::SkillsLoaded {
+                skills: vec![skill],
+                errors: Vec::new(),
+            },
+        );
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::InstallPlugin {
+                    plugin_id: "computer-use@openai".to_owned(),
+                    plugin_name: "computer-use".to_owned(),
+                    marketplace: "openai-curated".to_owned(),
+                },
+            ),
+            [Effect::InstallPlugin {
+                plugin_id: "computer-use@openai".to_owned(),
+                plugin_name: "computer-use".to_owned(),
+                marketplace: "openai-curated".to_owned(),
+            }]
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::InstallPlugin {
+                    plugin_id: "computer-use@openai".to_owned(),
+                    plugin_name: "computer-use".to_owned(),
+                    marketplace: "openai-curated".to_owned(),
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::PluginMutationFinished {
+                    plugin_id: "computer-use@openai".to_owned(),
+                    installed: true,
+                },
+            ),
+            [
+                Effect::RefreshMarketplace {
+                    cwds: Vec::new(),
+                    directory_tab: PluginDirectoryTab::CuratedByOpenAi,
+                    force_refetch: false,
+                    include_all_marketplaces: false,
+                },
+                Effect::RefreshComposerPlugins {
+                    cwds: Vec::new(),
+                    force_refetch: false,
+                }
+            ]
+        );
+        assert!(state.marketplace.pending_plugin_id.is_none());
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SetSkillEnabled {
+                    path: skill_path.clone(),
+                    enabled: false,
+                },
+            ),
+            [Effect::SetSkillEnabled {
+                path: skill_path.clone(),
+                enabled: false,
+            }]
+        );
+        reduce(
+            &mut state,
+            Action::SkillEnabledChanged {
+                path: skill_path,
+                requested_enabled: false,
+                effective_enabled: false,
+            },
+        );
+        assert!(!state.marketplace.skills[0].enabled);
+        assert!(state.marketplace.pending_skill_path.is_none());
+    }
+
+    #[test]
+    fn hooks_require_trust_and_refresh_after_bounded_config_mutations() {
+        let key = "C:\\repo\\.codex\\hooks.json:pre_tool_use:0:0".to_owned();
+        let mut state = AppState {
+            tasks: vec![task("thread-1")],
+            selected_task_id: Some("thread-1".to_owned()),
+            ..AppState::default()
+        };
+        assert_eq!(
+            reduce(&mut state, Action::RefreshHooks),
+            [Effect::RefreshHooks {
+                cwds: vec![PathBuf::from("C:\\repo")],
+            }]
+        );
+        reduce(
+            &mut state,
+            Action::HooksLoaded(vec![HookProjectEntry {
+                cwd: PathBuf::from("C:\\repo"),
+                hooks: vec![HookCard {
+                    key: key.clone(),
+                    event_name: HookEventName::PreToolUse,
+                    handler_type: HookHandlerType::Command,
+                    is_managed: false,
+                    matcher: Some("shell".to_owned()),
+                    command: Some("python hook.py".to_owned()),
+                    timeout_sec: 5,
+                    status_message: Some("Checking command".to_owned()),
+                    source_path: PathBuf::from("C:\\repo\\.codex\\hooks.json"),
+                    source: HookSource::Project,
+                    plugin_id: None,
+                    display_order: 0,
+                    enabled: true,
+                    current_hash: "sha256:fixture".to_owned(),
+                    trust_status: HookTrustStatus::Untrusted,
+                }],
+                warnings: Vec::new(),
+                errors: Vec::new(),
+            }]),
+        );
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::SetHookEnabled {
+                    key: key.clone(),
+                    enabled: false,
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            reduce(&mut state, Action::TrustHook { key: key.clone() }),
+            [Effect::TrustHook {
+                key: key.clone(),
+                current_hash: "sha256:fixture".to_owned(),
+            }]
+        );
+        assert!(
+            reduce(&mut state, Action::TrustHook { key: key.clone() }).is_empty(),
+            "hook mutations stay single-flight"
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::HookMutationFinished {
+                    key: key.clone(),
+                    overridden: false,
+                },
+            ),
+            [Effect::RefreshHooks {
+                cwds: vec![PathBuf::from("C:\\repo")],
+            }]
+        );
+
+        state.hooks.entries[0].hooks[0].trust_status = HookTrustStatus::Trusted;
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SetHookEnabled {
+                    key: key.clone(),
+                    enabled: false,
+                },
+            ),
+            [Effect::SetHookEnabled {
+                key,
+                enabled: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn archived_chat_mutations_wait_for_app_server_confirmation() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::RefreshArchivedTasks);
+        reduce(
+            &mut state,
+            Action::ArchivedTasksLoaded {
+                generation: 1,
+                tasks: vec![task("archived")],
+                next_cursor: None,
+                append: false,
+            },
+        );
+
+        assert_eq!(
+            reduce(&mut state, Action::UnarchiveTask("archived".to_owned())),
+            [Effect::UnarchiveTask {
+                task_id: "archived".to_owned(),
+            }]
+        );
+        assert_eq!(state.archived_tasks.tasks.len(), 1);
+
+        reduce(&mut state, Action::TaskUnarchived(task("archived")));
+        assert!(state.archived_tasks.tasks.is_empty());
+        assert_eq!(state.tasks[0].id, "archived");
+
+        reduce(
+            &mut state,
+            Action::ArchivedTasksLoaded {
+                generation: 1,
+                tasks: vec![task("delete-me")],
+                next_cursor: None,
+                append: false,
+            },
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::DeleteArchivedTasks {
+                    task_ids: vec!["delete-me".to_owned()],
+                    kind: ArchivedTaskDeleteKind::Single,
+                }
+            ),
+            [Effect::DeleteArchivedTasks {
+                task_ids: vec!["delete-me".to_owned()],
+                kind: ArchivedTaskDeleteKind::Single,
+            }]
+        );
+        reduce(
+            &mut state,
+            Action::ArchivedTasksDeleted {
+                task_ids: vec!["delete-me".to_owned()],
+                kind: ArchivedTaskDeleteKind::Single,
+            },
+        );
+        assert!(state.archived_tasks.tasks.is_empty());
+        assert_eq!(
+            state.status_message.as_deref(),
+            Some("Deleted archived chat")
+        );
+
+        reduce(
+            &mut state,
+            Action::ArchivedTasksLoaded {
+                generation: 1,
+                tasks: vec![task("one"), task("two")],
+                next_cursor: None,
+                append: false,
+            },
+        );
+        let task_ids = vec!["one".to_owned(), "two".to_owned()];
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::DeleteArchivedTasks {
+                    task_ids: task_ids.clone(),
+                    kind: ArchivedTaskDeleteKind::Project,
+                }
+            ),
+            [Effect::DeleteArchivedTasks {
+                task_ids: task_ids.clone(),
+                kind: ArchivedTaskDeleteKind::Project,
+            }]
+        );
+        reduce(
+            &mut state,
+            Action::ArchivedTasksDeleted {
+                task_ids,
+                kind: ArchivedTaskDeleteKind::Project,
+            },
+        );
+        assert!(state.archived_tasks.tasks.is_empty());
+        assert_eq!(
+            state.status_message.as_deref(),
+            Some("Deleted 2 archived chats")
+        );
+    }
+
+    #[test]
+    fn pinned_chats_load_from_bounded_ui_state_and_hydrate_from_app_server() {
+        let mut state = AppState::default();
+        let oversized_id = "x".repeat(super::MAX_PINNED_TASK_ID_BYTES + 1);
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::StorageOpened {
+                    path: PathBuf::from("C:\\codexrs\\state.sqlite"),
+                    route: None,
+                    inspector: None,
+                    appearance_theme: None,
+                    terminal_location: None,
+                    terminal_bottom_height: None,
+                    terminal_right_width: None,
+                    git_include_unstaged: None,
+                    pinned_task_ids: vec!["pinned".to_owned(), "pinned".to_owned(), oversized_id,],
+                    recent_workspace: None,
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(state.pinned_task_ids, ["pinned"]);
+
+        let effects = reduce(&mut state, Action::Connected);
+        assert!(effects.contains(&Effect::LoadPinnedTasks {
+            task_ids: vec!["pinned".to_owned()],
+        }));
+
+        reduce(
+            &mut state,
+            Action::PinnedTasksLoaded(vec![task("pinned"), task("not-pinned")]),
+        );
+        assert_eq!(state.tasks.len(), 1);
+        assert_eq!(state.tasks[0].id, "pinned");
+    }
+
+    #[test]
+    fn pinning_is_optimistic_and_archive_removes_the_local_pin() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("chat")));
+
+        assert_eq!(
+            reduce(&mut state, Action::ToggleTaskPinned("chat".to_owned())),
+            [Effect::PersistPinnedTasks {
+                task_ids: vec!["chat".to_owned()],
+            }]
+        );
+        assert_eq!(state.pinned_task_ids, ["chat"]);
+
+        assert_eq!(
+            reduce(&mut state, Action::TaskArchived("chat".to_owned())),
+            [Effect::PersistPinnedTasks {
+                task_ids: Vec::new(),
+            }]
+        );
+        assert!(state.pinned_task_ids.is_empty());
+    }
+
+    #[test]
+    fn browser_panel_starts_once_and_keeps_frames_scoped_to_the_active_task_tab() {
+        let mut state = AppState::default();
+        state.tasks.push(task("chat-a"));
+        state.selected_task_id = Some("chat-a".to_owned());
+
+        let effects = reduce(&mut state, Action::ToggleBrowserPanel);
+        assert_eq!(state.inspector, InspectorPane::Browser);
+        assert!(effects.contains(&Effect::StartBrowser {
+            task_id: "chat-a".to_owned(),
+        }));
+        assert_eq!(
+            state.browser.get("chat-a").map(|browser| browser.status),
+            Some(LoadStatus::Loading)
+        );
+
+        reduce(
+            &mut state,
+            Action::BrowserReady {
+                task_id: "chat-a".to_owned(),
+                executable: PathBuf::from("chrome.exe"),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::BrowserTabsChanged {
+                task_id: "chat-a".to_owned(),
+                tabs: vec![BrowserTabState {
+                    id: "tab-a".to_owned(),
+                    url: "https://example.com/".to_owned(),
+                    title: "Example".to_owned(),
+                    loading: false,
+                    can_go_back: false,
+                    can_go_forward: false,
+                }],
+                active_tab_id: "tab-a".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::BrowserFrameReady {
+                task_id: "chat-a".to_owned(),
+                tab_id: "other-tab".to_owned(),
+                jpeg: Arc::from([1_u8, 2, 3]),
+                width: 800,
+                height: 600,
+            },
+        );
+        assert!(state.browser["chat-a"].frame.is_none());
+        reduce(
+            &mut state,
+            Action::BrowserFrameReady {
+                task_id: "chat-a".to_owned(),
+                tab_id: "tab-a".to_owned(),
+                jpeg: Arc::from([1_u8, 2, 3]),
+                width: 800,
+                height: 600,
+            },
+        );
+        assert_eq!(
+            state.browser["chat-a"]
+                .frame
+                .as_ref()
+                .map(|frame| frame.tab_id.as_str()),
+            Some("tab-a")
+        );
+        assert!(
+            reduce(&mut state, Action::OpenBrowserTab).contains(&Effect::BrowserOpenTab {
+                task_id: "chat-a".to_owned(),
+                url: None,
+            })
+        );
+    }
+
+    #[test]
+    fn browser_download_history_is_bounded_and_routes_stable_actions() {
+        let mut state = AppState::default();
+        let download = |id: String, status: BrowserDownloadStatus| BrowserDownloadState {
+            can_cancel: status.active(),
+            can_pause: matches!(
+                status,
+                BrowserDownloadStatus::Started | BrowserDownloadStatus::InProgress
+            ),
+            can_resume: status == BrowserDownloadStatus::Paused,
+            context_id: "chat".to_owned(),
+            file_exists: status == BrowserDownloadStatus::Complete,
+            filename: format!("{id}.txt"),
+            id,
+            path: PathBuf::from("C:\\Downloads\\fixture.txt"),
+            received_bytes: 7,
+            started_at_ms: 1,
+            status,
+            total_bytes: 7,
+            updated_at_ms: 2,
+            url: "https://example.com/fixture.txt".to_owned(),
+            user_initiated: true,
+        };
+
+        reduce(
+            &mut state,
+            Action::BrowserDownloadChanged(download(
+                "active".to_owned(),
+                BrowserDownloadStatus::InProgress,
+            )),
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::CancelBrowserDownload("active".to_owned())
+            ),
+            [Effect::BrowserCancelDownload {
+                id: "active".to_owned(),
+            }]
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::PauseBrowserDownload("active".to_owned())
+            ),
+            [Effect::BrowserPauseDownload {
+                id: "active".to_owned(),
+            }]
+        );
+
+        reduce(
+            &mut state,
+            Action::BrowserDownloadChanged(download(
+                "active".to_owned(),
+                BrowserDownloadStatus::Paused,
+            )),
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::PauseBrowserDownload("active".to_owned())
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::ResumeBrowserDownload("active".to_owned())
+            ),
+            [Effect::BrowserResumeDownload {
+                id: "active".to_owned(),
+            }]
+        );
+
+        let completed = download("active".to_owned(), BrowserDownloadStatus::Complete);
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::BrowserDownloadChanged(completed.clone()),
+            ),
+            [Effect::PersistBrowserDownload(completed)]
+        );
+        assert!(
+            state
+                .browser_downloads
+                .unacknowledged_ids
+                .contains("active")
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::ShowBrowserDownloadInFolder("active".to_owned())
+            ),
+            [Effect::BrowserShowDownloadInFolder {
+                id: "active".to_owned(),
+            }]
+        );
+        assert!(
+            !state
+                .browser_downloads
+                .unacknowledged_ids
+                .contains("active")
+        );
+
+        for index in 0..=MAX_BROWSER_DOWNLOADS {
+            reduce(
+                &mut state,
+                Action::BrowserDownloadChanged(download(
+                    format!("history-{index}"),
+                    BrowserDownloadStatus::Complete,
+                )),
+            );
+        }
+        assert_eq!(
+            state.browser_downloads.downloads.len(),
+            MAX_BROWSER_DOWNLOADS
+        );
+        assert!(
+            state
+                .browser_downloads
+                .downloads
+                .iter()
+                .all(|entry| entry.id != "active")
+        );
+    }
+
+    #[test]
+    fn persisted_browser_download_history_restores_only_terminal_records() {
+        let mut state = AppState::default();
+        let path = if cfg!(windows) {
+            PathBuf::from(r"C:\Downloads\fixture.txt")
+        } else {
+            PathBuf::from("/tmp/downloads/fixture.txt")
+        };
+        let restored = |id: &str, status: BrowserDownloadStatus| BrowserDownloadState {
+            can_cancel: true,
+            can_pause: true,
+            can_resume: true,
+            context_id: "chat".to_owned(),
+            file_exists: true,
+            filename: "fixture.txt".to_owned(),
+            id: id.to_owned(),
+            path: path.clone(),
+            received_bytes: 7,
+            started_at_ms: 1,
+            status,
+            total_bytes: 7,
+            updated_at_ms: 2,
+            url: "https://example.com/private?token=redacted".to_owned(),
+            user_initiated: true,
+        };
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::BrowserDownloadHistoryLoaded(vec![
+                    restored("complete", BrowserDownloadStatus::Complete),
+                    restored("stale-active", BrowserDownloadStatus::InProgress),
+                ]),
+            )
+            .is_empty()
+        );
+        assert_eq!(state.browser_downloads.downloads.len(), 1);
+        let download = &state.browser_downloads.downloads[0];
+        assert_eq!(download.id, "complete");
+        assert!(download.url.is_empty());
+        assert!(!download.can_cancel);
+        assert!(!download.can_pause);
+        assert!(!download.can_resume);
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::BrowserDownloadRemoved {
+                    id: "complete".to_owned(),
+                },
+            ),
+            [Effect::DeletePersistedBrowserDownload {
+                id: "complete".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
+    fn browser_download_preferences_are_normalized_persisted_and_applied() {
+        let mut state = AppState::default();
+        let directory = if cfg!(windows) {
+            PathBuf::from(r"C:\Downloads")
+        } else {
+            PathBuf::from("/tmp/downloads")
+        };
+        let preferences = BrowserDownloadPreferences {
+            download_directory: Some(directory.clone()),
+            prompt_for_user_downloads: true,
+        };
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::BrowserDownloadPreferencesLoaded(preferences.clone())
+            ),
+            [Effect::ConfigureBrowserDownloads(preferences.clone())]
+        );
+        assert_eq!(state.browser_download_preferences, preferences);
+        assert!(reduce(&mut state, Action::SetPromptForBrowserDownloads(true)).is_empty());
+
+        let reset = BrowserDownloadPreferences {
+            download_directory: None,
+            prompt_for_user_downloads: true,
+        };
+        assert_eq!(
+            reduce(&mut state, Action::SetBrowserDownloadDirectory(None)),
+            [
+                Effect::PersistBrowserDownloadPreferences(reset.clone()),
+                Effect::ConfigureBrowserDownloads(reset),
+            ]
+        );
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::SetBrowserDownloadDirectory(Some(PathBuf::from("relative")))
+            )
+            .is_empty()
+        );
+        assert!(
+            state
+                .browser_download_preferences
+                .download_directory
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn browser_site_permissions_are_normalized_persisted_and_deny_wins() {
+        let allow = BrowserSitePermission {
+            origin: " https://api.example.com ".to_owned(),
+            browse: BrowserPermissionValue::Allow,
+            download: BrowserPermissionValue::Allow,
+            upload: BrowserPermissionValue::Default,
+            full_cdp: BrowserPermissionValue::Default,
+        };
+        let block = BrowserSitePermission {
+            origin: "*.example.com".to_owned(),
+            browse: BrowserPermissionValue::Block,
+            download: BrowserPermissionValue::Block,
+            upload: BrowserPermissionValue::Default,
+            full_cdp: BrowserPermissionValue::Default,
+        };
+        let permissions = BrowserPermissionsState {
+            approval_mode: BrowserApprovalMode::NeverAsk,
+            download_approval_mode: BrowserApprovalMode::AlwaysAsk,
+            upload_approval_mode: BrowserApprovalMode::AlwaysAsk,
+            full_cdp_access_enabled: false,
+            sites: vec![allow.clone(), block.clone()],
+        }
+        .normalized();
+        let mut state = AppState::default();
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::BrowserPermissionsLoaded(permissions.clone())
+            ),
+            [Effect::ConfigureBrowserPermissions(permissions.clone())]
+        );
+        assert_eq!(
+            state
+                .browser_permissions
+                .permission_matching(BrowserPermissionResource::Download, |pattern| pattern
+                    == "https://api.example.com"
+                    || pattern == "*.example.com",),
+            BrowserPermissionValue::Block
+        );
+
+        let replacement = BrowserSitePermission {
+            browse: BrowserPermissionValue::Allow,
+            download: BrowserPermissionValue::Default,
+            ..block
+        };
+        let mut expected = permissions;
+        expected.upsert_site(replacement.clone());
+        assert_eq!(
+            reduce(&mut state, Action::UpsertBrowserSitePermission(replacement)),
+            [
+                Effect::PersistBrowserPermissions(expected.clone()),
+                Effect::ConfigureBrowserPermissions(expected.clone()),
+            ]
+        );
+        assert_eq!(state.browser_permissions, expected);
+
+        let default = BrowserSitePermission {
+            origin: allow.origin.trim().to_owned(),
+            browse: BrowserPermissionValue::Default,
+            download: BrowserPermissionValue::Default,
+            upload: BrowserPermissionValue::Default,
+            full_cdp: BrowserPermissionValue::Default,
+        };
+        assert_eq!(
+            reduce(&mut state, Action::UpsertBrowserSitePermission(default)),
+            [
+                Effect::PersistBrowserPermissions({
+                    let mut next = expected.clone();
+                    next.remove_site("https://api.example.com");
+                    next.clone()
+                }),
+                Effect::ConfigureBrowserPermissions({
+                    let mut next = expected;
+                    next.remove_site("https://api.example.com");
+                    next
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn user_download_save_choice_routes_only_for_an_active_user_download() {
+        let mut state = AppState::default();
+        let destination = if cfg!(windows) {
+            PathBuf::from(r"C:\Downloads\chosen.txt")
+        } else {
+            PathBuf::from("/tmp/downloads/chosen.txt")
+        };
+        let download = BrowserDownloadState {
+            can_cancel: true,
+            can_pause: true,
+            can_resume: false,
+            context_id: "chat".to_owned(),
+            file_exists: false,
+            filename: "fixture.txt".to_owned(),
+            id: "active".to_owned(),
+            path: destination.clone(),
+            received_bytes: 1,
+            started_at_ms: 1,
+            status: BrowserDownloadStatus::InProgress,
+            total_bytes: 7,
+            updated_at_ms: 2,
+            url: "https://example.com/fixture.txt".to_owned(),
+            user_initiated: true,
+        };
+        reduce(&mut state, Action::BrowserDownloadChanged(download));
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SetBrowserDownloadDestination {
+                    id: "active".to_owned(),
+                    path: Some(destination.clone()),
+                },
+            ),
+            [Effect::BrowserSetDownloadDestination {
+                id: "active".to_owned(),
+                path: Some(destination),
+            }]
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SetBrowserDownloadDestination {
+                    id: "active".to_owned(),
+                    path: None,
+                },
+            ),
+            [Effect::BrowserSetDownloadDestination {
+                id: "active".to_owned(),
+                path: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn browser_visibility_requests_only_control_the_selected_task_surface() {
+        let mut state = AppState::default();
+        state.tasks.push(task("chat-a"));
+        state.tasks.push(task("chat-b"));
+        state.selected_task_id = Some("chat-a".to_owned());
+        state.route = MainRoute::Settings;
+        state.inspector = InspectorPane::Changes;
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::BrowserVisibilityRequested {
+                    task_id: "chat-a".to_owned(),
+                    visible: true,
+                },
+            ),
+            [Effect::PersistUiState {
+                route: MainRoute::Tasks,
+                inspector: InspectorPane::Browser,
+            }]
+        );
+        assert_eq!(state.route, MainRoute::Tasks);
+        assert_eq!(state.inspector, InspectorPane::Browser);
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::BrowserVisibilityRequested {
+                    task_id: "chat-a".to_owned(),
+                    visible: false,
+                },
+            ),
+            [Effect::PersistUiState {
+                route: MainRoute::Tasks,
+                inspector: InspectorPane::Hidden,
+            }]
+        );
+        state.selected_task_id = Some("chat-b".to_owned());
+        assert!(
+            reduce(
+                &mut state,
+                Action::BrowserVisibilityRequested {
+                    task_id: "chat-a".to_owned(),
+                    visible: true,
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(state.inspector, InspectorPane::Hidden);
+    }
+
+    #[test]
+    fn browser_input_is_bounded_and_routed_only_while_ready() {
+        let mut state = AppState::default();
+        state.tasks.push(task("chat"));
+        state.selected_task_id = Some("chat".to_owned());
+        state.browser.entry("chat".to_owned()).or_default().status = LoadStatus::Ready;
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::ClickBrowser {
+                    x: u32::MAX,
+                    y: u32::MAX,
+                    button: BrowserMouseButton::Left,
+                },
+            ),
+            [Effect::BrowserClick {
+                task_id: "chat".to_owned(),
+                x: 1_919,
+                y: 1_079,
+                button: BrowserMouseButton::Left,
+            }]
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::BrowserKey(BrowserKeyInput {
+                    key: "a".to_owned(),
+                    text: Some("a".to_owned()),
+                    alt: false,
+                    control: false,
+                    meta: false,
+                    shift: false,
+                }),
+            ),
+            [Effect::BrowserKey {
+                task_id: "chat".to_owned(),
+                input: BrowserKeyInput {
+                    key: "a".to_owned(),
+                    text: Some("a".to_owned()),
+                    alt: false,
+                    control: false,
+                    meta: false,
+                    shift: false,
+                },
+            }]
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::ResizeBrowser {
+                    width: u32::MAX,
+                    height: 1,
+                },
+            ),
+            [Effect::BrowserResize {
+                task_id: "chat".to_owned(),
+                width: 1_920,
+                height: 240,
+            }]
+        );
+        if let Some(browser) = state.browser.get_mut("chat") {
+            browser.tabs.push(BrowserTabState {
+                id: "tab".to_owned(),
+                url: "https://example.com".to_owned(),
+                title: "Example".to_owned(),
+                loading: true,
+                can_go_back: false,
+                can_go_forward: false,
+            });
+            browser.active_tab_id = Some("tab".to_owned());
+        }
+        assert_eq!(
+            reduce(&mut state, Action::StopBrowser),
+            [Effect::BrowserStop {
+                task_id: "chat".to_owned(),
+            }]
+        );
+        if let Some(browser) = state.browser.get_mut("chat") {
+            browser.status = LoadStatus::Failed;
+        }
+        assert!(reduce(&mut state, Action::NavigateBrowserBack).is_empty());
+    }
+
+    #[test]
+    fn repeated_connection_loss_queues_only_one_reconnect() {
+        let mut state = AppState {
+            connection: ConnectionStatus::Online,
+            ..AppState::default()
+        };
+
+        assert_eq!(
+            reduce(&mut state, Action::ConnectionLost),
+            [Effect::ConnectAppServer]
+        );
+        assert_eq!(state.connection, ConnectionStatus::Recovering);
+        assert!(reduce(&mut state, Action::ConnectionLost).is_empty());
     }
 }
