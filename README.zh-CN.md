@@ -5,8 +5,8 @@
 <h1 align="center">codexRS</h1>
 
 <p align="center">
-  面向官方 Codex app-server 的原生 Rust 桌面客户端。<br>
-  在无浏览器运行时的环境中管理任务、差异、分支、worktree、终端、Computer Use 与插件。
+  以完整功能和 UX 对等为目标的 Codex Desktop 原生 Rust 替代方案。<br>
+  无需 Electron、WebView 或浏览器运行时即可兼容官方 app-server。
 </p>
 
 <p align="center">
@@ -49,12 +49,12 @@ codexRS 提供一个体积更小、边界更清晰的 Codex 原生客户端：
 | 任务 | 有界分页、恢复、fork、输入框、流式时间线与审批 |
 | 仓库 | 状态、暂存/未暂存文件、大型虚拟化差异、分支切换与安全的同级 worktree |
 | 终端 | 原生 PTY/ConPTY 与有界 VT 输出 |
-| Computer Use | 原生窗口发现、截图、鼠标、滚动、文本与按键，并具有任务和会话双重授权 |
-| 插件 | 通过 app-server 协议浏览、安装和卸载 marketplace 插件 |
+| Computer Use | 原生窗口发现与控制，按应用审批、按任务授权，并由 app-server 管理始终允许列表 |
+| 插件 | 原生目录标签、有界图片加载、已安装插件与来源管理、创建入口，以及通过 app-server 添加/移除/升级 marketplace、安装和卸载 |
 | 持久化 | 独立单写者 SQLite，仅保存 codexRS 界面偏好与最近工作区 |
 | 平台 | Windows 已完成源码冒烟测试；Ubuntu 在 CI 中构建并测试 |
 
-Computer Use 必须按任务启用。输入操作还需要当前会话的明确授权以及已选择的窗口。截图只保留在内存中，并在进入协议前受到尺寸限制。
+Computer Use 必须按任务启用。每个读取或控制动作都携带由有界 discovery 返回的精确 `Window { app, id, title? }`；codexRS 会重新解析不透明窗口 ID，并在执行前验证当前所属应用。原生检查器中的窗口选择仅用于手动操作。每个真实应用首次被读取或控制前都会单独请求授权。在 Windows 上，packaged 应用保留大小写不变的 AUMID；普通 executable 优先采用与 stable 相同的 known-folder GUID 标识，否则采用大小写不变的绝对路径，旧的 `process:` 标识仍可用于匹配。已知共享宿主进程和过长标识会直接拒绝。`Allow once` 仅覆盖当前任务，`Always allow` 通过官方 app-server 持久化，但两者都不能绕过针对 Codex、终端、密码管理器、身份与安全界面的 product-policy 禁止规则。原生 Windows 应用目录会有界读取两套 Start Menu、execution aliases、AppsFolder 与已安装包 manifests，并通过 Shell AppUserModel ID、link target path 和有界 UserAssist process key 提供 stable 形状的应用与使用记录；模型直接启动应用时沿用同一套按应用审批。截图只保留在内存中，并在进入协议前受到尺寸限制；短期 screenshot ID 会把缩放图像坐标映射回真实窗口。Windows 的可访问性树、窗口激活与索引操作运行在受监管的原生 Rust helper 中：最多 512 个元素、128 KiB，单次请求超时为 10 秒；第三方 UI Automation provider 卡死时只终止 helper，不会冻结客户端。输入方法会自动激活精确目标窗口，`activate_window` 则保留为与 stable Window2 一致的显式恢复动作。受保护的输入开始前，必须先显示带有 stable 精确文案 `ChatGPT is using your computer` / `Esc to cancel` 的原生置顶系统指示器。它持续到本次 Computer Use 回合结束，不获取焦点、不拦截点击，也不会进入截图；若无法显示，输入动作会被拒绝。Windows 发行包会在 `codexrs.exe` 旁附带 `codex-computer-use-overlay.exe`；该窗口由此受监管的原生进程通过有界 IPC 驱动，并由 kill-on-close Job Object 随客户端一同终止。
 
 ## 架构
 
@@ -71,7 +71,8 @@ flowchart LR
 ```
 
 协议帧、队列、历史分页、差异、终端输出、截图和进程诊断均具有明确上限。详见
-[架构说明](docs/architecture.md)与[平台支持](docs/platform-support.md)。
+[架构说明](docs/architecture.md)、[对等矩阵](docs/parity-matrix.md)与
+[平台支持](docs/platform-support.md)。
 
 ## 快速开始
 
@@ -119,7 +120,8 @@ Linux 构建依赖与桌面会话限制请参阅[平台支持](docs/platform-sup
 
 ```powershell
 $env:CODEX_HOME = 'E:\scratch\isolated-codex-home'
-cargo run -p codex-app
+cargo build -p codex-app --bins
+cargo run -p codex-app --bin codexrs
 ```
 
 可使用 `CODEX_RS_DATA_DIR` 单独重定向 codexRS 自有数据。
@@ -130,6 +132,7 @@ cargo run -p codex-app
 [AGENTS.md](AGENTS.md)。大型功能应先通过 issue 或 Discussions 明确行为契约。
 
 - [路线图](ROADMAP.md)
+- [Codex Desktop 对等矩阵](docs/parity-matrix.md)
 - [支持](SUPPORT.md)
 - [安全策略](SECURITY.md)
 - [行为准则](CODE_OF_CONDUCT.md)
