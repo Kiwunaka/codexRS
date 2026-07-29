@@ -1,9 +1,11 @@
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::io::{self, BufRead, Write};
 use std::mem;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
+use std::str;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -225,7 +227,8 @@ fn frame_too_large(limit: usize) -> FrameTooLarge {
 pub struct ClientRequest<P> {
     pub method: &'static str,
     pub id: u64,
-    pub params: P,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub params: Option<P>,
 }
 
 #[derive(Debug, Serialize)]
@@ -266,6 +269,244 @@ pub struct InitializeResponse {
     pub codex_home: PathBuf,
     pub platform_family: String,
     pub platform_os: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanType {
+    Free,
+    Go,
+    Plus,
+    Pro,
+    Prolite,
+    Team,
+    SelfServeBusinessUsageBased,
+    Business,
+    EnterpriseCbpUsageBased,
+    Enterprise,
+    Edu,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "type")]
+pub enum Account {
+    #[serde(rename = "apiKey")]
+    ApiKey,
+    #[serde(rename = "chatgpt")]
+    ChatGpt {
+        email: Option<String>,
+        #[serde(rename = "planType")]
+        plan_type: PlanType,
+    },
+    #[serde(rename = "amazonBedrock")]
+    AmazonBedrock {
+        #[serde(rename = "usesCodexManagedCredentials")]
+        uses_codex_managed_credentials: bool,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetAccountParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetAccountResponse {
+    pub account: Option<Account>,
+    pub requires_openai_auth: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetAuthStatusParams {
+    pub include_token: bool,
+    pub refresh_token: bool,
+}
+
+pub struct SecretString {
+    bytes: Vec<u8>,
+}
+
+impl SecretString {
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        str::from_utf8(&self.bytes).unwrap_or_default()
+    }
+}
+
+impl fmt::Debug for SecretString {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("[REDACTED]")
+    }
+}
+
+impl<'de> Deserialize<'de> for SecretString {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        String::deserialize(deserializer).map(|value| Self {
+            bytes: value.into_bytes(),
+        })
+    }
+}
+
+impl Drop for SecretString {
+    fn drop(&mut self) {
+        self.bytes.fill(0);
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetAuthStatusResponse {
+    pub auth_method: Option<String>,
+    pub auth_token: Option<SecretString>,
+    pub account_id: Option<String>,
+    pub requires_openai_auth: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type")]
+pub enum LoginAccountParams {
+    #[serde(rename = "chatgpt")]
+    ChatGpt {
+        #[serde(
+            rename = "codexStreamlinedLogin",
+            skip_serializing_if = "Option::is_none"
+        )]
+        codex_streamlined_login: Option<bool>,
+        #[serde(
+            rename = "useHostedLoginSuccessPage",
+            skip_serializing_if = "Option::is_none"
+        )]
+        use_hosted_login_success_page: Option<bool>,
+        #[serde(rename = "appBrand", skip_serializing_if = "Option::is_none")]
+        app_brand: Option<LoginAppBrand>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LoginAppBrand {
+    Codex,
+    ChatGpt,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "type")]
+pub enum LoginAccountResponse {
+    #[serde(rename = "apiKey")]
+    ApiKey,
+    #[serde(rename = "chatgpt")]
+    ChatGpt {
+        #[serde(rename = "loginId")]
+        login_id: String,
+        #[serde(rename = "authUrl")]
+        auth_url: String,
+    },
+    #[serde(rename = "chatgptDeviceCode")]
+    ChatGptDeviceCode {
+        #[serde(rename = "loginId")]
+        login_id: String,
+        #[serde(rename = "verificationUrl")]
+        verification_url: String,
+        #[serde(rename = "userCode")]
+        user_code: String,
+    },
+    #[serde(rename = "chatgptAuthTokens")]
+    ChatGptAuthTokens,
+    #[serde(rename = "amazonBedrock")]
+    AmazonBedrock,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelLoginAccountParams {
+    pub login_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CancelLoginAccountStatus {
+    Canceled,
+    NotFound,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct CancelLoginAccountResponse {
+    pub status: CancelLoginAccountStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct LogoutAccountResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedbackUploadParams {
+    pub classification: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extra_log_files: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_logs: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<BTreeMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedbackUploadResponse {
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountLoginCompletedNotification {
+    pub login_id: Option<String>,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RateLimitWindow {
+    pub used_percent: f64,
+    pub window_duration_mins: Option<i64>,
+    pub resets_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreditsSnapshot {
+    pub has_credits: bool,
+    pub unlimited: bool,
+    pub balance: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RateLimitSnapshot {
+    pub limit_id: Option<String>,
+    pub limit_name: Option<String>,
+    pub primary: Option<RateLimitWindow>,
+    pub secondary: Option<RateLimitWindow>,
+    pub credits: Option<CreditsSnapshot>,
+    pub plan_type: Option<PlanType>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetAccountRateLimitsResponse {
+    pub rate_limits: RateLimitSnapshot,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -319,6 +560,61 @@ impl ThreadListParams {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ThreadSourceKind {
+    Cli,
+    #[serde(rename = "vscode")]
+    VsCode,
+    Exec,
+    AppServer,
+    SubAgent,
+    SubAgentReview,
+    SubAgentCompact,
+    SubAgentThreadSpawn,
+    SubAgentOther,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSearchParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort_key: Option<ThreadSortKey>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort_direction: Option<SortDirection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_kinds: Option<Vec<ThreadSourceKind>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub archived: Option<bool>,
+    pub search_term: String,
+}
+
+impl ThreadSearchParams {
+    #[must_use]
+    pub fn interactive_page(search_term: String, limit: u32) -> Self {
+        Self {
+            cursor: None,
+            limit: Some(limit),
+            sort_key: Some(ThreadSortKey::RecencyAt),
+            sort_direction: Some(SortDirection::Desc),
+            source_kinds: Some(Vec::new()),
+            archived: Some(false),
+            search_term,
+        }
+    }
+
+    #[must_use]
+    pub fn with_cursor(mut self, cursor: Option<String>) -> Self {
+        self.cursor = cursor;
+        self
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadSummary {
@@ -345,6 +641,8 @@ pub struct ThreadSummary {
     pub status: Value,
     #[serde(default)]
     pub git_info: Option<Value>,
+    #[serde(default)]
+    pub turns: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -353,6 +651,102 @@ pub struct ThreadListResponse {
     pub data: Vec<ThreadSummary>,
     pub next_cursor: Option<String>,
     pub backwards_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadLoadedListParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    pub limit: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadLoadedListResponse {
+    pub data: Vec<String>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSearchResult {
+    pub thread: ThreadSummary,
+    pub snippet: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSearchResponse {
+    pub data: Vec<ThreadSearchResult>,
+    pub next_cursor: Option<String>,
+    pub backwards_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FuzzyFileSearchSessionStartParams {
+    pub session_id: String,
+    pub roots: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FuzzyFileSearchSessionUpdateParams {
+    pub session_id: String,
+    pub query: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FuzzyFileSearchSessionStopParams {
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FuzzyFileSearchParams {
+    pub query: String,
+    pub roots: Vec<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cancellation_token: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FuzzyFileSearchMatchType {
+    File,
+    Directory,
+}
+
+/// Superset of the file-search engine's native match payload.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FuzzyFileSearchResult {
+    pub file_name: String,
+    pub indices: Option<Vec<u32>>,
+    pub match_type: FuzzyFileSearchMatchType,
+    pub path: PathBuf,
+    pub root: PathBuf,
+    pub score: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FuzzyFileSearchResponse {
+    pub files: Vec<FuzzyFileSearchResult>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FuzzyFileSearchSessionUpdatedNotification {
+    pub session_id: String,
+    pub query: String,
+    pub files: Vec<FuzzyFileSearchResult>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FuzzyFileSearchSessionCompletedNotification {
+    pub session_id: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -411,6 +805,56 @@ pub struct ThreadItemsListResponse {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ThreadBackgroundTerminalsListParams {
+    pub thread_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadBackgroundTerminal {
+    pub item_id: String,
+    pub process_id: String,
+    pub command: String,
+    pub cwd: PathBuf,
+    pub os_pid: Option<u32>,
+    pub cpu_percent: Option<f64>,
+    pub rss_kb: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadBackgroundTerminalsListResponse {
+    pub data: Vec<ThreadBackgroundTerminal>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadBackgroundTerminalsTerminateParams {
+    pub thread_id: String,
+    pub process_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ThreadBackgroundTerminalsTerminateResponse {
+    pub terminated: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadBackgroundTerminalsCleanParams {
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ThreadBackgroundTerminalsCleanResponse {}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ThreadReadParams {
     pub thread_id: String,
     pub include_turns: bool,
@@ -434,6 +878,14 @@ pub enum UserInput {
         #[serde(skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
     },
+    Mention {
+        name: String,
+        path: PathBuf,
+    },
+    Skill {
+        name: String,
+        path: PathBuf,
+    },
 }
 
 impl UserInput {
@@ -442,6 +894,27 @@ impl UserInput {
         Self::Text {
             text: text.into(),
             text_elements: Vec::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn local_image(path: PathBuf) -> Self {
+        Self::LocalImage { path, detail: None }
+    }
+
+    #[must_use]
+    pub fn mention(name: impl Into<String>, path: PathBuf) -> Self {
+        Self::Mention {
+            name: name.into(),
+            path,
+        }
+    }
+
+    #[must_use]
+    pub fn skill(name: impl Into<String>, path: PathBuf) -> Self {
+        Self::Skill {
+            name: name.into(),
+            path,
         }
     }
 }
@@ -518,17 +991,308 @@ pub struct DynamicToolCallResponse {
     pub success: bool,
 }
 
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolRequestUserInputParams {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub item_id: String,
+    pub questions: Vec<ToolRequestUserInputQuestion>,
+    #[serde(default)]
+    pub auto_resolution_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolRequestUserInputQuestion {
+    pub id: String,
+    pub header: String,
+    pub question: String,
+    #[serde(default)]
+    pub options: Option<Vec<ToolRequestUserInputOption>>,
+    #[serde(default)]
+    pub is_other: bool,
+    #[serde(default)]
+    pub is_secret: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct ToolRequestUserInputOption {
+    pub label: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ToolRequestUserInputResponse {
+    pub answers: BTreeMap<String, ToolRequestUserInputAnswer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ToolRequestUserInputAnswer {
+    pub answers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandExecutionRequestApprovalParams {
+    #[serde(default)]
+    pub approval_id: Option<String>,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub command_actions: Option<Vec<CommandAction>>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub environment_id: Option<String>,
+    pub item_id: String,
+    #[serde(default)]
+    pub network_approval_context: Option<NetworkApprovalContext>,
+    #[serde(default)]
+    pub proposed_execpolicy_amendment: Option<Vec<String>>,
+    #[serde(default)]
+    pub proposed_network_policy_amendments: Option<Vec<NetworkPolicyAmendment>>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    pub started_at_ms: i64,
+    pub thread_id: String,
+    pub turn_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandAction {
+    #[serde(rename = "type")]
+    pub kind: CommandActionKind,
+    pub command: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub query: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CommandActionKind {
+    Read,
+    ListFiles,
+    Search,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct NetworkApprovalContext {
+    pub host: String,
+    pub protocol: NetworkApprovalProtocol,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum NetworkApprovalProtocol {
+    Http,
+    Https,
+    Socks5Tcp,
+    Socks5Udp,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Serialize)]
+pub struct NetworkPolicyAmendment {
+    pub action: NetworkPolicyRuleAction,
+    pub host: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NetworkPolicyRuleAction {
+    Allow,
+    Deny,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FileChangeRequestApprovalParams {
+    #[serde(default)]
+    pub grant_root: Option<String>,
+    pub item_id: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+    pub started_at_ms: i64,
+    pub thread_id: String,
+    pub turn_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionsRequestApprovalParams {
+    pub cwd: String,
+    #[serde(default)]
+    pub environment_id: Option<String>,
+    pub item_id: String,
+    pub permissions: PermissionProfile,
+    #[serde(default)]
+    pub reason: Option<String>,
+    pub started_at_ms: i64,
+    pub thread_id: String,
+    pub turn_id: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionProfile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_system: Option<AdditionalFileSystemPermissions>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network: Option<AdditionalNetworkPermissions>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdditionalFileSystemPermissions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entries: Option<Vec<FileSystemSandboxEntry>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub glob_scan_max_depth: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq, Serialize)]
+pub struct AdditionalNetworkPermissions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Serialize)]
+pub struct FileSystemSandboxEntry {
+    pub access: FileSystemAccessMode,
+    pub path: FileSystemPath,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FileSystemAccessMode {
+    Read,
+    Write,
+    Deny,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum FileSystemPath {
+    Path { path: String },
+    GlobPattern { pattern: String },
+    Special { value: FileSystemSpecialPath },
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FileSystemSpecialPath {
+    Root,
+    Minimal,
+    ProjectRoots {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subpath: Option<String>,
+    },
+    Tmpdir,
+    SlashTmp,
+    Unknown {
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subpath: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CommandExecutionRequestApprovalResponse {
+    pub decision: CommandExecutionApprovalDecision,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum CommandExecutionApprovalDecision {
+    Value(CommandExecutionApprovalDecisionValue),
+    AcceptWithExecpolicyAmendment {
+        #[serde(rename = "acceptWithExecpolicyAmendment")]
+        accept_with_execpolicy_amendment: ExecpolicyAmendment,
+    },
+    ApplyNetworkPolicyAmendment {
+        #[serde(rename = "applyNetworkPolicyAmendment")]
+        apply_network_policy_amendment: NetworkPolicyAmendmentDecision,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CommandExecutionApprovalDecisionValue {
+    Accept,
+    AcceptForSession,
+    Decline,
+    Cancel,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ExecpolicyAmendment {
+    pub execpolicy_amendment: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NetworkPolicyAmendmentDecision {
+    pub network_policy_amendment: NetworkPolicyAmendment,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FileChangeRequestApprovalResponse {
+    pub decision: FileChangeApprovalDecision,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FileChangeApprovalDecision {
+    Accept,
+    AcceptForSession,
+    Decline,
+    Cancel,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionsRequestApprovalResponse {
+    pub permissions: PermissionProfile,
+    pub scope: PermissionGrantScope,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strict_auto_review: Option<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PermissionGrantScope {
+    Turn,
+    Session,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadStartParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_provider: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_provider_model_fallback: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_workspace_roots: Option<Vec<PathBuf>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approval_policy: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -539,6 +1303,16 @@ pub struct ThreadStartParams {
     pub history_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub personality: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub experimental_raw_events: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -551,16 +1325,184 @@ pub struct ThreadStartResponse {
 pub struct ThreadForkParams {
     pub thread_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_turn_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub before_turn_id: Option<String>,
-    pub exclude_turns: bool,
-    pub defer_goal_continuation: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exclude_turns: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub defer_goal_continuation: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ThreadForkResponse {
     pub thread: ThreadSummary,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadRollbackParams {
+    pub thread_id: String,
+    pub num_turns: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ThreadRollbackResponse {
+    pub thread: ThreadSummary,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadCompactStartParams {
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ThreadCompactStartResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenUsageBreakdown {
+    pub total_tokens: i64,
+    pub input_tokens: i64,
+    pub cached_input_tokens: i64,
+    pub cache_write_input_tokens: i64,
+    pub output_tokens: i64,
+    pub reasoning_output_tokens: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadTokenUsage {
+    pub total: TokenUsageBreakdown,
+    pub last: TokenUsageBreakdown,
+    pub model_context_window: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadTokenUsageUpdatedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub token_usage: ThreadTokenUsage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnDiffUpdatedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub diff: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadArchiveParams {
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadUnarchiveParams {
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ThreadUnarchiveResponse {
+    pub thread: ThreadSummary,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadDeleteParams {
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSetNameParams {
+    pub thread_id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ThreadGoalStatus {
+    Active,
+    Paused,
+    Blocked,
+    UsageLimited,
+    BudgetLimited,
+    Complete,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadGoal {
+    pub thread_id: String,
+    pub objective: String,
+    pub status: ThreadGoalStatus,
+    pub tokens_used: i64,
+    pub token_budget: Option<i64>,
+    pub time_used_seconds: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadGoalSetParams {
+    pub thread_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub objective: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<ThreadGoalStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_budget: Option<Option<i64>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ThreadGoalSetResponse {
+    pub goal: ThreadGoal,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadGoalGetParams {
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ThreadGoalGetResponse {
+    #[serde(default)]
+    pub goal: Option<ThreadGoal>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadGoalClearParams {
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ThreadGoalClearResponse {
+    pub cleared: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadGoalUpdatedNotification {
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+    pub goal: ThreadGoal,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadGoalClearedNotification {
+    pub thread_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -585,9 +1527,48 @@ pub struct ThreadResumeInitialTurnsPageParams {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ThreadResumeResponse {
     pub thread: ThreadSummary,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub service_tier: Option<String>,
+    #[serde(default)]
+    pub approval_policy: Option<Value>,
+    #[serde(default)]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    #[serde(default)]
+    pub active_permission_profile: Option<ActivePermissionProfile>,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ActivePermissionProfile {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSettingsUpdateParams {
+    pub thread_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approval_policy: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<Option<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ThreadSettingsUpdateResponse {}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -595,22 +1576,307 @@ pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_user_message_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runtime_workspace_roots: Option<Vec<PathBuf>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub approval_policy: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub permissions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub personality: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub collaboration_mode: Option<CollaborationMode>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollaborationMode {
+    pub mode: CollaborationModeKind,
+    pub settings: CollaborationModeSettings,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CollaborationModeKind {
+    Default,
+    Plan,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CollaborationModeSettings {
+    pub model: String,
+    pub reasoning_effort: Option<String>,
+    pub developer_instructions: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TurnStartResponse {
     pub turn: Value,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelListParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_hidden: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelListResponse {
+    pub data: Vec<ModelSummary>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelSummary {
+    pub id: String,
+    pub model: String,
+    pub display_name: String,
+    pub description: String,
+    pub hidden: bool,
+    pub is_default: bool,
+    pub default_reasoning_effort: String,
+    pub supported_reasoning_efforts: Vec<ReasoningEffortOption>,
+    #[serde(default)]
+    pub service_tiers: Vec<ModelServiceTier>,
+    #[serde(default)]
+    pub default_service_tier: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReasoningEffortOption {
+    pub reasoning_effort: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModelServiceTier {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionProfileListParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionProfileListResponse {
+    pub data: Vec<PermissionProfileSummary>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PermissionProfileSummary {
+    pub id: String,
+    pub allowed: bool,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ApprovalsReviewer {
+    #[serde(rename = "user")]
+    User,
+    #[serde(rename = "auto_review", alias = "guardian_subagent")]
+    AutoReview,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigRequirementsReadResponse {
+    pub requirements: Option<ConfigRequirements>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigRequirements {
+    pub allowed_approval_policies: Option<Vec<Value>>,
+    pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
+    pub allowed_sandbox_modes: Option<Vec<String>>,
+    pub default_permissions: Option<String>,
+    pub models: Option<ModelsRequirements>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelsRequirements {
+    pub new_thread: Option<NewThreadModelDefaults>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewThreadModelDefaults {
+    pub model: Option<String>,
+    pub model_reasoning_effort: Option<String>,
+    pub service_tier: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigReadParams {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub include_layers: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConfigReadResponse {
+    pub config: ConfigDefaults,
+    #[serde(default)]
+    pub origins: BTreeMap<String, ConfigLayerMetadata>,
+    pub layers: Option<Vec<ConfigLayer>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConfigLayerMetadata {
+    pub name: Value,
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigLayer {
+    pub config: Value,
+    #[serde(default)]
+    pub name: Value,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub disabled_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ConfigDefaults {
+    pub model: Option<String>,
+    pub model_reasoning_effort: Option<String>,
+    pub service_tier: Option<String>,
+    pub profile: Option<String>,
+    pub personality: Option<String>,
+    pub model_personality: Option<String>,
+    pub approval_policy: Option<Value>,
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
+    pub sandbox_mode: Option<String>,
+    pub sandbox_workspace_write: Option<SandboxWorkspaceWriteConfig>,
+    #[serde(default)]
+    pub features: ConfigFeatureDefaults,
+    pub memories: Option<MemoryConfigDefaults>,
+    #[serde(default, alias = "mcpServers")]
+    pub mcp_servers: BTreeMap<String, McpServerConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ConfigFeatureDefaults {
+    pub memories: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct MemoryConfigDefaults {
+    pub generate_memories: Option<bool>,
+    pub use_memories: Option<bool>,
+    pub disable_on_external_context: Option<bool>,
+    pub no_memories_if_mcp_or_web_search: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SandboxWorkspaceWriteConfig {
+    pub network_access: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerConfig {
+    pub name: Option<String>,
+    pub enabled: Option<bool>,
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    #[serde(default)]
+    pub env_vars: Vec<Value>,
+    pub cwd: Option<String>,
+    pub url: Option<String>,
+    pub bearer_token_env_var: Option<String>,
+    #[serde(default)]
+    pub http_headers: BTreeMap<String, String>,
+    #[serde(default)]
+    pub env_http_headers: BTreeMap<String, String>,
+    pub startup_timeout_sec: Option<f64>,
+    pub startup_timeout_ms: Option<u64>,
+    pub tool_timeout_sec: Option<f64>,
+    pub enabled_tools: Option<Vec<String>>,
+    pub disabled_tools: Option<Vec<String>>,
+    #[serde(flatten)]
+    pub additional: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConfigMergeStrategy {
+    Replace,
+    Upsert,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigEdit {
+    pub key_path: String,
+    pub value: Value,
+    pub merge_strategy: ConfigMergeStrategy,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigBatchWriteParams {
+    pub edits: Vec<ConfigEdit>,
+    pub file_path: Option<String>,
+    pub expected_version: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reload_user_config: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ConfigWriteStatus {
+    Ok,
+    OkOverridden,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigWriteResponse {
+    pub status: ConfigWriteStatus,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -634,8 +1900,22 @@ pub struct PluginListParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwds: Option<Vec<PathBuf>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub marketplace_kinds: Option<Vec<String>>,
+    pub marketplace_kinds: Option<Vec<PluginListMarketplaceKind>>,
     pub force_refetch: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum PluginListMarketplaceKind {
+    #[serde(rename = "local")]
+    Local,
+    #[serde(rename = "vertical")]
+    Vertical,
+    #[serde(rename = "workspace-directory")]
+    WorkspaceDirectory,
+    #[serde(rename = "shared-with-me")]
+    SharedWithMe,
+    #[serde(rename = "created-by-me-remote")]
+    CreatedByMeRemote,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -646,6 +1926,61 @@ pub struct PluginListResponse {
     pub marketplace_load_errors: Vec<Value>,
     #[serde(default)]
     pub featured_plugin_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketplaceAddParams {
+    pub source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ref_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sparse_paths: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketplaceAddResponse {
+    pub marketplace_name: String,
+    pub installed_root: PathBuf,
+    pub already_added: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketplaceRemoveParams {
+    pub marketplace_name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketplaceRemoveResponse {
+    pub marketplace_name: String,
+    pub installed_root: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketplaceUpgradeParams {
+    pub marketplace_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketplaceUpgradeResponse {
+    #[serde(default)]
+    pub selected_marketplaces: Vec<String>,
+    #[serde(default)]
+    pub upgraded_roots: Vec<PathBuf>,
+    #[serde(default)]
+    pub errors: Vec<MarketplaceUpgradeErrorInfo>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketplaceUpgradeErrorInfo {
+    pub marketplace_name: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -663,7 +1998,13 @@ pub struct PluginSummary {
     pub id: String,
     pub name: String,
     #[serde(default)]
+    pub availability: Option<String>,
+    #[serde(default)]
+    pub install_policy: Option<String>,
+    #[serde(default)]
     pub version: Option<String>,
+    #[serde(default)]
+    pub local_version: Option<String>,
     #[serde(default)]
     pub installed: bool,
     #[serde(default)]
@@ -684,8 +2025,307 @@ pub struct PluginPresentation {
     pub category: Option<String>,
     #[serde(default)]
     pub capabilities: Vec<String>,
+    pub website_url: Option<String>,
+    pub privacy_policy_url: Option<String>,
+    pub terms_of_service_url: Option<String>,
+    #[serde(default)]
+    pub default_prompt: Option<Vec<String>>,
     pub logo_url: Option<String>,
     pub logo_url_dark: Option<String>,
+    #[serde(default)]
+    pub screenshot_urls: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginReadParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub marketplace_path: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_marketplace_name: Option<String>,
+    pub plugin_name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginReadResponse {
+    pub plugin: PluginDetail,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginDetail {
+    pub marketplace_name: String,
+    pub marketplace_path: Option<PathBuf>,
+    pub summary: PluginSummary,
+    pub share_url: Option<String>,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub skills: Vec<PluginSkillSummary>,
+    #[serde(default)]
+    pub hooks: Vec<PluginHookSummary>,
+    #[serde(default)]
+    pub apps: Vec<AppSummary>,
+    #[serde(default)]
+    pub app_templates: Vec<AppTemplateSummary>,
+    #[serde(default)]
+    pub mcp_servers: Vec<String>,
+    #[serde(default)]
+    pub scheduled_tasks: Option<Vec<PluginScheduledTaskSummary>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginSkillSummary {
+    pub name: String,
+    pub description: String,
+    pub short_description: Option<String>,
+    pub enabled: bool,
+    pub path: Option<PathBuf>,
+    #[serde(rename = "interface")]
+    pub presentation: Option<SkillPresentation>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginHookSummary {
+    pub key: String,
+    pub event_name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppTemplateSummary {
+    pub template_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub category: Option<String>,
+    pub canonical_connector_id: Option<String>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginScheduledTaskSummary {
+    pub key: String,
+    pub name: String,
+    pub prompt: String,
+    pub schedule: PluginScheduledTaskSchedule,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum PluginScheduledTaskSchedule {
+    Hourly {
+        interval_hours: u32,
+        days: Option<Vec<PluginScheduledTaskWeekday>>,
+    },
+    Daily {
+        time: String,
+    },
+    Weekdays {
+        time: String,
+    },
+    Weekly {
+        days: Vec<PluginScheduledTaskWeekday>,
+        time: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum PluginScheduledTaskWeekday {
+    Mo,
+    Tu,
+    We,
+    Th,
+    Fr,
+    Sa,
+    Su,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillsListParams {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cwds: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force_reload: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillsListResponse {
+    pub data: Vec<SkillsListEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillsListEntry {
+    pub cwd: PathBuf,
+    #[serde(default)]
+    pub skills: Vec<SkillMetadata>,
+    #[serde(default)]
+    pub errors: Vec<SkillErrorInfo>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillErrorInfo {
+    pub path: PathBuf,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillScope {
+    User,
+    Repo,
+    System,
+    Admin,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillMetadata {
+    pub name: String,
+    pub description: String,
+    #[serde(default)]
+    pub short_description: Option<String>,
+    #[serde(default, rename = "interface")]
+    pub presentation: Option<SkillPresentation>,
+    pub path: PathBuf,
+    pub scope: SkillScope,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillPresentation {
+    pub display_name: Option<String>,
+    pub short_description: Option<String>,
+    pub icon_small: Option<PathBuf>,
+    pub icon_large: Option<PathBuf>,
+    pub brand_color: Option<String>,
+    pub default_prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillsConfigWriteParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillsConfigWriteResponse {
+    pub effective_enabled: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HooksListParams {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cwds: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HooksListResponse {
+    pub data: Vec<HooksListEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HooksListEntry {
+    pub cwd: PathBuf,
+    #[serde(default)]
+    pub hooks: Vec<HookMetadata>,
+    #[serde(default)]
+    pub warnings: Vec<String>,
+    #[serde(default)]
+    pub errors: Vec<HookErrorInfo>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookErrorInfo {
+    pub path: PathBuf,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HookEventName {
+    PreToolUse,
+    PermissionRequest,
+    PostToolUse,
+    PreCompact,
+    PostCompact,
+    SessionStart,
+    SessionEnd,
+    UserPromptSubmit,
+    SubagentStart,
+    SubagentStop,
+    Stop,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HookHandlerType {
+    Command,
+    Prompt,
+    Agent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HookSource {
+    System,
+    User,
+    Project,
+    Mdm,
+    SessionFlags,
+    Plugin,
+    CloudRequirements,
+    CloudManagedConfig,
+    LegacyManagedConfigFile,
+    LegacyManagedConfigMdm,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HookTrustStatus {
+    Managed,
+    Untrusted,
+    Trusted,
+    Modified,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookMetadata {
+    pub key: String,
+    pub event_name: HookEventName,
+    pub handler_type: HookHandlerType,
+    pub is_managed: bool,
+    pub matcher: Option<String>,
+    pub command: Option<String>,
+    pub timeout_sec: u64,
+    pub status_message: Option<String>,
+    pub additional_context_limit: Option<u32>,
+    pub source_path: PathBuf,
+    pub source: HookSource,
+    pub plugin_id: Option<String>,
+    pub display_order: i64,
+    pub enabled: bool,
+    pub current_hash: String,
+    pub trust_status: HookTrustStatus,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -739,6 +2379,12 @@ pub struct AppsListResponse {
     pub next_cursor: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppListUpdatedNotification {
+    pub data: Vec<AppInfo>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppInfo {
@@ -754,6 +2400,437 @@ pub struct AppInfo {
     pub is_enabled: bool,
     #[serde(default)]
     pub plugin_display_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppsReadParams {
+    pub app_ids: Vec<String>,
+    pub include_tools: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppsReadResponse {
+    pub apps: Vec<ConnectorMetadata>,
+    #[serde(default)]
+    pub missing_app_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectorMetadata {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub distribution_channel: Option<String>,
+    pub icon_url: Option<String>,
+    pub icon_url_dark: Option<String>,
+    pub install_url: Option<String>,
+    #[serde(default)]
+    pub plugin_display_names: Vec<String>,
+    pub tool_summaries: Option<Vec<AppToolSummary>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppToolSummary {
+    pub name: String,
+    pub title: Option<String>,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListMcpServerStatusParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+    pub limit: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<McpServerStatusDetail>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum McpServerStatusDetail {
+    Full,
+    ToolsAndAuthOnly,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListMcpServerStatusResponse {
+    pub data: Vec<McpServerStatus>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerStatus {
+    pub name: String,
+    pub auth_status: McpAuthStatus,
+    pub server_info: Option<McpServerInfo>,
+    #[serde(default)]
+    pub tools: BTreeMap<String, McpTool>,
+    #[serde(default)]
+    pub resources: Vec<McpResource>,
+    #[serde(default)]
+    pub resource_templates: Vec<McpResourceTemplate>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerInfo {
+    pub name: String,
+    pub version: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub website_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpTool {
+    pub name: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub input_schema: Value,
+    pub output_schema: Option<Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpResource {
+    pub name: String,
+    pub uri: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub mime_type: Option<String>,
+    pub size: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpResourceTemplate {
+    pub name: String,
+    pub uri_template: String,
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub mime_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpResourceReadParams {
+    pub server: String,
+    pub uri: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct McpResourceReadResponse {
+    #[serde(default)]
+    pub contents: Vec<McpResourceContent>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpResourceContent {
+    pub uri: String,
+    pub mime_type: Option<String>,
+    pub text: Option<String>,
+    pub blob: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerElicitationRequestParams {
+    pub server_name: String,
+    pub thread_id: String,
+    pub turn_id: Option<String>,
+    #[serde(flatten)]
+    pub request: McpServerElicitationRequest,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "mode")]
+pub enum McpServerElicitationRequest {
+    #[serde(rename = "form")]
+    Form {
+        message: String,
+        #[serde(rename = "requestedSchema")]
+        requested_schema: McpElicitationSchema,
+        #[serde(rename = "_meta", default)]
+        metadata: Option<Value>,
+    },
+    #[serde(rename = "openai/form")]
+    OpenAiForm {
+        message: String,
+        #[serde(rename = "requestedSchema")]
+        requested_schema: McpOpenAiElicitationSchema,
+        #[serde(rename = "_meta", default)]
+        metadata: Option<Value>,
+    },
+    #[serde(rename = "url")]
+    Url {
+        #[serde(rename = "elicitationId")]
+        elicitation_id: String,
+        message: String,
+        url: String,
+        #[serde(rename = "_meta", default)]
+        metadata: Option<Value>,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpElicitationSchema {
+    #[serde(rename = "$schema", default)]
+    pub schema_uri: Option<String>,
+    pub r#type: McpElicitationObjectType,
+    pub properties: BTreeMap<String, McpElicitationPrimitiveSchema>,
+    #[serde(default)]
+    pub required: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpOpenAiElicitationSchema {
+    #[serde(rename = "$schema", default)]
+    pub schema_uri: Option<String>,
+    pub r#type: McpElicitationObjectType,
+    pub properties: BTreeMap<String, McpOpenAiElicitationFieldSchema>,
+    #[serde(default)]
+    pub required: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum McpOpenAiElicitationFieldSchema {
+    Primitive(McpElicitationPrimitiveSchema),
+    ImagePicker(McpOpenAiImagePickerSchema),
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct McpOpenAiImagePickerSchema {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub r#type: McpOpenAiImagePickerType,
+    pub items: Vec<McpOpenAiImagePickerItem>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+pub enum McpOpenAiImagePickerType {
+    #[serde(rename = "openai/imagePicker")]
+    ImagePicker,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct McpOpenAiImagePickerItem {
+    pub id: String,
+    pub title: String,
+    pub image: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+pub enum McpElicitationObjectType {
+    #[serde(rename = "object")]
+    Object,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum McpElicitationPrimitiveSchema {
+    String {
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(rename = "minLength", default)]
+        min_length: Option<u32>,
+        #[serde(rename = "maxLength", default)]
+        max_length: Option<u32>,
+        #[serde(default)]
+        format: Option<McpElicitationStringFormat>,
+        #[serde(default)]
+        default: Option<String>,
+        #[serde(rename = "enum", default)]
+        enum_values: Option<Vec<String>>,
+        #[serde(rename = "enumNames", default)]
+        enum_names: Option<Vec<String>>,
+        #[serde(rename = "oneOf", default)]
+        one_of: Option<Vec<McpElicitationConstOption>>,
+    },
+    Array {
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(rename = "minItems", default)]
+        min_items: Option<u64>,
+        #[serde(rename = "maxItems", default)]
+        max_items: Option<u64>,
+        items: McpElicitationArrayItems,
+        #[serde(default)]
+        default: Option<Vec<String>>,
+    },
+    Boolean {
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        default: Option<bool>,
+    },
+    Number {
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        minimum: Option<f64>,
+        #[serde(default)]
+        maximum: Option<f64>,
+        #[serde(default)]
+        default: Option<f64>,
+    },
+    Integer {
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        minimum: Option<f64>,
+        #[serde(default)]
+        maximum: Option<f64>,
+        #[serde(default)]
+        default: Option<f64>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum McpElicitationStringFormat {
+    Email,
+    Uri,
+    Date,
+    DateTime,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum McpElicitationArrayItems {
+    Untitled {
+        r#type: McpElicitationStringType,
+        #[serde(rename = "enum")]
+        values: Vec<String>,
+    },
+    Titled {
+        #[serde(rename = "anyOf")]
+        any_of: Vec<McpElicitationConstOption>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+pub enum McpElicitationStringType {
+    #[serde(rename = "string")]
+    String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct McpElicitationConstOption {
+    #[serde(rename = "const")]
+    pub value: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum McpServerElicitationAction {
+    Accept,
+    Decline,
+    Cancel,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct McpServerElicitationRequestResponse {
+    pub action: McpServerElicitationAction,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<Value>,
+    #[serde(rename = "_meta", skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum McpAuthStatus {
+    #[serde(rename = "unsupported")]
+    Unsupported,
+    #[serde(rename = "notLoggedIn")]
+    NotLoggedIn,
+    #[serde(rename = "bearerToken")]
+    BearerToken,
+    #[serde(rename = "oAuth")]
+    OAuth,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerOauthLoginParams {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scopes: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerOauthLoginResponse {
+    pub authorization_url: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerOauthLoginCompletedNotification {
+    pub name: String,
+    pub thread_id: Option<String>,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum McpServerStartupState {
+    Starting,
+    Ready,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum McpServerStartupFailureReason {
+    ReauthenticationRequired,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerStatusUpdatedNotification {
+    pub thread_id: Option<String>,
+    pub name: String,
+    pub status: McpServerStartupState,
+    pub error: Option<String>,
+    pub failure_reason: Option<McpServerStartupFailureReason>,
 }
 
 #[derive(Debug)]
@@ -955,17 +3032,56 @@ impl Write for BoundedWriter {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::io::{BufReader, Cursor};
     use std::num::NonZeroUsize;
+    use std::path::PathBuf;
 
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::{
-        BoundedLineDecoder, ClientInfo, ClientNotification, ClientRequest,
-        DynamicToolCallOutputContentItem, DynamicToolCallParams, DynamicToolCallResponse,
-        DynamicToolFunction, DynamicToolNamespaceTool, DynamicToolSpec, IncomingMessage,
-        InitializeParams, ProtocolError, ThreadListParams, UserInput, decode_incoming,
-        encode_json_line, read_bounded_frame,
+        Account, AccountLoginCompletedNotification, ApprovalsReviewer, AppsReadParams,
+        AppsReadResponse, BoundedLineDecoder, CancelLoginAccountParams, CancelLoginAccountResponse,
+        CancelLoginAccountStatus, ClientInfo, ClientNotification, ClientRequest, CollaborationMode,
+        CollaborationModeKind, CollaborationModeSettings, CommandExecutionApprovalDecision,
+        CommandExecutionApprovalDecisionValue, CommandExecutionRequestApprovalParams,
+        CommandExecutionRequestApprovalResponse, ConfigBatchWriteParams, ConfigEdit,
+        ConfigMergeStrategy, ConfigReadParams, ConfigReadResponse, ConfigRequirementsReadResponse,
+        ConfigWriteResponse, ConfigWriteStatus, DynamicToolCallOutputContentItem,
+        DynamicToolCallParams, DynamicToolCallResponse, DynamicToolFunction,
+        DynamicToolNamespaceTool, DynamicToolSpec, ExecpolicyAmendment, FeedbackUploadParams,
+        FeedbackUploadResponse, FileChangeApprovalDecision, FileChangeRequestApprovalResponse,
+        FuzzyFileSearchMatchType, FuzzyFileSearchParams, FuzzyFileSearchResponse,
+        FuzzyFileSearchSessionCompletedNotification, FuzzyFileSearchSessionStartParams,
+        FuzzyFileSearchSessionUpdateParams, FuzzyFileSearchSessionUpdatedNotification,
+        GetAccountParams, GetAccountRateLimitsResponse, GetAccountResponse, GetAuthStatusParams,
+        GetAuthStatusResponse, HookEventName, HookHandlerType, HookSource, HookTrustStatus,
+        HooksListParams, HooksListResponse, IncomingMessage, InitializeParams,
+        ListMcpServerStatusParams, ListMcpServerStatusResponse, LoginAccountParams,
+        LoginAccountResponse, MarketplaceAddParams, MarketplaceRemoveParams,
+        MarketplaceUpgradeParams, McpAuthStatus, McpElicitationPrimitiveSchema,
+        McpResourceReadParams, McpResourceReadResponse, McpServerElicitationAction,
+        McpServerElicitationRequest, McpServerElicitationRequestParams,
+        McpServerElicitationRequestResponse, McpServerOauthLoginParams,
+        McpServerStartupFailureReason, McpServerStartupState, McpServerStatusDetail,
+        McpServerStatusUpdatedNotification, ModelListParams, ModelListResponse,
+        NetworkPolicyAmendment, NetworkPolicyAmendmentDecision, NetworkPolicyRuleAction,
+        PermissionGrantScope, PermissionProfile, PermissionProfileListParams,
+        PermissionProfileListResponse, PermissionsRequestApprovalParams,
+        PermissionsRequestApprovalResponse, PlanType, PluginListMarketplaceKind, PluginReadParams,
+        PluginReadResponse, PluginScheduledTaskSchedule, PluginScheduledTaskSummary, ProtocolError,
+        SkillScope, SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams,
+        SkillsListResponse, ThreadArchiveParams, ThreadBackgroundTerminalsCleanResponse,
+        ThreadBackgroundTerminalsListParams, ThreadBackgroundTerminalsListResponse,
+        ThreadBackgroundTerminalsTerminateParams, ThreadBackgroundTerminalsTerminateResponse,
+        ThreadCompactStartParams, ThreadCompactStartResponse, ThreadDeleteParams, ThreadForkParams,
+        ThreadGoal, ThreadGoalGetResponse, ThreadGoalSetParams, ThreadGoalStatus, ThreadListParams,
+        ThreadLoadedListParams, ThreadLoadedListResponse, ThreadResumeResponse,
+        ThreadRollbackParams, ThreadRollbackResponse, ThreadSearchParams, ThreadSetNameParams,
+        ThreadSettingsUpdateParams, ThreadStartParams, ThreadTokenUsageUpdatedNotification,
+        ThreadUnarchiveParams, ToolRequestUserInputAnswer, ToolRequestUserInputParams,
+        ToolRequestUserInputResponse, TurnInterruptParams, TurnStartParams, TurnSteerParams,
+        UserInput, decode_incoming, encode_json_line, read_bounded_frame,
     };
 
     fn limit(value: usize) -> NonZeroUsize {
@@ -1034,14 +3150,14 @@ mod tests {
         let request = ClientRequest {
             method: "initialize",
             id: 0,
-            params: InitializeParams {
+            params: Some(InitializeParams {
                 client_info: ClientInfo {
                     name: "codex-rs".to_owned(),
                     title: Some("codexRS".to_owned()),
                     version: "0.1.0".to_owned(),
                 },
                 capabilities: None,
-            },
+            }),
         };
 
         assert_eq!(
@@ -1057,17 +3173,1330 @@ mod tests {
     }
 
     #[test]
+    fn account_and_rate_limit_types_match_the_stable_schema() {
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "account/read",
+                id: 1,
+                params: Some(GetAccountParams {
+                    refresh_token: Some(false),
+                }),
+            }),
+            b"{\"method\":\"account/read\",\"id\":1,\"params\":{\"refreshToken\":false}}\n"
+        );
+
+        let account = serde_json::from_value::<GetAccountResponse>(json!({
+            "account": {
+                "type": "chatgpt",
+                "email": "developer@example.com",
+                "planType": "plus"
+            },
+            "requiresOpenaiAuth": true
+        }));
+        assert!(matches!(
+            account,
+            Ok(GetAccountResponse {
+                account: Some(Account::ChatGpt {
+                    plan_type: PlanType::Plus,
+                    ..
+                }),
+                requires_openai_auth: true,
+            })
+        ));
+
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "getAuthStatus",
+                id: 2,
+                params: Some(GetAuthStatusParams {
+                    include_token: true,
+                    refresh_token: false,
+                }),
+            }),
+            b"{\"method\":\"getAuthStatus\",\"id\":2,\"params\":{\"includeToken\":true,\"refreshToken\":false}}\n"
+        );
+        let auth = serde_json::from_value::<GetAuthStatusResponse>(json!({
+            "authMethod": "chatgpt",
+            "authToken": "fixture-token",
+            "accountId": "fixture-account",
+            "requiresOpenaiAuth": true
+        }))
+        .unwrap_or_else(|error| panic!("valid auth fixture failed to decode: {error}"));
+        assert_eq!(
+            auth.auth_token.as_ref().map(|token| token.expose()),
+            Some("fixture-token")
+        );
+        assert!(!format!("{auth:?}").contains("fixture-token"));
+
+        let limits = serde_json::from_value::<GetAccountRateLimitsResponse>(json!({
+            "rateLimits": {
+                "limitId": "codex",
+                "limitName": "Codex",
+                "primary": {
+                    "usedPercent": 37.5,
+                    "windowDurationMins": 300,
+                    "resetsAt": 1_900_000_000
+                },
+                "secondary": null,
+                "credits": {
+                    "hasCredits": true,
+                    "unlimited": false,
+                    "balance": "125.5"
+                },
+                "individualLimit": null,
+                "spendControlReached": null,
+                "planType": "plus",
+                "rateLimitReachedType": null
+            },
+            "rateLimitsByLimitId": null,
+            "rateLimitResetCredits": null
+        }));
+        assert!(matches!(
+            limits,
+            Ok(GetAccountRateLimitsResponse { rate_limits })
+                if rate_limits.primary.as_ref().is_some_and(|window| {
+                    window.used_percent == 37.5 && window.window_duration_mins == Some(300)
+                })
+                    && rate_limits
+                        .credits
+                        .as_ref()
+                        .and_then(|credits| credits.balance.as_deref())
+                        == Some("125.5")
+        ));
+    }
+
+    #[test]
+    fn account_login_types_match_the_stable_schema_without_credentials() {
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "account/login/start",
+                id: 2,
+                params: Some(LoginAccountParams::ChatGpt {
+                    codex_streamlined_login: None,
+                    use_hosted_login_success_page: None,
+                    app_brand: None,
+                }),
+            }),
+            b"{\"method\":\"account/login/start\",\"id\":2,\"params\":{\"type\":\"chatgpt\"}}\n"
+        );
+        assert!(matches!(
+            serde_json::from_value::<LoginAccountResponse>(json!({
+                "type": "chatgpt",
+                "loginId": "login-1",
+                "authUrl": "https://auth.openai.com/"
+            })),
+            Ok(LoginAccountResponse::ChatGpt { login_id, auth_url })
+                if login_id == "login-1" && auth_url == "https://auth.openai.com/"
+        ));
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "account/login/cancel",
+                id: 3,
+                params: Some(CancelLoginAccountParams {
+                    login_id: "login-1".to_owned(),
+                }),
+            }),
+            b"{\"method\":\"account/login/cancel\",\"id\":3,\"params\":{\"loginId\":\"login-1\"}}\n"
+        );
+        assert!(matches!(
+            serde_json::from_value::<CancelLoginAccountResponse>(json!({
+                "status": "notFound"
+            })),
+            Ok(CancelLoginAccountResponse {
+                status: CancelLoginAccountStatus::NotFound
+            })
+        ));
+        assert!(matches!(
+            serde_json::from_value::<AccountLoginCompletedNotification>(json!({
+                "loginId": "login-1",
+                "success": false,
+                "error": "provider detail"
+            })),
+            Ok(AccountLoginCompletedNotification {
+                login_id: Some(login_id),
+                success: false,
+                error: Some(_),
+            }) if login_id == "login-1"
+        ));
+    }
+
+    #[test]
+    fn feedback_upload_types_match_the_pinned_app_server_schema() {
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "feedback/upload",
+                id: 4,
+                params: Some(FeedbackUploadParams {
+                    classification: "bad-result".to_owned(),
+                    extra_log_files: None,
+                    include_logs: Some(true),
+                    reason: Some("The result missed the requested file.".to_owned()),
+                    tags: Some(BTreeMap::from([(
+                        "app_version".to_owned(),
+                        "0.1.0".to_owned(),
+                    )])),
+                    thread_id: Some("thread-1".to_owned()),
+                }),
+            }),
+            b"{\"method\":\"feedback/upload\",\"id\":4,\"params\":{\"classification\":\"bad-result\",\"includeLogs\":true,\"reason\":\"The result missed the requested file.\",\"tags\":{\"app_version\":\"0.1.0\"},\"threadId\":\"thread-1\"}}\n"
+        );
+        assert!(matches!(
+            serde_json::from_value::<FeedbackUploadResponse>(json!({
+                "threadId": "feedback-1"
+            })),
+            Ok(FeedbackUploadResponse { thread_id }) if thread_id == "feedback-1"
+        ));
+    }
+
+    #[test]
     fn thread_list_is_bounded_to_state_database_metadata() {
         let request = ClientRequest {
             method: "thread/list",
             id: 7,
-            params: ThreadListParams::state_db_page(20),
+            params: Some(ThreadListParams::state_db_page(20)),
         };
 
         assert_eq!(
             encoded(&request),
             b"{\"method\":\"thread/list\",\"id\":7,\"params\":{\"limit\":20,\"sortKey\":\"recency_at\",\"sortDirection\":\"desc\",\"useStateDbOnly\":true}}\n"
         );
+    }
+
+    #[test]
+    fn thread_loaded_list_is_explicitly_bounded() {
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "thread/loaded/list",
+                id: 9,
+                params: Some(ThreadLoadedListParams {
+                    cursor: None,
+                    limit: 20,
+                }),
+            }),
+            b"{\"method\":\"thread/loaded/list\",\"id\":9,\"params\":{\"limit\":20}}\n"
+        );
+        assert!(matches!(
+            serde_json::from_value::<ThreadLoadedListResponse>(json!({
+                "data": ["thread-1", "thread-2"],
+                "nextCursor": "next"
+            })),
+            Ok(ThreadLoadedListResponse { data, next_cursor })
+                if data == ["thread-1", "thread-2"] && next_cursor.as_deref() == Some("next")
+        ));
+    }
+
+    #[test]
+    fn background_terminal_management_matches_the_experimental_app_server_contract() {
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "thread/backgroundTerminals/list",
+                id: 10,
+                params: Some(ThreadBackgroundTerminalsListParams {
+                    thread_id: "thread-1".to_owned(),
+                    cursor: None,
+                    limit: Some(64),
+                }),
+            }),
+            b"{\"method\":\"thread/backgroundTerminals/list\",\"id\":10,\"params\":{\"threadId\":\"thread-1\",\"limit\":64}}\n"
+        );
+
+        let response = serde_json::from_value::<ThreadBackgroundTerminalsListResponse>(json!({
+            "data": [{
+                "itemId": "item-1",
+                "processId": "42",
+                "command": "python -m http.server",
+                "cwd": "C:\\isolated\\repo",
+                "osPid": 4242,
+                "cpuPercent": 1.25,
+                "rssKb": 2048
+            }],
+            "nextCursor": "next"
+        }));
+        assert!(matches!(
+            response,
+            Ok(response)
+                if response.data.len() == 1
+                    && response.data[0].process_id == "42"
+                    && response.data[0].os_pid == Some(4242)
+                    && response.data[0].rss_kb == Some(2048)
+                    && response.next_cursor.as_deref() == Some("next")
+        ));
+
+        assert_eq!(
+            serde_json::to_value(ThreadBackgroundTerminalsTerminateParams {
+                thread_id: "thread-1".to_owned(),
+                process_id: "42".to_owned(),
+            })
+            .ok(),
+            Some(json!({ "threadId": "thread-1", "processId": "42" }))
+        );
+        assert!(matches!(
+            serde_json::from_value::<ThreadBackgroundTerminalsTerminateResponse>(json!({
+                "terminated": true
+            })),
+            Ok(ThreadBackgroundTerminalsTerminateResponse { terminated: true })
+        ));
+        assert!(
+            serde_json::from_value::<ThreadBackgroundTerminalsCleanResponse>(json!({})).is_ok()
+        );
+    }
+
+    #[test]
+    fn thread_rollback_matches_the_stable_edit_contract() {
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "thread/rollback",
+                id: 10,
+                params: Some(ThreadRollbackParams {
+                    thread_id: "thread-1".to_owned(),
+                    num_turns: 1,
+                }),
+            }),
+            b"{\"method\":\"thread/rollback\",\"id\":10,\"params\":{\"threadId\":\"thread-1\",\"numTurns\":1}}\n"
+        );
+        assert!(
+            serde_json::from_value::<ThreadRollbackResponse>(json!({
+                "thread": {
+                    "id": "thread-1",
+                    "turns": []
+                }
+            }))
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn thread_compact_start_matches_the_stable_slash_command_contract() {
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "thread/compact/start",
+                id: 11,
+                params: Some(ThreadCompactStartParams {
+                    thread_id: "thread-1".to_owned(),
+                }),
+            }),
+            b"{\"method\":\"thread/compact/start\",\"id\":11,\"params\":{\"threadId\":\"thread-1\"}}\n"
+        );
+        assert!(serde_json::from_value::<ThreadCompactStartResponse>(json!({})).is_ok());
+    }
+
+    #[test]
+    fn thread_token_usage_notification_matches_the_stable_contract() {
+        let Ok(notification) =
+            serde_json::from_value::<ThreadTokenUsageUpdatedNotification>(json!({
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "tokenUsage": {
+                    "total": {
+                        "totalTokens": 310,
+                        "inputTokens": 240,
+                        "cachedInputTokens": 100,
+                        "cacheWriteInputTokens": 20,
+                        "outputTokens": 50,
+                        "reasoningOutputTokens": 25
+                    },
+                    "last": {
+                        "totalTokens": 125,
+                        "inputTokens": 90,
+                        "cachedInputTokens": 40,
+                        "cacheWriteInputTokens": 10,
+                        "outputTokens": 35,
+                        "reasoningOutputTokens": 15
+                    },
+                    "modelContextWindow": 1000
+                }
+            }))
+        else {
+            panic!("stable token usage notification should decode");
+        };
+
+        assert_eq!(notification.thread_id, "thread-1");
+        assert_eq!(notification.turn_id, "turn-1");
+        assert_eq!(notification.token_usage.last.total_tokens, 125);
+        assert_eq!(notification.token_usage.model_context_window, Some(1000));
+    }
+
+    #[test]
+    fn thread_search_matches_the_stable_interactive_contract() {
+        let request = ClientRequest {
+            method: "thread/search",
+            id: 8,
+            params: Some(ThreadSearchParams::interactive_page(
+                "native ui".to_owned(),
+                50,
+            )),
+        };
+
+        assert_eq!(
+            encoded(&request),
+            b"{\"method\":\"thread/search\",\"id\":8,\"params\":{\"limit\":50,\"sortKey\":\"recency_at\",\"sortDirection\":\"desc\",\"sourceKinds\":[],\"archived\":false,\"searchTerm\":\"native ui\"}}\n"
+        );
+    }
+
+    #[test]
+    fn fuzzy_file_search_matches_the_stable_session_and_legacy_contracts() {
+        let start = ClientRequest {
+            method: "fuzzyFileSearch/sessionStart",
+            id: 9,
+            params: Some(FuzzyFileSearchSessionStartParams {
+                session_id: "files-1".to_owned(),
+                roots: vec![PathBuf::from("C:\\repo")],
+            }),
+        };
+        assert_eq!(
+            encoded(&start),
+            b"{\"method\":\"fuzzyFileSearch/sessionStart\",\"id\":9,\"params\":{\"sessionId\":\"files-1\",\"roots\":[\"C:\\\\repo\"]}}\n"
+        );
+
+        let update = ClientRequest {
+            method: "fuzzyFileSearch/sessionUpdate",
+            id: 10,
+            params: Some(FuzzyFileSearchSessionUpdateParams {
+                session_id: "files-1".to_owned(),
+                query: "agents".to_owned(),
+            }),
+        };
+        assert_eq!(
+            encoded(&update),
+            b"{\"method\":\"fuzzyFileSearch/sessionUpdate\",\"id\":10,\"params\":{\"sessionId\":\"files-1\",\"query\":\"agents\"}}\n"
+        );
+
+        let legacy = ClientRequest {
+            method: "fuzzyFileSearch",
+            id: 11,
+            params: Some(FuzzyFileSearchParams {
+                query: "agents".to_owned(),
+                roots: vec![PathBuf::from("C:\\repo")],
+                cancellation_token: Some("vscode-fuzzy-file-search".to_owned()),
+            }),
+        };
+        assert_eq!(
+            encoded(&legacy),
+            b"{\"method\":\"fuzzyFileSearch\",\"id\":11,\"params\":{\"query\":\"agents\",\"roots\":[\"C:\\\\repo\"],\"cancellationToken\":\"vscode-fuzzy-file-search\"}}\n"
+        );
+
+        let update =
+            match serde_json::from_value::<FuzzyFileSearchSessionUpdatedNotification>(json!({
+                "sessionId": "files-1",
+                "query": "agents",
+                "files": [{
+                    "file_name": "AGENTS.md",
+                    "indices": [0, 1],
+                    "match_type": "file",
+                    "path": "AGENTS.md",
+                    "root": "C:\\repo",
+                    "score": 87
+                }]
+            })) {
+                Ok(update) => update,
+                Err(error) => panic!("stable fuzzy update should decode: {error}"),
+            };
+        assert_eq!(update.session_id, "files-1");
+        assert_eq!(update.files[0].match_type, FuzzyFileSearchMatchType::File);
+
+        let legacy = match serde_json::from_value::<FuzzyFileSearchResponse>(json!({
+            "files": [{
+                "file_name": "src",
+                "indices": null,
+                "match_type": "directory",
+                "path": "src",
+                "root": "C:\\repo",
+                "score": 64
+            }]
+        })) {
+            Ok(legacy) => legacy,
+            Err(error) => panic!("stable fuzzy response should decode: {error}"),
+        };
+        assert_eq!(
+            legacy.files[0].match_type,
+            FuzzyFileSearchMatchType::Directory
+        );
+
+        let completed =
+            match serde_json::from_value::<FuzzyFileSearchSessionCompletedNotification>(json!({
+                "sessionId": "files-1"
+            })) {
+                Ok(completed) => completed,
+                Err(error) => panic!("stable fuzzy completion should decode: {error}"),
+            };
+        assert_eq!(completed.session_id, "files-1");
+    }
+
+    #[test]
+    fn composer_catalog_types_match_the_stable_schema() {
+        let model_request = ClientRequest {
+            method: "model/list",
+            id: 8,
+            params: Some(ModelListParams {
+                cursor: None,
+                limit: Some(64),
+                include_hidden: Some(false),
+            }),
+        };
+        assert_eq!(
+            encoded(&model_request),
+            b"{\"method\":\"model/list\",\"id\":8,\"params\":{\"limit\":64,\"includeHidden\":false}}\n"
+        );
+
+        let models = serde_json::from_value::<ModelListResponse>(json!({
+            "data": [{
+                "id": "gpt-5.6-sol",
+                "model": "gpt-5.6-sol",
+                "displayName": "GPT-5.6-Sol",
+                "description": "Frontier coding model",
+                "hidden": false,
+                "isDefault": true,
+                "defaultReasoningEffort": "low",
+                "supportedReasoningEfforts": [{
+                    "reasoningEffort": "low",
+                    "description": "Fast"
+                }],
+                "serviceTiers": [{
+                    "id": "priority",
+                    "name": "Fast",
+                    "description": "1.5x speed, increased usage"
+                }],
+                "defaultServiceTier": "priority"
+            }],
+            "nextCursor": null
+        }));
+        assert!(matches!(
+            models,
+            Ok(response)
+                if response.data.len() == 1
+                    && response.data[0].model == "gpt-5.6-sol"
+                    && response.data[0].supported_reasoning_efforts[0].reasoning_effort == "low"
+                    && response.data[0].service_tiers[0].id == "priority"
+                    && response.data[0].default_service_tier.as_deref() == Some("priority")
+        ));
+
+        let profiles = serde_json::from_value::<PermissionProfileListResponse>(json!({
+            "data": [{
+                "id": ":workspace",
+                "allowed": true,
+                "description": null
+            }],
+            "nextCursor": null
+        }));
+        assert!(matches!(
+            profiles,
+            Ok(response)
+                if response.data.len() == 1
+                    && response.data[0].id == ":workspace"
+                    && response.data[0].allowed
+        ));
+
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "permissionProfile/list",
+                id: 9,
+                params: Some(PermissionProfileListParams {
+                    cursor: None,
+                    limit: Some(64),
+                    cwd: None,
+                }),
+            }),
+            b"{\"method\":\"permissionProfile/list\",\"id\":9,\"params\":{\"limit\":64}}\n"
+        );
+
+        assert_eq!(
+            encoded(&ClientRequest::<()> {
+                method: "configRequirements/read",
+                id: 10,
+                params: None,
+            }),
+            b"{\"method\":\"configRequirements/read\",\"id\":10}\n"
+        );
+
+        let requirements = serde_json::from_value::<ConfigRequirementsReadResponse>(json!({
+            "requirements": {
+                "allowedApprovalPolicies": ["on-request", "never"],
+                "allowedApprovalsReviewers": ["user", "auto_review"],
+                "allowedSandboxModes": ["read-only", "workspace-write"],
+                "defaultPermissions": ":workspace",
+                "models": {
+                    "newThread": {
+                        "model": "gpt-5.6-sol",
+                        "modelReasoningEffort": "high",
+                        "serviceTier": "priority"
+                    }
+                }
+            }
+        }));
+        assert!(matches!(
+            requirements,
+            Ok(response)
+                if response.requirements.as_ref().is_some_and(|requirements| {
+                    requirements.default_permissions.as_deref() == Some(":workspace")
+                        && requirements.allowed_approvals_reviewers.as_deref()
+                            == Some(&[
+                                ApprovalsReviewer::User,
+                                ApprovalsReviewer::AutoReview,
+                            ])
+                        && requirements.allowed_sandbox_modes.as_deref()
+                            == Some(&["read-only".to_owned(), "workspace-write".to_owned()])
+                        && requirements.models.as_ref()
+                            .and_then(|models| models.new_thread.as_ref())
+                            .and_then(|defaults| defaults.service_tier.as_deref())
+                            == Some("priority")
+                })
+        ));
+
+        let legacy_reviewer =
+            serde_json::from_value::<ApprovalsReviewer>(json!("guardian_subagent"));
+        assert_eq!(legacy_reviewer.ok(), Some(ApprovalsReviewer::AutoReview));
+
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "config/read",
+                id: 11,
+                params: Some(ConfigReadParams::default()),
+            }),
+            b"{\"method\":\"config/read\",\"id\":11,\"params\":{}}\n"
+        );
+        let config = serde_json::from_value::<ConfigReadResponse>(json!({
+            "config": {
+                "model": "gpt-5.6-sol",
+                "model_reasoning_effort": "high",
+                "service_tier": "priority",
+                "profile": "work",
+                "personality": "pragmatic",
+                "model_personality": "friendly",
+                "approval_policy": "on-request",
+                "approvals_reviewer": "auto_review",
+                "sandbox_mode": "workspace-write",
+                "sandbox_workspace_write": {
+                    "network_access": true
+                },
+                "features": {
+                    "memories": true
+                },
+                "memories": {
+                    "generate_memories": true,
+                    "use_memories": false,
+                    "disable_on_external_context": true,
+                    "no_memories_if_mcp_or_web_search": false
+                },
+                "mcp_servers": {
+                    "calendar": {
+                        "name": "Calendar",
+                        "enabled": false,
+                        "command": "calendar-mcp"
+                    }
+                }
+            },
+            "origins": {
+                "mcp_servers.calendar.command": {
+                    "name": {
+                        "type": "project",
+                        "dotCodexFolder": "C:\\isolated\\repo\\.codex"
+                    },
+                    "version": "sha256:fixture"
+                }
+            },
+            "layers": [{
+                "name": {
+                    "type": "user",
+                    "file": "C:\\isolated\\.codex\\config.toml"
+                },
+                "version": "sha256:fixture",
+                "config": {
+                    "computer_use": {
+                        "windows": {
+                            "always_allowed_app_ids": {
+                                "mspaint.exe": true,
+                                "blocked.exe": false
+                            }
+                        }
+                    }
+                }
+            }]
+        }));
+        assert!(matches!(
+            config,
+            Ok(response)
+                if response.config.model.as_deref() == Some("gpt-5.6-sol")
+                    && response.config.model_reasoning_effort.as_deref() == Some("high")
+                    && response.config.service_tier.as_deref() == Some("priority")
+                    && response.config.profile.as_deref() == Some("work")
+                    && response.config.personality.as_deref() == Some("pragmatic")
+                    && response.config.model_personality.as_deref() == Some("friendly")
+                    && response.config.approval_policy.as_ref() == Some(&json!("on-request"))
+                    && response.config.approvals_reviewer
+                        == Some(ApprovalsReviewer::AutoReview)
+                    && response.config.sandbox_mode.as_deref() == Some("workspace-write")
+                    && response.config.sandbox_workspace_write.as_ref()
+                        .and_then(|workspace| workspace.network_access) == Some(true)
+                    && response.config.features.memories == Some(true)
+                    && response.config.memories.as_ref().is_some_and(|memories| {
+                        memories.generate_memories == Some(true)
+                            && memories.use_memories == Some(false)
+                            && memories.disable_on_external_context == Some(true)
+                            && memories.no_memories_if_mcp_or_web_search == Some(false)
+                    })
+                    && response.config.mcp_servers["calendar"].name.as_deref()
+                        == Some("Calendar")
+                    && response.config.mcp_servers["calendar"].enabled == Some(false)
+                    && response.config.mcp_servers["calendar"].command.as_deref()
+                        == Some("calendar-mcp")
+                    && response.origins["mcp_servers.calendar.command"]
+                        .name
+                        .get("type")
+                        .and_then(Value::as_str)
+                        == Some("project")
+                    && response.layers.as_ref()
+                        .and_then(|layers| layers.first())
+                        .and_then(|layer| layer.config.pointer(
+                            "/computer_use/windows/always_allowed_app_ids/mspaint.exe"
+                        ))
+                        .and_then(Value::as_bool)
+                        == Some(true)
+        ));
+    }
+
+    #[test]
+    fn config_batch_write_matches_the_stable_schema() {
+        let request = ClientRequest {
+            method: "config/batchWrite",
+            id: 12,
+            params: Some(ConfigBatchWriteParams {
+                edits: vec![
+                    ConfigEdit {
+                        key_path: "profiles.work.model".to_owned(),
+                        value: json!("gpt-5.6-sol"),
+                        merge_strategy: ConfigMergeStrategy::Upsert,
+                    },
+                    ConfigEdit {
+                        key_path: "profiles.work.model_reasoning_effort".to_owned(),
+                        value: json!("high"),
+                        merge_strategy: ConfigMergeStrategy::Upsert,
+                    },
+                ],
+                file_path: None,
+                expected_version: None,
+                reload_user_config: true,
+            }),
+        };
+
+        assert_eq!(
+            encoded(&request),
+            b"{\"method\":\"config/batchWrite\",\"id\":12,\"params\":{\"edits\":[{\"keyPath\":\"profiles.work.model\",\"value\":\"gpt-5.6-sol\",\"mergeStrategy\":\"upsert\"},{\"keyPath\":\"profiles.work.model_reasoning_effort\",\"value\":\"high\",\"mergeStrategy\":\"upsert\"}],\"filePath\":null,\"expectedVersion\":null,\"reloadUserConfig\":true}}\n"
+        );
+
+        let response = serde_json::from_value::<ConfigWriteResponse>(json!({
+            "status": "okOverridden",
+            "version": "sha256:fixture",
+            "filePath": "C:\\isolated\\config.toml",
+            "overriddenMetadata": null
+        }));
+        assert!(matches!(
+            response,
+            Ok(ConfigWriteResponse {
+                status: ConfigWriteStatus::OkOverridden
+            })
+        ));
+    }
+
+    #[test]
+    fn mcp_management_types_match_the_stable_schema() {
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "mcpServerStatus/list",
+                id: 13,
+                params: Some(ListMcpServerStatusParams {
+                    cursor: None,
+                    limit: 100,
+                    detail: Some(McpServerStatusDetail::Full),
+                    thread_id: None,
+                }),
+            }),
+            b"{\"method\":\"mcpServerStatus/list\",\"id\":13,\"params\":{\"limit\":100,\"detail\":\"full\"}}\n"
+        );
+        let response = serde_json::from_value::<ListMcpServerStatusResponse>(json!({
+            "data": [{
+                "name": "calendar",
+                "serverInfo": {
+                    "name": "Calendar MCP",
+                    "version": "1.2.3",
+                    "title": "Calendar",
+                    "description": "Calendar tools",
+                    "websiteUrl": "https://example.com"
+                },
+                "tools": {
+                    "calendar.list": {
+                        "name": "calendar.list",
+                        "title": "List events",
+                        "description": "Lists calendar events",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {}
+                        },
+                        "outputSchema": null
+                    }
+                },
+                "resources": [{
+                    "name": "today",
+                    "uri": "calendar://today",
+                    "title": "Today's events",
+                    "description": null,
+                    "mimeType": "application/json",
+                    "size": 128
+                }],
+                "resourceTemplates": [{
+                    "name": "day",
+                    "uriTemplate": "calendar://day/{date}",
+                    "title": "Events by day",
+                    "description": null,
+                    "mimeType": "application/json"
+                }],
+                "authStatus": "notLoggedIn"
+            }],
+            "nextCursor": null
+        }));
+        assert!(matches!(
+            response,
+            Ok(response)
+                if response.data.len() == 1
+                    && response.data[0].name == "calendar"
+                    && response.data[0].auth_status == McpAuthStatus::NotLoggedIn
+                    && response.data[0].server_info.as_ref()
+                        .map(|info| info.version.as_str()) == Some("1.2.3")
+                    && response.data[0].tools["calendar.list"].title.as_deref()
+                        == Some("List events")
+                    && response.data[0].resources[0].uri == "calendar://today"
+                    && response.data[0].resource_templates[0].uri_template
+                        == "calendar://day/{date}"
+                    && response.next_cursor.is_none()
+        ));
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "mcpServer/resource/read",
+                id: 14,
+                params: Some(McpResourceReadParams {
+                    server: "calendar".to_owned(),
+                    uri: "calendar://today".to_owned(),
+                    thread_id: None,
+                }),
+            }),
+            b"{\"method\":\"mcpServer/resource/read\",\"id\":14,\"params\":{\"server\":\"calendar\",\"uri\":\"calendar://today\"}}\n"
+        );
+        let resource = serde_json::from_value::<McpResourceReadResponse>(json!({
+            "contents": [{
+                "uri": "calendar://today",
+                "mimeType": "application/json",
+                "text": "{\"events\":[]}"
+            }, {
+                "uri": "calendar://image",
+                "mimeType": "image/png",
+                "blob": "AA=="
+            }]
+        }));
+        assert!(matches!(
+            resource,
+            Ok(response)
+                if response.contents.len() == 2
+                    && response.contents[0].text.as_deref() == Some("{\"events\":[]}")
+                    && response.contents[1].blob.as_deref() == Some("AA==")
+        ));
+        assert_eq!(
+            serde_json::to_value(McpServerOauthLoginParams {
+                name: "calendar".to_owned(),
+                thread_id: None,
+                scopes: None,
+                timeout_secs: None,
+            })
+            .ok(),
+            Some(json!({ "name": "calendar" }))
+        );
+        let notification = serde_json::from_value::<McpServerStatusUpdatedNotification>(json!({
+            "threadId": null,
+            "name": "calendar",
+            "status": "failed",
+            "error": "OAuth token expired",
+            "failureReason": "reauthenticationRequired"
+        }));
+        assert!(matches!(
+            notification,
+            Ok(McpServerStatusUpdatedNotification {
+                status: McpServerStartupState::Failed,
+                failure_reason: Some(McpServerStartupFailureReason::ReauthenticationRequired),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn mcp_elicitation_types_match_the_stable_schema() {
+        let request = serde_json::from_value::<McpServerElicitationRequestParams>(json!({
+            "serverName": "calendar",
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "mode": "url",
+            "elicitationId": "elicitation-1",
+            "message": "Connect your calendar to continue.",
+            "url": "https://example.com/connect",
+            "_meta": {"source": "fixture"}
+        }));
+        assert!(matches!(
+            request,
+            Ok(McpServerElicitationRequestParams {
+                server_name,
+                thread_id,
+                turn_id: Some(turn_id),
+                request: McpServerElicitationRequest::Url {
+                    elicitation_id,
+                    message,
+                    url,
+                    metadata: Some(_),
+                },
+            }) if server_name == "calendar"
+                && thread_id == "thread-1"
+                && turn_id == "turn-1"
+                && elicitation_id == "elicitation-1"
+                && message == "Connect your calendar to continue."
+                && url == "https://example.com/connect"
+        ));
+
+        let form = serde_json::from_value::<McpServerElicitationRequestParams>(json!({
+            "serverName": "calendar",
+            "threadId": "thread-1",
+            "mode": "form",
+            "message": "Choose a calendar and date.",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "calendar": {
+                        "type": "string",
+                        "title": "Calendar",
+                        "oneOf": [
+                            {"const": "work", "title": "Work"},
+                            {"const": "personal", "title": "Personal"}
+                        ],
+                        "default": "work"
+                    },
+                    "date": {
+                        "type": "string",
+                        "format": "date"
+                    },
+                    "notify": {
+                        "type": "boolean",
+                        "default": true
+                    }
+                },
+                "required": ["calendar", "date"]
+            }
+        }));
+        assert!(matches!(
+            form,
+            Ok(McpServerElicitationRequestParams {
+                request: McpServerElicitationRequest::Form {
+                    requested_schema,
+                    ..
+                },
+                ..
+            }) if matches!(
+                requested_schema.properties.get("calendar"),
+                Some(McpElicitationPrimitiveSchema::String {
+                    one_of: Some(options),
+                    default: Some(default),
+                    ..
+                }) if options.len() == 2 && default == "work"
+            ) && matches!(
+                requested_schema.properties.get("notify"),
+                Some(McpElicitationPrimitiveSchema::Boolean {
+                    default: Some(true),
+                    ..
+                })
+            )
+        ));
+
+        let openai_form = serde_json::from_value::<McpServerElicitationRequestParams>(json!({
+            "serverName": "templates",
+            "threadId": "thread-1",
+            "mode": "openai/form",
+            "message": "Choose a template.",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "template": {
+                        "type": "openai/imagePicker",
+                        "title": "Template",
+                        "items": [
+                            {
+                                "id": "clean",
+                                "title": "Clean",
+                                "image": "data:image/png;base64,AA=="
+                            }
+                        ]
+                    }
+                },
+                "required": ["template"]
+            }
+        }));
+        assert!(matches!(
+            openai_form,
+            Ok(McpServerElicitationRequestParams {
+                request: McpServerElicitationRequest::OpenAiForm {
+                    requested_schema,
+                    ..
+                },
+                ..
+            }) if matches!(
+                requested_schema.properties.get("template"),
+                Some(super::McpOpenAiElicitationFieldSchema::ImagePicker(schema))
+                    if schema.items.len() == 1
+                        && schema.items[0].id == "clean"
+                        && schema.items[0].title == "Clean"
+            )
+        ));
+
+        let response = serde_json::to_value(McpServerElicitationRequestResponse {
+            action: McpServerElicitationAction::Accept,
+            content: Some(json!({"calendar": "work", "notify": true})),
+            metadata: None,
+        });
+        assert!(matches!(
+            response,
+            Ok(value) if value == json!({
+                "action": "accept",
+                "content": {"calendar": "work", "notify": true}
+            })
+        ));
+    }
+
+    #[test]
+    fn skills_catalog_types_match_the_stable_schema() {
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "skills/list",
+                id: 13,
+                params: Some(SkillsListParams {
+                    cwds: vec![PathBuf::from("C:\\isolated\\repo")],
+                    force_reload: true,
+                }),
+            }),
+            b"{\"method\":\"skills/list\",\"id\":13,\"params\":{\"cwds\":[\"C:\\\\isolated\\\\repo\"],\"forceReload\":true}}\n"
+        );
+
+        let response = serde_json::from_value::<SkillsListResponse>(json!({
+            "data": [{
+                "cwd": "C:\\isolated\\repo",
+                "skills": [{
+                    "name": "review",
+                    "description": "Review a change",
+                    "shortDescription": "Review changes",
+                    "interface": {
+                        "displayName": "Code review",
+                        "shortDescription": "Review changes",
+                        "iconSmall": null,
+                        "iconLarge": null,
+                        "brandColor": null,
+                        "defaultPrompt": "Review this change"
+                    },
+                    "dependencies": null,
+                    "path": "C:\\isolated\\repo\\.agents\\skills\\review\\SKILL.md",
+                    "scope": "repo",
+                    "enabled": true
+                }],
+                "errors": []
+            }]
+        }));
+        assert!(matches!(
+            response,
+            Ok(response)
+                if response.data.len() == 1
+                    && response.data[0].skills[0].scope == SkillScope::Repo
+                    && response.data[0].skills[0]
+                        .presentation
+                        .as_ref()
+                        .and_then(|presentation| presentation.display_name.as_deref())
+                        == Some("Code review")
+        ));
+
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "skills/config/write",
+                id: 14,
+                params: Some(SkillsConfigWriteParams {
+                    path: Some(PathBuf::from(
+                        "C:\\isolated\\repo\\.agents\\skills\\review\\SKILL.md",
+                    )),
+                    name: None,
+                    enabled: false,
+                }),
+            }),
+            b"{\"method\":\"skills/config/write\",\"id\":14,\"params\":{\"path\":\"C:\\\\isolated\\\\repo\\\\.agents\\\\skills\\\\review\\\\SKILL.md\",\"enabled\":false}}\n"
+        );
+        let write_response =
+            serde_json::from_value::<SkillsConfigWriteResponse>(json!({"effectiveEnabled": false}));
+        assert!(matches!(
+            write_response,
+            Ok(SkillsConfigWriteResponse {
+                effective_enabled: false
+            })
+        ));
+    }
+
+    #[test]
+    fn hooks_catalog_types_match_the_stable_schema() {
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "hooks/list",
+                id: 15,
+                params: Some(HooksListParams {
+                    cwds: vec![PathBuf::from("C:\\isolated\\repo")],
+                }),
+            }),
+            b"{\"method\":\"hooks/list\",\"id\":15,\"params\":{\"cwds\":[\"C:\\\\isolated\\\\repo\"]}}\n"
+        );
+
+        let response = serde_json::from_value::<HooksListResponse>(json!({
+            "data": [{
+                "cwd": "C:\\isolated\\repo",
+                "hooks": [{
+                    "key": "C:\\isolated\\repo\\.codex\\hooks.json:pre_tool_use:0:0",
+                    "eventName": "preToolUse",
+                    "handlerType": "command",
+                    "isManaged": false,
+                    "matcher": "shell",
+                    "command": "python hook.py",
+                    "timeoutSec": 5,
+                    "statusMessage": "Checking command",
+                    "additionalContextLimit": null,
+                    "sourcePath": "C:\\isolated\\repo\\.codex\\hooks.json",
+                    "source": "project",
+                    "pluginId": null,
+                    "displayOrder": 0,
+                    "enabled": true,
+                    "currentHash": "sha256:fixture",
+                    "trustStatus": "untrusted"
+                }],
+                "warnings": ["warning"],
+                "errors": [{
+                    "path": "C:\\isolated\\repo\\.codex\\hooks.json",
+                    "message": "fixture issue"
+                }]
+            }]
+        }));
+        assert!(matches!(
+            response,
+            Ok(response)
+                if response.data.len() == 1
+                    && response.data[0].hooks[0].event_name == HookEventName::PreToolUse
+                    && response.data[0].hooks[0].handler_type == HookHandlerType::Command
+                    && response.data[0].hooks[0].source == HookSource::Project
+                    && response.data[0].hooks[0].trust_status == HookTrustStatus::Untrusted
+                    && response.data[0].warnings == ["warning"]
+                    && response.data[0].errors[0].message == "fixture issue"
+        ));
+    }
+
+    #[test]
+    fn plugin_detail_types_match_the_stable_schema() {
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "plugin/read",
+                id: 15,
+                params: Some(PluginReadParams {
+                    marketplace_path: None,
+                    remote_marketplace_name: Some("openai-curated-remote".to_owned()),
+                    plugin_name: "gmail".to_owned(),
+                }),
+            }),
+            b"{\"method\":\"plugin/read\",\"id\":15,\"params\":{\"remoteMarketplaceName\":\"openai-curated-remote\",\"pluginName\":\"gmail\"}}\n"
+        );
+
+        let response = serde_json::from_value::<PluginReadResponse>(json!({
+            "plugin": {
+                "marketplaceName": "openai-curated-remote",
+                "marketplacePath": null,
+                "summary": {
+                    "id": "gmail@openai-curated-remote",
+                    "name": "gmail",
+                    "installed": false,
+                    "enabled": true,
+                    "interface": {
+                        "displayName": "Gmail",
+                        "shortDescription": "Work with Gmail",
+                        "longDescription": "Search mail and draft replies.",
+                        "developerName": "OpenAI",
+                        "category": "Productivity",
+                        "capabilities": ["Search", "Draft"],
+                        "websiteUrl": "https://example.test",
+                        "privacyPolicyUrl": null,
+                        "termsOfServiceUrl": null,
+                        "defaultPrompt": ["Find the latest vendor email"],
+                        "logoUrl": null,
+                        "logoUrlDark": null,
+                        "screenshotUrls": []
+                    }
+                },
+                "shareUrl": null,
+                "description": "Search mail and draft replies.",
+                "skills": [{
+                    "name": "draft-reply",
+                    "description": "Draft a contextual reply",
+                    "shortDescription": "Draft replies",
+                    "enabled": true
+                }],
+                "hooks": [],
+                "apps": [{
+                    "id": "gmail",
+                    "name": "Gmail",
+                    "description": "Connect Gmail",
+                    "installUrl": "https://example.test/connect",
+                    "category": "Productivity"
+                }],
+                "appTemplates": [],
+                "mcpServers": ["gmail"],
+                "scheduledTasks": [{
+                    "key": "daily-inbox",
+                    "name": "Daily inbox",
+                    "prompt": "Summarize new mail",
+                    "schedule": {
+                        "type": "daily",
+                        "time": "09:00"
+                    }
+                }]
+            }
+        }));
+
+        assert!(matches!(
+            response,
+            Ok(response)
+                if response.plugin.summary.id == "gmail@openai-curated-remote"
+                    && response.plugin.skills.len() == 1
+                    && response.plugin.apps.len() == 1
+                    && response.plugin.mcp_servers == ["gmail"]
+                    && matches!(
+                        response.plugin.scheduled_tasks.as_deref(),
+                        Some([PluginScheduledTaskSummary {
+                            schedule: PluginScheduledTaskSchedule::Daily { time },
+                            ..
+                        }]) if time == "09:00"
+                    )
+        ));
+    }
+
+    #[test]
+    fn thread_lifecycle_params_match_the_stable_schema() {
+        assert_eq!(
+            serde_json::to_value(ThreadForkParams {
+                thread_id: "thread-1".to_owned(),
+                cwd: Some(PathBuf::from("C:\\repo-worktree")),
+                last_turn_id: None,
+                before_turn_id: None,
+                exclude_turns: Some(true),
+                defer_goal_continuation: Some(true),
+            })
+            .ok(),
+            Some(json!({
+                "threadId": "thread-1",
+                "cwd": "C:\\repo-worktree",
+                "excludeTurns": true,
+                "deferGoalContinuation": true
+            }))
+        );
+        assert_eq!(
+            serde_json::to_value(ThreadArchiveParams {
+                thread_id: "thread-1".to_owned(),
+            })
+            .ok(),
+            Some(json!({"threadId": "thread-1"}))
+        );
+        assert_eq!(
+            serde_json::to_value(ThreadUnarchiveParams {
+                thread_id: "thread-1".to_owned(),
+            })
+            .ok(),
+            Some(json!({"threadId": "thread-1"}))
+        );
+        assert_eq!(
+            serde_json::to_value(ThreadDeleteParams {
+                thread_id: "thread-1".to_owned(),
+            })
+            .ok(),
+            Some(json!({"threadId": "thread-1"}))
+        );
+        assert_eq!(
+            serde_json::to_value(ThreadSetNameParams {
+                thread_id: "thread-1".to_owned(),
+                name: "Native parity".to_owned(),
+            })
+            .ok(),
+            Some(json!({
+                "threadId": "thread-1",
+                "name": "Native parity"
+            }))
+        );
+    }
+
+    #[test]
+    fn thread_goal_contract_matches_the_stable_schema() {
+        assert_eq!(
+            serde_json::to_value(ThreadGoalSetParams {
+                thread_id: "thread-1".to_owned(),
+                objective: Some("Reach native parity".to_owned()),
+                status: Some(ThreadGoalStatus::Active),
+                token_budget: Some(Some(50_000)),
+            })
+            .ok(),
+            Some(json!({
+                "threadId": "thread-1",
+                "objective": "Reach native parity",
+                "status": "active",
+                "tokenBudget": 50_000
+            }))
+        );
+        assert_eq!(
+            serde_json::to_value(ThreadGoalSetParams {
+                thread_id: "thread-1".to_owned(),
+                objective: None,
+                status: Some(ThreadGoalStatus::Paused),
+                token_budget: None,
+            })
+            .ok(),
+            Some(json!({
+                "threadId": "thread-1",
+                "status": "paused"
+            }))
+        );
+        assert_eq!(
+            serde_json::to_value(ThreadGoalSetParams {
+                thread_id: "thread-1".to_owned(),
+                objective: None,
+                status: None,
+                token_budget: Some(None),
+            })
+            .ok(),
+            Some(json!({
+                "threadId": "thread-1",
+                "tokenBudget": null
+            }))
+        );
+
+        let response = serde_json::from_value::<ThreadGoalGetResponse>(json!({
+            "goal": {
+                "threadId": "thread-1",
+                "objective": "Reach native parity",
+                "status": "usageLimited",
+                "tokensUsed": 12_500,
+                "tokenBudget": 50_000,
+                "timeUsedSeconds": 3600,
+                "createdAt": 10,
+                "updatedAt": 20
+            }
+        }));
+        assert!(matches!(
+            response,
+            Ok(ThreadGoalGetResponse {
+                goal: Some(ThreadGoal {
+                    status: ThreadGoalStatus::UsageLimited,
+                    tokens_used: 12_500,
+                    ..
+                })
+            })
+        ));
     }
 
     #[test]
@@ -1182,6 +4611,512 @@ mod tests {
                 "type": "text",
                 "text": "hello",
                 "text_elements": []
+            }))
+        );
+    }
+
+    #[test]
+    fn composer_attachments_and_plan_mode_match_the_stable_schema() {
+        let params = TurnStartParams {
+            thread_id: "thread-1".to_owned(),
+            input: vec![
+                UserInput::text("inspect these"),
+                UserInput::mention("AGENTS.md", PathBuf::from("/repo/AGENTS.md")),
+                UserInput::local_image(PathBuf::from("/repo/screen.png")),
+            ],
+            client_user_message_id: None,
+            cwd: None,
+            runtime_workspace_roots: None,
+            approval_policy: None,
+            approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+            permissions: Some(":workspace".to_owned()),
+            model: Some("gpt-5.6-sol".to_owned()),
+            effort: Some("high".to_owned()),
+            service_tier: Some(Some("priority".to_owned())),
+            summary: None,
+            personality: None,
+            output_schema: None,
+            collaboration_mode: Some(CollaborationMode {
+                mode: CollaborationModeKind::Plan,
+                settings: CollaborationModeSettings {
+                    model: "gpt-5.6-sol".to_owned(),
+                    reasoning_effort: Some("high".to_owned()),
+                    developer_instructions: None,
+                },
+            }),
+        };
+
+        assert_eq!(
+            serde_json::to_value(params).ok(),
+            Some(json!({
+                "threadId": "thread-1",
+                "input": [
+                    {"type": "text", "text": "inspect these", "text_elements": []},
+                    {"type": "mention", "name": "AGENTS.md", "path": "/repo/AGENTS.md"},
+                    {"type": "localImage", "path": "/repo/screen.png"}
+                ],
+                "approvalsReviewer": "auto_review",
+                "permissions": ":workspace",
+                "model": "gpt-5.6-sol",
+                "effort": "high",
+                "serviceTier": "priority",
+                "collaborationMode": {
+                    "mode": "plan",
+                    "settings": {
+                        "model": "gpt-5.6-sol",
+                        "reasoning_effort": "high",
+                        "developer_instructions": null
+                    }
+                }
+            }))
+        );
+    }
+
+    #[test]
+    fn ephemeral_generation_thread_matches_the_stable_schema() {
+        let params = ThreadStartParams {
+            model: Some("gpt-5.6-luna".to_owned()),
+            model_provider: Some(None),
+            allow_provider_model_fallback: Some(true),
+            service_tier: Some(None),
+            cwd: None,
+            runtime_workspace_roots: Some(Vec::new()),
+            approval_policy: Some("never".to_owned()),
+            approvals_reviewer: None,
+            sandbox: None,
+            permissions: Some(":read-only".to_owned()),
+            ephemeral: Some(true),
+            history_mode: None,
+            dynamic_tools: None,
+            config: Some(json!({
+                "features.enable_fanout": false,
+                "features.multi_agent": false,
+                "features.multi_agent_v2": false,
+                "web_search": "disabled",
+                "model_reasoning_effort": "low"
+            })),
+            personality: Some(None),
+            thread_source: Some("system".to_owned()),
+            experimental_raw_events: Some(false),
+            service_name: None,
+        };
+
+        assert_eq!(
+            serde_json::to_value(params).ok(),
+            Some(json!({
+                "model": "gpt-5.6-luna",
+                "modelProvider": null,
+                "allowProviderModelFallback": true,
+                "serviceTier": null,
+                "runtimeWorkspaceRoots": [],
+                "approvalPolicy": "never",
+                "permissions": ":read-only",
+                "ephemeral": true,
+                "config": {
+                    "features.enable_fanout": false,
+                    "features.multi_agent": false,
+                    "features.multi_agent_v2": false,
+                    "web_search": "disabled",
+                    "model_reasoning_effort": "low"
+                },
+                "personality": null,
+                "threadSource": "system",
+                "experimentalRawEvents": false
+            }))
+        );
+    }
+
+    #[test]
+    fn active_turn_controls_match_the_stable_schema() {
+        assert_eq!(
+            serde_json::to_value(ThreadSettingsUpdateParams {
+                thread_id: "thread-1".to_owned(),
+                approval_policy: Some("on-request".to_owned()),
+                approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
+                permissions: Some(":workspace".to_owned()),
+                model: Some("gpt-5.6-sol".to_owned()),
+                effort: Some("high".to_owned()),
+                service_tier: Some(Some("priority".to_owned())),
+            })
+            .ok(),
+            Some(json!({
+                "threadId": "thread-1",
+                "approvalPolicy": "on-request",
+                "approvalsReviewer": "auto_review",
+                "permissions": ":workspace",
+                "model": "gpt-5.6-sol",
+                "effort": "high",
+                "serviceTier": "priority"
+            }))
+        );
+        assert_eq!(
+            serde_json::to_value(ThreadSettingsUpdateParams {
+                thread_id: "thread-1".to_owned(),
+                service_tier: Some(None),
+                ..ThreadSettingsUpdateParams::default()
+            })
+            .ok(),
+            Some(json!({
+                "threadId": "thread-1",
+                "serviceTier": null
+            }))
+        );
+        assert_eq!(
+            serde_json::to_value(TurnSteerParams {
+                thread_id: "thread-1".to_owned(),
+                input: vec![UserInput::text("Focus on the failing test")],
+                expected_turn_id: "turn-1".to_owned(),
+            })
+            .ok(),
+            Some(json!({
+                "threadId": "thread-1",
+                "input": [{
+                    "type": "text",
+                    "text": "Focus on the failing test",
+                    "text_elements": []
+                }],
+                "expectedTurnId": "turn-1"
+            }))
+        );
+        assert_eq!(
+            serde_json::to_value(TurnInterruptParams {
+                thread_id: "thread-1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+            })
+            .ok(),
+            Some(json!({
+                "threadId": "thread-1",
+                "turnId": "turn-1"
+            }))
+        );
+
+        let resumed = serde_json::from_value::<ThreadResumeResponse>(json!({
+            "model": "gpt-5.6-sol",
+            "reasoningEffort": "high",
+            "serviceTier": "priority",
+            "approvalPolicy": "on-request",
+            "approvalsReviewer": "auto_review",
+            "activePermissionProfile": {
+                "id": ":workspace"
+            },
+            "thread": {
+                "id": "thread-1",
+                "turns": [{
+                    "id": "turn-1",
+                    "status": "inProgress",
+                    "items": []
+                }]
+            }
+        }));
+        assert!(matches!(
+            resumed,
+            Ok(response)
+                if response.thread.turns.first()
+                    .and_then(|turn| turn.get("status"))
+                    == Some(&json!("inProgress"))
+                    && response.model.as_deref() == Some("gpt-5.6-sol")
+                    && response.reasoning_effort.as_deref() == Some("high")
+                    && response.service_tier.as_deref() == Some("priority")
+                    && response.approval_policy.as_ref() == Some(&json!("on-request"))
+                    && response.approvals_reviewer == Some(ApprovalsReviewer::AutoReview)
+                    && response.active_permission_profile.as_ref()
+                        .map(|profile| profile.id.as_str()) == Some(":workspace")
+        ));
+    }
+
+    #[test]
+    fn plugin_marketplace_kinds_match_the_stable_schema() {
+        assert_eq!(
+            serde_json::to_value([
+                PluginListMarketplaceKind::Local,
+                PluginListMarketplaceKind::Vertical,
+                PluginListMarketplaceKind::WorkspaceDirectory,
+                PluginListMarketplaceKind::SharedWithMe,
+                PluginListMarketplaceKind::CreatedByMeRemote,
+            ])
+            .ok(),
+            Some(json!([
+                "local",
+                "vertical",
+                "workspace-directory",
+                "shared-with-me",
+                "created-by-me-remote"
+            ]))
+        );
+    }
+
+    #[test]
+    fn marketplace_add_params_match_the_stable_schema() {
+        assert_eq!(
+            serde_json::to_value(MarketplaceAddParams {
+                source: "openai/plugins".to_owned(),
+                ref_name: Some("main".to_owned()),
+                sparse_paths: Some(vec!["plugins/codex".to_owned()]),
+            })
+            .ok(),
+            Some(json!({
+                "source": "openai/plugins",
+                "refName": "main",
+                "sparsePaths": ["plugins/codex"],
+            }))
+        );
+    }
+
+    #[test]
+    fn marketplace_management_params_match_the_stable_schema() {
+        assert_eq!(
+            serde_json::to_value(MarketplaceRemoveParams {
+                marketplace_name: "my-marketplace".to_owned(),
+            })
+            .ok(),
+            Some(json!({ "marketplaceName": "my-marketplace" }))
+        );
+        assert_eq!(
+            serde_json::to_value(MarketplaceUpgradeParams {
+                marketplace_name: None,
+            })
+            .ok(),
+            Some(json!({ "marketplaceName": null }))
+        );
+        assert_eq!(
+            serde_json::to_value(MarketplaceUpgradeParams {
+                marketplace_name: Some("my-marketplace".to_owned()),
+            })
+            .ok(),
+            Some(json!({ "marketplaceName": "my-marketplace" }))
+        );
+    }
+
+    #[test]
+    fn app_read_matches_the_stable_schema() {
+        assert_eq!(
+            serde_json::to_value(AppsReadParams {
+                app_ids: vec!["connector_calendar".to_owned()],
+                include_tools: true,
+            })
+            .ok(),
+            Some(json!({
+                "appIds": ["connector_calendar"],
+                "includeTools": true,
+            }))
+        );
+
+        let response = serde_json::from_value::<AppsReadResponse>(json!({
+            "apps": [{
+                "id": "connector_calendar",
+                "name": "Calendar",
+                "description": "Read and update events.",
+                "iconUrl": "https://example.com/calendar.png",
+                "iconUrlDark": null,
+                "distributionChannel": "openai",
+                "installUrl": "https://chatgpt.com/apps/calendar",
+                "pluginDisplayNames": ["Calendar"],
+                "toolSummaries": [{
+                    "name": "list_events",
+                    "title": "List events",
+                    "description": "Lists calendar events."
+                }]
+            }],
+            "missingAppIds": ["connector_missing"]
+        }));
+        assert!(matches!(
+            response,
+            Ok(response)
+                if response.apps.len() == 1
+                    && response.apps[0].id == "connector_calendar"
+                    && response.apps[0]
+                        .tool_summaries
+                        .as_ref()
+                        .and_then(|tools| tools.first())
+                        .is_some_and(|tool| tool.name == "list_events")
+                    && response.missing_app_ids == ["connector_missing"]
+        ));
+    }
+
+    #[test]
+    fn structured_user_input_matches_the_stable_schema() {
+        let params = serde_json::from_value::<ToolRequestUserInputParams>(json!({
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "itemId": "item-1",
+            "autoResolutionMs": 60_000,
+            "questions": [{
+                "id": "scope",
+                "header": "Scope",
+                "question": "Which scope should I use?",
+                "options": [{
+                    "label": "Focused (Recommended)",
+                    "description": "Change only the selected module."
+                }],
+                "isOther": true,
+                "isSecret": false
+            }]
+        }));
+        assert!(matches!(
+            params,
+            Ok(params)
+                if params.thread_id == "thread-1"
+                    && params.questions[0].is_other
+                    && params.questions[0]
+                        .options
+                        .as_ref()
+                        .is_some_and(|options| options[0].label == "Focused (Recommended)")
+        ));
+
+        assert_eq!(
+            serde_json::to_value(ToolRequestUserInputResponse {
+                answers: std::collections::BTreeMap::from([(
+                    "scope".to_owned(),
+                    ToolRequestUserInputAnswer {
+                        answers: vec!["Focused (Recommended)".to_owned()],
+                    },
+                )]),
+            })
+            .ok(),
+            Some(json!({
+                "answers": {
+                    "scope": {
+                        "answers": ["Focused (Recommended)"]
+                    }
+                }
+            }))
+        );
+    }
+
+    #[test]
+    fn approval_requests_and_responses_match_the_stable_schema() {
+        let command = serde_json::from_value::<CommandExecutionRequestApprovalParams>(json!({
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "itemId": "command-1",
+            "startedAtMs": 1_727_000_000_000_i64,
+            "command": "curl https://example.com",
+            "commandActions": [{
+                "type": "unknown",
+                "command": "curl https://example.com"
+            }],
+            "networkApprovalContext": {
+                "host": "example.com",
+                "protocol": "https"
+            },
+            "proposedExecpolicyAmendment": ["curl", "https://example.com"],
+            "proposedNetworkPolicyAmendments": [{
+                "action": "allow",
+                "host": "example.com"
+            }]
+        }));
+        assert!(matches!(
+            command,
+            Ok(command)
+                if command.item_id == "command-1"
+                    && command
+                        .network_approval_context
+                        .as_ref()
+                        .is_some_and(|context| context.host == "example.com")
+        ));
+
+        assert_eq!(
+            serde_json::to_value(CommandExecutionRequestApprovalResponse {
+                decision: CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
+                    accept_with_execpolicy_amendment: ExecpolicyAmendment {
+                        execpolicy_amendment: vec![
+                            "curl".to_owned(),
+                            "https://example.com".to_owned(),
+                        ],
+                    },
+                },
+            })
+            .ok(),
+            Some(json!({
+                "decision": {
+                    "acceptWithExecpolicyAmendment": {
+                        "execpolicy_amendment": ["curl", "https://example.com"]
+                    }
+                }
+            }))
+        );
+        assert_eq!(
+            serde_json::to_value(CommandExecutionRequestApprovalResponse {
+                decision: CommandExecutionApprovalDecision::ApplyNetworkPolicyAmendment {
+                    apply_network_policy_amendment: NetworkPolicyAmendmentDecision {
+                        network_policy_amendment: NetworkPolicyAmendment {
+                            action: NetworkPolicyRuleAction::Allow,
+                            host: "example.com".to_owned(),
+                        },
+                    },
+                },
+            })
+            .ok(),
+            Some(json!({
+                "decision": {
+                    "applyNetworkPolicyAmendment": {
+                        "network_policy_amendment": {
+                            "action": "allow",
+                            "host": "example.com"
+                        }
+                    }
+                }
+            }))
+        );
+        assert_eq!(
+            serde_json::to_value(CommandExecutionRequestApprovalResponse {
+                decision: CommandExecutionApprovalDecision::Value(
+                    CommandExecutionApprovalDecisionValue::AcceptForSession,
+                ),
+            })
+            .ok(),
+            Some(json!({ "decision": "acceptForSession" }))
+        );
+        assert_eq!(
+            serde_json::to_value(FileChangeRequestApprovalResponse {
+                decision: FileChangeApprovalDecision::AcceptForSession,
+            })
+            .ok(),
+            Some(json!({ "decision": "acceptForSession" }))
+        );
+
+        let permissions = serde_json::from_value::<PermissionsRequestApprovalParams>(json!({
+            "threadId": "thread-1",
+            "turnId": "turn-1",
+            "itemId": "permission-1",
+            "startedAtMs": 1_727_000_000_000_i64,
+            "cwd": "C:\\work",
+            "permissions": {
+                "network": { "enabled": true },
+                "fileSystem": {
+                    "entries": [{
+                        "access": "read",
+                        "path": {
+                            "type": "special",
+                            "value": {
+                                "kind": "project_roots",
+                                "subpath": "docs"
+                            }
+                        }
+                    }]
+                }
+            }
+        }));
+        assert!(matches!(
+            permissions,
+            Ok(permissions)
+                if permissions
+                    .permissions
+                    .file_system
+                    .as_ref()
+                    .and_then(|file_system| file_system.entries.as_ref())
+                    .is_some_and(|entries| entries.len() == 1)
+        ));
+        assert_eq!(
+            serde_json::to_value(PermissionsRequestApprovalResponse {
+                permissions: PermissionProfile::default(),
+                scope: PermissionGrantScope::Turn,
+                strict_auto_review: None,
+            })
+            .ok(),
+            Some(json!({
+                "permissions": {},
+                "scope": "turn"
             }))
         );
     }

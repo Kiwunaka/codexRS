@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 170 120">
+  <path fill="#9f9f9f" d="M0 0h85v120H0z"/>
+  <path fill="#5d5d5d" d="M85 0h85v120H85z"/>
+  <defs>
+    <clipPath id="system-preview-sheet">
+      <path d="M7 42a8 8 0 0 1 8-8h140a8 8 0 0 1 8 8v78H7V42Z"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#system-preview-sheet)">
+    <path fill="#f3f3f3" d="M7 34h78v86H7z"/>
+    <path fill="#393939" d="M85 34h78v86H85z"/>
+    <path fill="#cdcdcd" d="M73 59h12v6H73a3 3 0 0 1 0-6Z"/>
+    <path fill="#767676" d="M85 59h9a3 3 0 0 1 0 6h-9Z"/>
+    <path fill="#dfdfdf" d="M53 68h32v3H53z"/>
+    <path fill="#8f8f8f" d="M85 68h32v3H85z"/>
+    <path fill="#fff" d="M26 84a7 7 0 0 1 7-7h52v43H26V84Z"/>
+    <path fill="#4f4f4f" d="M85 77h52a7 7 0 0 1 7 7v36H85V77Z"/>
+    <path fill="#dfdfdf" d="M32 88a3 3 0 0 1 3-3h29a3 3 0 0 1 0 6H35a3 3 0 0 1-3-3Z"/>
+    <path fill="#767676" d="M103 88a3 3 0 0 1 3-3h29a3 3 0 0 1 0 6h-29a3 3 0 0 1-3-3Z"/>
+    <path fill="#f3f3f3" d="M32 96h53v2H32zM26 105h59v1H26z"/>
+    <path fill="#767676" d="M85 96h53v2H85zM85 105h59v1H85z"/>
+    <path fill="#dfdfdf" d="M32 114a3 3 0 0 1 3-3h29a3 3 0 0 1 0 6H35a3 3 0 0 1-3-3Z"/>
+    <path fill="#767676" d="M103 114a3 3 0 0 1 3-3h29a3 3 0 0 1 0 6h-29a3 3 0 0 1-3-3Z"/>
+  </g>
+</svg>

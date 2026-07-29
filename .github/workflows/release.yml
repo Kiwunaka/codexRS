@@ -117,6 +117,7 @@ jobs:
           $root = Join-Path dist $name
           New-Item -ItemType Directory -Path $root -Force | Out-Null
           Copy-Item target/release/codexrs.exe $root
+          Copy-Item target/release/codex-computer-use-overlay.exe $root
           Copy-Item README.md,README.ru.md,README.zh-CN.md,LICENSE,CHANGELOG.md,THIRD_PARTY_LICENSES.html $root
           Compress-Archive -Path $root -DestinationPath "dist/$name.zip"
 

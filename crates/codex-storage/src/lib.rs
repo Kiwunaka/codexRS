@@ -15,8 +15,13 @@ pub const DIAGNOSTIC_LOG_BUDGET_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_PREFERENCE_KEY_BYTES: usize = 128;
 pub const MAX_PREFERENCE_VALUE_BYTES: usize = 64 * 1024;
 pub const MAX_WORKSPACE_PATH_BYTES: usize = 64 * 1024;
+pub const MAX_BROWSER_DOWNLOAD_RECORDS: usize = 200;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
+const MAX_BROWSER_DOWNLOAD_ID_BYTES: usize = 256;
+const MAX_BROWSER_DOWNLOAD_CONTEXT_BYTES: usize = 256;
+const MAX_BROWSER_DOWNLOAD_FILENAME_BYTES: usize = 512;
+const MAX_BROWSER_DOWNLOAD_PATH_BYTES: usize = 4 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EventTooLarge {
@@ -45,6 +50,7 @@ pub enum StoreError {
     PreferenceKeyTooLarge,
     PreferenceValueTooLarge,
     WorkspacePathTooLarge,
+    BrowserDownloadInvalid,
 }
 
 impl fmt::Display for StoreError {
@@ -64,6 +70,9 @@ impl fmt::Display for StoreError {
             Self::WorkspacePathTooLarge => {
                 formatter.write_str("workspace path exceeds the 64 KiB storage limit")
             }
+            Self::BrowserDownloadInvalid => {
+                formatter.write_str("browser download record is invalid")
+            }
         }
     }
 }
@@ -77,7 +86,8 @@ impl Error for StoreError {
             | Self::UnsupportedSchema(_)
             | Self::PreferenceKeyTooLarge
             | Self::PreferenceValueTooLarge
-            | Self::WorkspacePathTooLarge => None,
+            | Self::WorkspacePathTooLarge
+            | Self::BrowserDownloadInvalid => None,
         }
     }
 }
@@ -98,6 +108,46 @@ impl From<rusqlite::Error> for StoreError {
 pub struct RecentWorkspace {
     pub path: PathBuf,
     pub last_opened_at: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserDownloadRecordStatus {
+    Failed,
+    Canceled,
+    Complete,
+}
+
+impl BrowserDownloadRecordStatus {
+    const fn as_i64(self) -> i64 {
+        match self {
+            Self::Failed => 0,
+            Self::Canceled => 1,
+            Self::Complete => 2,
+        }
+    }
+
+    const fn from_i64(value: i64) -> Option<Self> {
+        match value {
+            0 => Some(Self::Failed),
+            1 => Some(Self::Canceled),
+            2 => Some(Self::Complete),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredBrowserDownload {
+    pub context_id: String,
+    pub filename: String,
+    pub id: String,
+    pub path: PathBuf,
+    pub received_bytes: u64,
+    pub started_at_ms: u64,
+    pub status: BrowserDownloadRecordStatus,
+    pub total_bytes: u64,
+    pub updated_at_ms: u64,
+    pub user_initiated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -222,6 +272,136 @@ impl Store {
         Ok(Page { items, next_offset })
     }
 
+    pub fn upsert_browser_download(
+        &mut self,
+        download: &StoredBrowserDownload,
+    ) -> Result<(), StoreError> {
+        self.ensure_owner()?;
+        validate_browser_download(download)?;
+        let path = encode_path(&download.path);
+        let transaction = self.connection.transaction()?;
+        transaction.execute(
+            "INSERT INTO browser_downloads(
+                id, context_id, filename, path, received_bytes, started_at_ms,
+                status, total_bytes, updated_at_ms, user_initiated
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             ON CONFLICT(id) DO UPDATE SET
+                context_id = excluded.context_id,
+                filename = excluded.filename,
+                path = excluded.path,
+                received_bytes = excluded.received_bytes,
+                started_at_ms = excluded.started_at_ms,
+                status = excluded.status,
+                total_bytes = excluded.total_bytes,
+                updated_at_ms = excluded.updated_at_ms,
+                user_initiated = excluded.user_initiated",
+            params![
+                download.id,
+                download.context_id,
+                download.filename,
+                path,
+                sqlite_u64(download.received_bytes),
+                sqlite_u64(download.started_at_ms),
+                download.status.as_i64(),
+                sqlite_u64(download.total_bytes),
+                sqlite_u64(download.updated_at_ms),
+                i64::from(download.user_initiated),
+            ],
+        )?;
+        transaction.execute(
+            "DELETE FROM browser_downloads
+             WHERE id NOT IN (
+                SELECT id FROM browser_downloads
+                ORDER BY updated_at_ms DESC, id ASC
+                LIMIT ?1
+             )",
+            [i64::try_from(MAX_BROWSER_DOWNLOAD_RECORDS).unwrap_or(i64::MAX)],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn remove_browser_download(&mut self, id: &str) -> Result<(), StoreError> {
+        self.ensure_owner()?;
+        if id.is_empty()
+            || id.len() > MAX_BROWSER_DOWNLOAD_ID_BYTES
+            || id.chars().any(char::is_control)
+        {
+            return Err(StoreError::BrowserDownloadInvalid);
+        }
+        self.connection
+            .execute("DELETE FROM browser_downloads WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    pub fn browser_downloads(
+        &self,
+        requested_limit: usize,
+        offset: usize,
+    ) -> Result<Page<StoredBrowserDownload>, StoreError> {
+        self.ensure_owner()?;
+        let limit = requested_limit.clamp(1, MAX_BROWSER_DOWNLOAD_RECORDS);
+        let mut statement = self.connection.prepare_cached(
+            "SELECT id, context_id, filename, path, received_bytes, started_at_ms,
+                    status, total_bytes, updated_at_ms, user_initiated
+             FROM browser_downloads
+             ORDER BY updated_at_ms DESC, id ASC
+             LIMIT ?1 OFFSET ?2",
+        )?;
+        let rows = statement.query_map(
+            params![
+                i64::try_from(limit).unwrap_or(i64::MAX),
+                i64::try_from(offset).unwrap_or(i64::MAX)
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, i64>(9)?,
+                ))
+            },
+        )?;
+        let mut items = Vec::with_capacity(limit);
+        for row in rows {
+            let (
+                id,
+                context_id,
+                filename,
+                path,
+                received_bytes,
+                started_at_ms,
+                status,
+                total_bytes,
+                updated_at_ms,
+                user_initiated,
+            ) = row?;
+            let Some(status) = BrowserDownloadRecordStatus::from_i64(status) else {
+                return Err(StoreError::BrowserDownloadInvalid);
+            };
+            items.push(StoredBrowserDownload {
+                context_id,
+                filename,
+                id,
+                path: decode_path(path),
+                received_bytes: received_bytes.max(0) as u64,
+                started_at_ms: started_at_ms.max(0) as u64,
+                status,
+                total_bytes: total_bytes.max(0) as u64,
+                updated_at_ms: updated_at_ms.max(0) as u64,
+                user_initiated: user_initiated != 0,
+            });
+        }
+        let next_offset = (items.len() == limit).then(|| offset.saturating_add(items.len()));
+        Ok(Page { items, next_offset })
+    }
+
     fn ensure_owner(&self) -> Result<(), StoreError> {
         if thread::current().id() == self.owner {
             Ok(())
@@ -248,7 +428,42 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
                 path BLOB PRIMARY KEY NOT NULL,
                 last_opened_at INTEGER NOT NULL
              ) STRICT;
-             PRAGMA user_version = 1;",
+             CREATE TABLE browser_downloads (
+                id TEXT PRIMARY KEY NOT NULL,
+                context_id TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                path BLOB NOT NULL,
+                received_bytes INTEGER NOT NULL CHECK(received_bytes >= 0),
+                started_at_ms INTEGER NOT NULL CHECK(started_at_ms >= 0),
+                status INTEGER NOT NULL CHECK(status IN (0, 1, 2)),
+                total_bytes INTEGER NOT NULL CHECK(total_bytes >= 0),
+                updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0),
+                user_initiated INTEGER NOT NULL CHECK(user_initiated IN (0, 1))
+             ) STRICT;
+             CREATE INDEX browser_downloads_updated
+             ON browser_downloads(updated_at_ms DESC, id ASC);
+             PRAGMA user_version = 2;",
+        )?;
+        transaction.commit()?;
+    }
+    if version == 1 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(
+            "CREATE TABLE browser_downloads (
+                id TEXT PRIMARY KEY NOT NULL,
+                context_id TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                path BLOB NOT NULL,
+                received_bytes INTEGER NOT NULL CHECK(received_bytes >= 0),
+                started_at_ms INTEGER NOT NULL CHECK(started_at_ms >= 0),
+                status INTEGER NOT NULL CHECK(status IN (0, 1, 2)),
+                total_bytes INTEGER NOT NULL CHECK(total_bytes >= 0),
+                updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0),
+                user_initiated INTEGER NOT NULL CHECK(user_initiated IN (0, 1))
+             ) STRICT;
+             CREATE INDEX browser_downloads_updated
+             ON browser_downloads(updated_at_ms DESC, id ASC);
+             PRAGMA user_version = 2;",
         )?;
         transaction.commit()?;
     }
@@ -263,6 +478,30 @@ fn validate_preference(key: &str, value: &str) -> Result<(), StoreError> {
         return Err(StoreError::PreferenceValueTooLarge);
     }
     Ok(())
+}
+
+fn validate_browser_download(download: &StoredBrowserDownload) -> Result<(), StoreError> {
+    let path = download.path.to_string_lossy();
+    if download.id.is_empty()
+        || download.id.len() > MAX_BROWSER_DOWNLOAD_ID_BYTES
+        || download.id.chars().any(char::is_control)
+        || download.context_id.len() > MAX_BROWSER_DOWNLOAD_CONTEXT_BYTES
+        || download.context_id.chars().any(char::is_control)
+        || download.filename.is_empty()
+        || download.filename.len() > MAX_BROWSER_DOWNLOAD_FILENAME_BYTES
+        || download.filename.chars().any(char::is_control)
+        || !download.path.is_absolute()
+        || path.is_empty()
+        || path.len() > MAX_BROWSER_DOWNLOAD_PATH_BYTES
+        || path.contains('\0')
+    {
+        return Err(StoreError::BrowserDownloadInvalid);
+    }
+    Ok(())
+}
+
+fn sqlite_u64(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
 }
 
 #[cfg(windows)]
@@ -321,8 +560,11 @@ mod tests {
     use std::error::Error;
     use std::path::Path;
 
+    use rusqlite::Connection;
+
     use super::{
-        DEFAULT_HISTORY_PAGE_SIZE, MAX_HISTORY_PAGE_SIZE, MAX_INLINE_EVENT_BYTES, Store,
+        BrowserDownloadRecordStatus, DEFAULT_HISTORY_PAGE_SIZE, MAX_BROWSER_DOWNLOAD_RECORDS,
+        MAX_HISTORY_PAGE_SIZE, MAX_INLINE_EVENT_BYTES, Store, StoredBrowserDownload,
         bounded_history_page_size, validate_inline_event_size,
     };
 
@@ -380,6 +622,75 @@ mod tests {
         let second = store.recent_workspaces(2, 2)?;
         assert_eq!(second.items[0].path, Path::new("one"));
         assert_eq!(second.next_offset, None);
+        Ok(())
+    }
+
+    #[test]
+    fn browser_download_history_is_bounded_ordered_and_removable() -> Result<(), Box<dyn Error>> {
+        let mut store = Store::open_in_memory()?;
+        let base = if cfg!(windows) {
+            Path::new(r"C:\Downloads")
+        } else {
+            Path::new("/tmp/downloads")
+        };
+        for index in 0..=MAX_BROWSER_DOWNLOAD_RECORDS {
+            let id = format!("download-{index:03}");
+            store.upsert_browser_download(&StoredBrowserDownload {
+                context_id: "chat".to_owned(),
+                filename: format!("{id}.txt"),
+                id,
+                path: base.join(format!("файл-{index:03}.txt")),
+                received_bytes: index as u64,
+                started_at_ms: index as u64,
+                status: BrowserDownloadRecordStatus::Complete,
+                total_bytes: index as u64,
+                updated_at_ms: index as u64,
+                user_initiated: true,
+            })?;
+        }
+
+        let first = store.browser_downloads(100, 0)?;
+        assert_eq!(first.items.len(), 100);
+        assert_eq!(first.items[0].id, "download-200");
+        assert_eq!(first.next_offset, Some(100));
+        let second = store.browser_downloads(100, 100)?;
+        assert_eq!(second.items.len(), 100);
+        assert_eq!(
+            second.items.last().map(|item| item.id.as_str()),
+            Some("download-001")
+        );
+        assert_eq!(second.next_offset, Some(200));
+        assert!(store.browser_downloads(100, 200)?.items.is_empty());
+
+        store.remove_browser_download("download-200")?;
+        assert_eq!(
+            store
+                .browser_downloads(1, 0)?
+                .items
+                .first()
+                .map(|item| item.id.as_str()),
+            Some("download-199")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn version_one_storage_migrates_browser_download_history() -> Result<(), Box<dyn Error>> {
+        let connection = Connection::open_in_memory()?;
+        connection.execute_batch(
+            "CREATE TABLE ui_preferences (
+                key TEXT PRIMARY KEY NOT NULL,
+                value TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+             ) STRICT;
+             CREATE TABLE recent_workspaces (
+                path BLOB PRIMARY KEY NOT NULL,
+                last_opened_at INTEGER NOT NULL
+             ) STRICT;
+             PRAGMA user_version = 1;",
+        )?;
+        let store = Store::from_connection(connection)?;
+        assert!(store.browser_downloads(10, 0)?.items.is_empty());
         Ok(())
     }
 }

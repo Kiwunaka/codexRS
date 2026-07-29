@@ -5,8 +5,8 @@
 <h1 align="center">codexRS</h1>
 
 <p align="center">
-  A native Rust workspace for the official Codex app-server.<br>
-  Tasks, diffs, branches, worktrees, terminal, Computer Use, and plugins without a browser runtime.
+  A native Rust replacement for Codex Desktop, targeting full behavioral and UX parity.<br>
+  Official app-server compatibility without Electron, WebView, or a browser runtime.
 </p>
 
 <p align="center">
@@ -54,14 +54,41 @@ repository redistributes.
 | Tasks | Bounded task pages, resume, fork, composer, streaming timeline, and approvals |
 | Repository | Status, staged/unstaged files, large virtualized diffs, branch switching, and safe sibling worktrees |
 | Terminal | Native PTY/ConPTY session with bounded VT output |
-| Computer Use | Native window discovery, capture, pointer, scrolling, typing, and keys with task and session gates |
-| Plugins | Marketplace listing, install, and uninstall through app-server protocol methods |
+| Computer Use | Native window discovery and control with per-app approval, task access, and an app-server-owned always-allowed list |
+| Plugins | Native directory tabs, bounded artwork, installed/source management, creation handoff, marketplace add/remove/upgrade, install, and uninstall through app-server methods |
 | Persistence | Single-writer codexRS SQLite for UI preferences and recent workspaces only |
 | Platforms | Windows source build smoke-tested; Ubuntu build and tests run in CI |
 
-Computer Use is opt-in for each task. Input also requires an explicit
-per-session authorization and a selected window. Screenshots stay in memory and
-are bounded before they enter the app-server protocol.
+Computer Use is opt-in for each task. Every read or control action carries the
+exact `Window { app, id, title? }` returned by bounded discovery; codexRS
+rehydrates the opaque id and verifies its current owner before acting. The
+window selected in the native inspector is only a manual convenience. The
+first call for each real application asks for access to that application.
+On Windows, packaged apps keep their case-preserved AUMID. Executables use the
+same known-folder GUID form as stable when possible and otherwise keep their
+case-preserved absolute path; legacy `process:` values remain accepted for
+matching. Known shared hosts and oversized identifiers fail closed. Allow once
+covers the current task, while Always allow persists through the official
+app-server, but neither can override the stable product-policy block for Codex,
+terminal, password-manager, identity, or security surfaces.
+The native Windows app catalog can list and launch bounded entries from both
+Start Menu trees, execution aliases, and installed package manifests; direct
+model launches use the same per-app approval policy.
+Screenshots stay in memory and are bounded before they enter the app-server
+protocol. Each capture carries a short-lived screenshot ID so coordinates from
+a downscaled image map back to the real window. On Windows, optional
+accessibility text and indexed actions run in a supervised native Rust helper:
+the tree is capped at 512 elements and 128 KiB, each request has a 10-second
+deadline, and a stuck third-party UI Automation provider is terminated with
+the helper instead of freezing the client. Input methods foreground their
+exact target automatically, while `activate_window` remains an explicit
+recovery action matching stable Window2 behavior.
+Before guarded input, a native topmost system indicator with the stable
+`ChatGPT is using your computer` / `Esc to cancel` copy must become visible.
+It stays for the Computer Use turn, never takes focus or pointer input, and is
+excluded from screenshots; failure to show it blocks the action. On Windows the
+shipped `codex-computer-use-overlay.exe` companion owns that capture-excluded
+window and is supervised with bounded IPC and a kill-on-close Job Object.
 
 ## Architecture
 
@@ -79,8 +106,9 @@ flowchart LR
 
 All protocol frames, queues, history pages, diffs, terminal output, screenshots,
 and subprocess diagnostics have explicit limits. See
-[Architecture](docs/architecture.md) and [Platform support](docs/platform-support.md)
-for the full boundaries.
+[Architecture](docs/architecture.md), [Parity matrix](docs/parity-matrix.md), and
+[Platform support](docs/platform-support.md) for the full boundaries and
+current gap inventory.
 
 ## Quick start
 
@@ -132,7 +160,8 @@ Normal use defaults to `~/.codex`. For protocol development and tests, point
 
 ```powershell
 $env:CODEX_HOME = 'E:\scratch\isolated-codex-home'
-cargo run -p codex-app
+cargo build -p codex-app --bins
+cargo run -p codex-app --bin codexrs
 ```
 
 codexRS-owned state can be redirected independently with
@@ -146,6 +175,7 @@ focused on an observable requirement or failure. Large features should begin
 as an issue or discussion so the contract is clear before implementation.
 
 - [Roadmap](ROADMAP.md)
+- [Codex Desktop parity matrix](docs/parity-matrix.md)
 - [Support](SUPPORT.md)
 - [Security policy](SECURITY.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)

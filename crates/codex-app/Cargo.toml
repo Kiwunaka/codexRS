@@ -7,20 +7,33 @@ license.workspace = true
 repository.workspace = true
 description = "Native Rust desktop client for the official Codex app-server"
 publish = false
+default-run = "codexrs"
 
 [[bin]]
 name = "codexrs"
 path = "src/main.rs"
 
+[[bin]]
+name = "codex-computer-use-overlay"
+path = "src/computer_overlay_helper.rs"
+
 [dependencies]
+base64.workspace = true
+chrono.workspace = true
 codex-core = { path = "../codex-core" }
 codex-platform = { path = "../codex-platform" }
 codex-protocol = { path = "../codex-protocol" }
 codex-storage = { path = "../codex-storage" }
 crossbeam-channel.workspace = true
+futures.workspace = true
 gpui.workspace = true
 gpui-component.workspace = true
+gpui-component-assets.workspace = true
+image.workspace = true
+markdown.workspace = true
+reqwest.workspace = true
 serde_json.workspace = true
+url.workspace = true
 vt100.workspace = true
 
 [lints]
