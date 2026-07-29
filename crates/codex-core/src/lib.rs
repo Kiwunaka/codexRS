@@ -188,7 +188,11 @@ pub enum ConnectionStatus {
     Offline,
     Connecting,
     Online,
-    Recovering,
+    Recovering {
+        attempt: u32,
+        retry_in_ms: Option<u64>,
+        last_error: Option<String>,
+    },
     Failed(String),
 }
 
@@ -3568,6 +3572,14 @@ pub enum Action {
     Connect,
     Connected,
     ConnectionLost,
+    ConnectionRetryScheduled {
+        attempt: u32,
+        retry_in_ms: u64,
+        last_error: Option<String>,
+    },
+    ConnectionRetryStarted {
+        attempt: u32,
+    },
     ConnectionFailed(String),
     RetryConnection,
     StorageOpened {
@@ -4585,6 +4597,7 @@ pub enum Action {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
     ConnectAppServer,
+    ScheduleAppServerReconnect,
     LoadModels,
     LoadPermissionProfiles {
         cwd: Option<PathBuf>,
@@ -5977,6 +5990,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::Connected => {
             state.connection = ConnectionStatus::Online;
+            if state.status_message.as_deref() == Some("Connection lost. Reconnecting…") {
+                state.status_message = None;
+            }
             state.task_generation = state.task_generation.saturating_add(1);
             state.task_status = LoadStatus::Loading;
             state.composer_controls.models_status = LoadStatus::Loading;
@@ -6035,9 +6051,16 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         Action::ConnectionLost => {
             let reconnect = !matches!(
                 state.connection,
-                ConnectionStatus::Connecting | ConnectionStatus::Recovering
+                ConnectionStatus::Connecting | ConnectionStatus::Recovering { .. }
             );
-            state.connection = ConnectionStatus::Recovering;
+            if !reconnect {
+                return Vec::new();
+            }
+            state.connection = ConnectionStatus::Recovering {
+                attempt: 0,
+                retry_in_ms: None,
+                last_error: None,
+            };
             state.status_message = Some("Connection lost. Reconnecting…".to_owned());
             state.personalization.pending = false;
             state.mcp_elicitations.clear();
@@ -6049,10 +6072,31 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             for timeline in state.timelines.values_mut() {
                 timeline.goal_continuation_pending = false;
             }
-            reconnect
-                .then_some(Effect::ConnectAppServer)
-                .into_iter()
-                .collect()
+            vec![Effect::ScheduleAppServerReconnect]
+        }
+        Action::ConnectionRetryScheduled {
+            attempt,
+            retry_in_ms,
+            last_error,
+        } => {
+            if matches!(state.connection, ConnectionStatus::Recovering { .. }) {
+                state.connection = ConnectionStatus::Recovering {
+                    attempt,
+                    retry_in_ms: Some(retry_in_ms),
+                    last_error,
+                };
+            }
+            Vec::new()
+        }
+        Action::ConnectionRetryStarted { attempt } => {
+            if let ConnectionStatus::Recovering { last_error, .. } = &state.connection {
+                state.connection = ConnectionStatus::Recovering {
+                    attempt,
+                    retry_in_ms: None,
+                    last_error: last_error.clone(),
+                };
+            }
+            Vec::new()
         }
         Action::ConnectionFailed(message) => {
             state.connection = ConnectionStatus::Failed(message);
@@ -21152,9 +21196,53 @@ mod tests {
 
         assert_eq!(
             reduce(&mut state, Action::ConnectionLost),
-            [Effect::ConnectAppServer]
+            [Effect::ScheduleAppServerReconnect]
         );
-        assert_eq!(state.connection, ConnectionStatus::Recovering);
+        assert_eq!(
+            state.connection,
+            ConnectionStatus::Recovering {
+                attempt: 0,
+                retry_in_ms: None,
+                last_error: None,
+            }
+        );
         assert!(reduce(&mut state, Action::ConnectionLost).is_empty());
+        assert!(
+            reduce(
+                &mut state,
+                Action::ConnectionRetryScheduled {
+                    attempt: 1,
+                    retry_in_ms: 1_000,
+                    last_error: None,
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.connection,
+            ConnectionStatus::Recovering {
+                attempt: 1,
+                retry_in_ms: Some(1_000),
+                last_error: None,
+            }
+        );
+        assert!(reduce(&mut state, Action::ConnectionLost).is_empty());
+        assert_eq!(
+            state.connection,
+            ConnectionStatus::Recovering {
+                attempt: 1,
+                retry_in_ms: Some(1_000),
+                last_error: None,
+            }
+        );
+        assert!(reduce(&mut state, Action::ConnectionRetryStarted { attempt: 1 },).is_empty());
+        assert_eq!(
+            state.connection,
+            ConnectionStatus::Recovering {
+                attempt: 1,
+                retry_in_ms: None,
+                last_error: None,
+            }
+        );
     }
 }

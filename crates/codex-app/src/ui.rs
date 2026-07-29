@@ -85,6 +85,7 @@ use gpui_component::{
     switch::Switch,
     text::TextView,
     theme::{Theme, ThemeMode},
+    tooltip::Tooltip,
     v_flex,
 };
 use markdown::{ParseOptions, mdast::Node};
@@ -11110,12 +11111,46 @@ impl WorkspaceView {
     }
 
     fn render_sidebar_footer(&self, cx: &mut Context<Self>) -> AnyElement {
-        let (label, color) = match &self.state.connection {
-            ConnectionStatus::Offline => ("Offline", cx.theme().muted_foreground),
-            ConnectionStatus::Connecting => ("Connecting…", cx.theme().info),
-            ConnectionStatus::Online => ("App-server online", cx.theme().success),
-            ConnectionStatus::Recovering => ("Reconnecting…", cx.theme().warning),
-            ConnectionStatus::Failed(_) => ("Connection failed", cx.theme().danger),
+        let (label, color, tooltip, retryable) = match &self.state.connection {
+            ConnectionStatus::Offline => (
+                "Offline".to_owned(),
+                cx.theme().muted_foreground,
+                None,
+                false,
+            ),
+            ConnectionStatus::Connecting => {
+                ("Connecting…".to_owned(), cx.theme().info, None, false)
+            }
+            ConnectionStatus::Online => (
+                "App-server online".to_owned(),
+                cx.theme().success,
+                None,
+                false,
+            ),
+            ConnectionStatus::Recovering {
+                attempt,
+                retry_in_ms,
+                last_error,
+            } => {
+                let label = match (*attempt, retry_in_ms) {
+                    (0, _) => "Reconnecting…".to_owned(),
+                    (attempt, Some(retry_in_ms)) => {
+                        format!("Retry {attempt} in {}s", retry_in_ms.div_ceil(1_000))
+                    }
+                    (attempt, None) => format!("Reconnecting · attempt {attempt}"),
+                };
+                let tooltip = last_error.as_ref().map_or_else(
+                    || "The Codex app-server stopped. codexRS will retry automatically.".to_owned(),
+                    |error| format!("{error}\ncodexRS will retry automatically."),
+                );
+                (label, cx.theme().warning, Some(tooltip), false)
+            }
+            ConnectionStatus::Failed(error) => (
+                "Connection failed".to_owned(),
+                cx.theme().danger,
+                Some(format!("{error}\nClick to retry.")),
+                true,
+            ),
         };
         v_flex()
             .px_2()
@@ -11148,13 +11183,27 @@ impl WorkspaceView {
             )
             .child(
                 h_flex()
+                    .id("app-server-connection-status")
                     .h(px(24.0))
                     .px_2()
                     .gap_2()
                     .items_center()
+                    .when(retryable, |row| {
+                        row.when(pointer_cursors_enabled(cx), |row| row.cursor_pointer())
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.dispatch(Action::RetryConnection, cx);
+                            }))
+                    })
+                    .when_some(tooltip, |row, tooltip| {
+                        row.tooltip(move |window, cx| {
+                            Tooltip::new(tooltip.clone()).build(window, cx)
+                        })
+                    })
                     .child(div().size(px(7.0)).rounded_full().bg(color))
                     .child(
                         div()
+                            .min_w_0()
+                            .truncate()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child(label),

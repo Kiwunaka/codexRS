@@ -151,6 +151,8 @@ use serde_json::{Value, json};
 const BACKEND_COMMAND_CAPACITY: usize = 64;
 const BACKEND_EVENT_CAPACITY: usize = 1_024;
 const BACKEND_TICK: Duration = Duration::from_millis(25);
+const APP_SERVER_RECONNECT_INITIAL_DELAY: Duration = Duration::from_secs(1);
+const APP_SERVER_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(20);
 const UI_EVENT_TIMEOUT: Duration = Duration::from_millis(100);
 const HISTORY_PAGE_LIMIT: u32 = 100;
 const ARCHIVED_DELETE_PAGE_LIMIT: u32 = 200;
@@ -1363,6 +1365,55 @@ impl GitRefreshDebouncer {
             return self.pending.take().map(|(cwd, _)| cwd);
         }
         None
+    }
+}
+
+#[derive(Debug)]
+struct AppServerReconnectScheduler {
+    pending: Option<(u32, Instant)>,
+    next_attempt: u32,
+    next_delay: Duration,
+}
+
+impl Default for AppServerReconnectScheduler {
+    fn default() -> Self {
+        Self {
+            pending: None,
+            next_attempt: 1,
+            next_delay: APP_SERVER_RECONNECT_INITIAL_DELAY,
+        }
+    }
+}
+
+impl AppServerReconnectScheduler {
+    fn schedule(&mut self, now: Instant) -> Option<(u32, Duration)> {
+        if self.pending.is_some() {
+            return None;
+        }
+        let attempt = self.next_attempt;
+        let delay = self.next_delay;
+        self.pending = Some((attempt, now + delay));
+        self.next_attempt = self.next_attempt.saturating_add(1);
+        self.next_delay = self
+            .next_delay
+            .saturating_mul(2)
+            .min(APP_SERVER_RECONNECT_MAX_DELAY);
+        Some((attempt, delay))
+    }
+
+    fn take_due(&mut self, now: Instant) -> Option<u32> {
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|(_, deadline)| now >= *deadline)
+        {
+            return self.pending.take().map(|(attempt, _)| attempt);
+        }
+        None
+    }
+
+    fn reset(&mut self) {
+        *self = Self::default();
     }
 }
 
@@ -2664,6 +2715,7 @@ fn run_backend(commands: Receiver<BackendCommand>, events: Sender<Action>) {
     let mut interrupted_computer_turns = HashSet::new();
     let mut terminals = HashMap::new();
     let mut browser = None;
+    let mut app_server_reconnect = AppServerReconnectScheduler::default();
     let mut git_refresh = GitRefreshDebouncer::default();
     let mut task_search = TaskSearchDebouncer::default();
     let mut fuzzy_file_search = FuzzyFileSearchRuntime::default();
@@ -2826,6 +2878,31 @@ fn run_backend(commands: Receiver<BackendCommand>, events: Sender<Action>) {
 
         match commands.recv_timeout(BACKEND_TICK) {
             Ok(BackendCommand::Run(effect)) => match *effect {
+                Effect::ConnectAppServer => {
+                    app_server_reconnect.reset();
+                    fuzzy_file_search.reset();
+                    if let Err(error) = connect(&events, &mut connection) {
+                        emit(
+                            &events,
+                            Action::ConnectionFailed(bounded(error, MAX_STATUS_BYTES)),
+                        );
+                    }
+                }
+                Effect::ScheduleAppServerReconnect => {
+                    if connection.is_none()
+                        && let Some((attempt, delay)) =
+                            app_server_reconnect.schedule(Instant::now())
+                    {
+                        emit(
+                            &events,
+                            Action::ConnectionRetryScheduled {
+                                attempt,
+                                retry_in_ms: u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
+                                last_error: None,
+                            },
+                        );
+                    }
+                }
                 Effect::RefreshGit { cwd } => {
                     git_refresh.schedule(cwd, Instant::now(), runtime_policy.git_debounce);
                 }
@@ -2902,6 +2979,26 @@ fn run_backend(commands: Receiver<BackendCommand>, events: Sender<Action>) {
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
         }
 
+        if let Some(attempt) = app_server_reconnect.take_due(Instant::now()) {
+            emit(&events, Action::ConnectionRetryStarted { attempt });
+            match connect(&events, &mut connection) {
+                Ok(()) => app_server_reconnect.reset(),
+                Err(error) => {
+                    if let Some((next_attempt, delay)) =
+                        app_server_reconnect.schedule(Instant::now())
+                    {
+                        emit(
+                            &events,
+                            Action::ConnectionRetryScheduled {
+                                attempt: next_attempt,
+                                retry_in_ms: u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
+                                last_error: Some(bounded(error, MAX_STATUS_BYTES)),
+                            },
+                        );
+                    }
+                }
+            }
+        }
         if let Some(cwd) = git_refresh.take_due(Instant::now()) {
             refresh_git(&cwd, &events);
         }
@@ -3126,12 +3223,6 @@ fn run_effect(
     personality: &mut Personality,
     pending_worktree_runtime: &mut Option<PendingWorktreeRuntime>,
 ) {
-    if effect == Effect::ConnectAppServer {
-        fuzzy_file_search.reset();
-        connect(events, connection);
-        return;
-    }
-
     if effect == Effect::CancelPendingWorktreeFork {
         if let Some(runtime) = pending_worktree_runtime.as_ref() {
             runtime.cancellation.store(true, Ordering::Release);
@@ -4259,6 +4350,7 @@ fn run_effect(
 
     match effect {
         Effect::ConnectAppServer => {}
+        Effect::ScheduleAppServerReconnect => {}
         Effect::ScheduleTaskSearch { .. } => {}
         Effect::SearchFuzzyFiles {
             session_id,
@@ -8397,30 +8489,22 @@ fn map_git_snapshot(snapshot: GitSnapshot) -> GitState {
     }
 }
 
-fn connect(events: &Sender<Action>, connection: &mut Option<AppServerConnection>) {
+fn connect(
+    events: &Sender<Action>,
+    connection: &mut Option<AppServerConnection>,
+) -> Result<(), String> {
     if connection.is_some() {
         emit(events, Action::Connected);
-        return;
+        return Ok(());
     }
 
     let binary = resolve_codex_binary(None);
-    let home = match CodexHome::resolve(None) {
-        Ok(home) => home,
-        Err(error) => {
-            emit(events, Action::ConnectionFailed(error.to_string()));
-            return;
-        }
-    };
+    let home = CodexHome::resolve(None).map_err(|error| error.to_string())?;
     let runtime_binary = binary.clone();
     let runtime_home = home.path().to_path_buf();
     let runtime_home_default = home.kind() == CodexHomeKind::Default;
-    let app_server = match AppServerConnection::spawn(AppServerConfig::new(binary, home)) {
-        Ok(app_server) => app_server,
-        Err(error) => {
-            emit(events, Action::ConnectionFailed(error.to_string()));
-            return;
-        }
-    };
+    let app_server = AppServerConnection::spawn(AppServerConfig::new(binary, home))
+        .map_err(|error| error.to_string())?;
     match app_server.initialize_with_capabilities(
         ClientInfo {
             name: "codex-rs".to_owned(),
@@ -8440,8 +8524,9 @@ fn connect(events: &Sender<Action>, connection: &mut Option<AppServerConnection>
                 },
             );
             emit(events, Action::Connected);
+            Ok(())
         }
-        Err(error) => emit(events, Action::ConnectionFailed(error.to_string())),
+        Err(error) => Err(error.to_string()),
     }
 }
 
@@ -14105,26 +14190,26 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        AppLogo, BrowserPolicyTarget, COMPUTER_USE_USER_INPUT_STALE_MESSAGE,
-        ComputerUseAccessibilityClient, ComputerUsePermission, GOAL_CONTINUATION_DELAY,
-        GitRefreshDebouncer, GoalContinuationScheduler, MAX_ITEM_TEXT_BYTES,
-        McpElicitationMapError, PendingApproval, STABLE_OPT_OUT_NOTIFICATION_METHODS,
-        TASK_SEARCH_DEBOUNCE, TaskSearchDebouncer, TerminalParserCallbacks,
-        agent_configuration_snapshot, appearance_theme_key, browser_origin_auto_decision,
-        browser_origin_elicitation_response, browser_policy_target, browser_resource_auto_decision,
-        browser_resource_elicitation_response, combined_git_generation_prompt,
-        combined_git_output_schema, commit_generation_prompt, commit_message_output_schema,
-        composer_config_key, composer_inputs, computer_application_value,
-        computer_tool_request_meta, computer_tool_requires_interruption_monitor,
-        computer_use_allowed_app_ids, computer_use_allowed_app_ids_value,
-        computer_use_app_authorized, computer_use_dynamic_tools, computer_window_argument,
-        computer_window_schema, drag_coordinates, encode_appearance_preferences,
-        encode_browser_download_preferences, encode_browser_permissions, encode_git_preferences,
-        encode_keyboard_shortcut_preferences, encode_primary_window_placement,
-        forbidden_computer_target_message, handle_notification, hook_state_config_value,
-        index_app_logos, initialize_capabilities, is_hidden_timeline_item, map_app_detail,
-        map_app_server_approval, map_apps, map_fuzzy_file_search_results, map_mcp_elicitation,
-        map_mcp_resource_contents, map_mcp_runtime_catalog, map_timeline_item,
+        AppLogo, AppServerReconnectScheduler, BrowserPolicyTarget,
+        COMPUTER_USE_USER_INPUT_STALE_MESSAGE, ComputerUseAccessibilityClient,
+        ComputerUsePermission, GOAL_CONTINUATION_DELAY, GitRefreshDebouncer,
+        GoalContinuationScheduler, MAX_ITEM_TEXT_BYTES, McpElicitationMapError, PendingApproval,
+        STABLE_OPT_OUT_NOTIFICATION_METHODS, TASK_SEARCH_DEBOUNCE, TaskSearchDebouncer,
+        TerminalParserCallbacks, agent_configuration_snapshot, appearance_theme_key,
+        browser_origin_auto_decision, browser_origin_elicitation_response, browser_policy_target,
+        browser_resource_auto_decision, browser_resource_elicitation_response,
+        combined_git_generation_prompt, combined_git_output_schema, commit_generation_prompt,
+        commit_message_output_schema, composer_config_key, composer_inputs,
+        computer_application_value, computer_tool_request_meta,
+        computer_tool_requires_interruption_monitor, computer_use_allowed_app_ids,
+        computer_use_allowed_app_ids_value, computer_use_app_authorized,
+        computer_use_dynamic_tools, computer_window_argument, computer_window_schema,
+        drag_coordinates, encode_appearance_preferences, encode_browser_download_preferences,
+        encode_browser_permissions, encode_git_preferences, encode_keyboard_shortcut_preferences,
+        encode_primary_window_placement, forbidden_computer_target_message, handle_notification,
+        hook_state_config_value, index_app_logos, initialize_capabilities, is_hidden_timeline_item,
+        map_app_detail, map_app_server_approval, map_apps, map_fuzzy_file_search_results,
+        map_mcp_elicitation, map_mcp_resource_contents, map_mcp_runtime_catalog, map_timeline_item,
         map_user_input_request, mcp_elicitation_content_json, mcp_server_config_value,
         parse_appearance_preferences, parse_appearance_theme, parse_browser_download_preferences,
         parse_browser_permissions, parse_computer_key_chord, parse_generated_commit_message,
@@ -16737,6 +16822,26 @@ mod tests {
             Some(PathBuf::from("latest"))
         );
         assert_eq!(debouncer.take_due(start + Duration::from_millis(500)), None);
+    }
+
+    #[test]
+    fn app_server_reconnect_uses_bounded_exponential_backoff_and_deduplicates() {
+        let mut scheduler = AppServerReconnectScheduler::default();
+        let start = Instant::now();
+
+        for (attempt, delay_secs) in [(1, 1), (2, 2), (3, 4), (4, 8), (5, 16), (6, 20), (7, 20)] {
+            let delay = Duration::from_secs(delay_secs);
+            assert_eq!(scheduler.schedule(start), Some((attempt, delay)));
+            assert_eq!(scheduler.schedule(start), None);
+            assert_eq!(
+                scheduler.take_due(start + delay - Duration::from_millis(1)),
+                None
+            );
+            assert_eq!(scheduler.take_due(start + delay), Some(attempt));
+        }
+
+        scheduler.reset();
+        assert_eq!(scheduler.schedule(start), Some((1, Duration::from_secs(1))));
     }
 
     #[test]
