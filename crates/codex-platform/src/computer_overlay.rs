@@ -23,6 +23,7 @@ impl ComputerUseOverlayTarget {
         }
     }
 
+    #[cfg(any(windows, test))]
     #[must_use]
     fn center(self) -> (i32, i32) {
         let half_width = i32::try_from(self.width / 2).unwrap_or(i32::MAX);
@@ -1183,7 +1184,9 @@ mod windows {
 
 #[cfg(test)]
 mod tests {
-    use super::{ComputerUseOverlayTarget, ComputerUseSystemOverlay, OverlayTurn, validate_id};
+    #[cfg(windows)]
+    use super::ComputerUseSystemOverlay;
+    use super::{ComputerUseOverlayTarget, OverlayTurn, validate_id};
 
     #[test]
     fn overlay_target_uses_the_window_center_without_overflow() {

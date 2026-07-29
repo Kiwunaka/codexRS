@@ -7,27 +7,36 @@ use serde::{Deserialize, Serialize};
 use crate::computer_apps::{
     ComputerLaunchTarget, discover_windows_computer_apps, explicit_executable_launch_target,
 };
+#[cfg(windows)]
+use crate::inspect_computer_window;
 use crate::{
     ComputerApplication, ComputerButton, ComputerCapture, MAX_COMPUTER_APPLICATIONS,
-    MAX_COMPUTER_WINDOWS, computer_use_target_is_forbidden, inspect_computer_window,
-    list_computer_windows,
+    MAX_COMPUTER_WINDOWS, computer_use_target_is_forbidden, list_computer_windows,
 };
 
 pub const MAX_COMPUTER_ACCESSIBILITY_ELEMENTS: usize = 512;
 pub const MAX_COMPUTER_ACCESSIBILITY_TREE_BYTES: usize = 128 * 1024;
 
+#[cfg(windows)]
 const MAX_HELPER_REQUEST_BYTES: usize = 64 * 1024;
+#[cfg(windows)]
 const MAX_HELPER_RESPONSE_BYTES: usize = 512 * 1024;
 const MAX_ELEMENT_TEXT_BYTES: usize = 512;
 const MAX_DOCUMENT_TEXT_BYTES: usize = 16 * 1024;
+#[cfg(windows)]
 const MAX_SELECTED_TEXT_BYTES: usize = 8 * 1024;
+#[cfg(windows)]
 const MAX_SELECTED_ELEMENTS: usize = 32;
+#[cfg(any(windows, test))]
 const MAX_BROWSER_URL_BYTES: usize = 8 * 1024;
 const MAX_STALE_INPUT_WINDOWS: usize = 64;
+#[cfg(windows)]
 const MAX_TREE_DEPTH: usize = 32;
+#[cfg(windows)]
 const MAX_CHILDREN_PER_ELEMENT: usize = 128;
 #[cfg(windows)]
 const MAX_NATIVE_WINDOW_ENUMERATION: usize = 4_096;
+#[cfg(windows)]
 const HELPER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -793,6 +802,7 @@ fn helper_response_reader(
     }
 }
 
+#[cfg(any(windows, test))]
 fn read_bounded_line(
     reader: &mut impl std::io::BufRead,
     limit: usize,
@@ -1615,6 +1625,7 @@ fn focused_text(element: &uiautomation::UIElement) -> (Option<String>, Option<St
     (None, document_text)
 }
 
+#[cfg(any(windows, test))]
 #[derive(Default)]
 struct BrowserUrlCandidate {
     depth: Option<usize>,
@@ -1622,6 +1633,7 @@ struct BrowserUrlCandidate {
     ambiguous: bool,
 }
 
+#[cfg(any(windows, test))]
 impl BrowserUrlCandidate {
     fn consider(&mut self, depth: usize, value: &str) {
         let Some(url) = validated_browser_url(value) else {
@@ -1655,6 +1667,7 @@ impl BrowserUrlCandidate {
     }
 }
 
+#[cfg(any(windows, test))]
 fn validated_browser_url(value: &str) -> Option<String> {
     let value = value.trim();
     if value.is_empty()
@@ -1667,11 +1680,13 @@ fn validated_browser_url(value: &str) -> Option<String> {
     Some(value.to_owned())
 }
 
+#[cfg(windows)]
 fn bounded_optional_text(value: String, max_bytes: usize) -> Option<String> {
     let value = bounded_inline_text(value, max_bytes);
     (!value.is_empty()).then_some(value)
 }
 
+#[cfg(any(windows, test))]
 fn bounded_inline_text(mut value: String, max_bytes: usize) -> String {
     value = value
         .chars()
@@ -1691,10 +1706,12 @@ fn bounded_inline_text(mut value: String, max_bytes: usize) -> String {
     value
 }
 
+#[cfg(windows)]
 fn escape_tree_text(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+#[cfg(any(windows, test))]
 fn push_bounded_line(target: &mut String, line: &str, limit: usize) -> bool {
     let separator = usize::from(!target.is_empty());
     if target

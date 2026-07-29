@@ -124,6 +124,7 @@ pub struct DesktopWorkArea {
 }
 
 impl DesktopWorkArea {
+    #[cfg(any(windows, test))]
     fn new(x: f32, y: f32, width: f32, height: f32) -> Option<Self> {
         (x.is_finite()
             && y.is_finite()

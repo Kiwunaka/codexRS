@@ -393,11 +393,13 @@ fn target_window_is_foreground(turn: &ComputerUseTurnKey) -> bool {
         .is_some_and(|window| window.ptr() as usize == window_id)
 }
 
+#[cfg(any(windows, test))]
 #[derive(Default)]
 struct EscapeEdge {
     was_down: bool,
 }
 
+#[cfg(any(windows, test))]
 impl EscapeEdge {
     fn reset(&mut self, is_down: bool) {
         self.was_down = is_down;

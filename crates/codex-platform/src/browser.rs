@@ -1035,7 +1035,7 @@ fn run_browser(
         Some(endpoint) => endpoint,
         None => {
             graceful_browser_exit(&mut child, None);
-            drop(job);
+            release_browser_job(job);
             return Ok(());
         }
     };
@@ -1057,7 +1057,7 @@ fn run_browser(
 
     let result = runtime.run(&mut child, &commands, pending_commands);
     graceful_browser_exit(&mut child, Some(&mut runtime.cdp));
-    drop(job);
+    release_browser_job(job);
     result
 }
 
@@ -1187,6 +1187,8 @@ type BrowserJob = Job;
 
 #[cfg(not(windows))]
 struct BrowserJob;
+
+fn release_browser_job(_job: BrowserJob) {}
 
 #[cfg(windows)]
 fn create_browser_job(child: &mut Child) -> Result<BrowserJob, String> {
@@ -5119,7 +5121,7 @@ mod tests {
 
         stop_server.store(true, Ordering::Relaxed);
         graceful_browser_exit(&mut child, Some(&mut cdp));
-        drop(job);
+        super::release_browser_job(job);
         match server.join() {
             Ok(result) if probe.is_ok() => result?,
             Ok(_) => {}

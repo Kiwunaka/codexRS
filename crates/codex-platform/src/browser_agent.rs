@@ -578,6 +578,8 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
+    #[cfg(not(windows))]
+    use interprocess::local_socket::traits::Stream;
     use serde_json::{Value, json};
 
     use super::{
