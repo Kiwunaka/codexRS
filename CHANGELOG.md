@@ -8,8 +8,8 @@ All notable changes to codexRS are documented here. The project follows
 ### Added
 
 - Native per-occurrence chat Find navigation with Unicode-safe matching,
-  stable-style result ordinals, inline highlights for plain-text timeline
-  content, and active-message reveal for rendered Markdown.
+  stable-style result ordinals, and source-range inline highlights across
+  plain-text and rendered GFM Markdown without losing links or nested styling.
 
 ## [0.1.0-rc.1] - 2026-07-24
 
