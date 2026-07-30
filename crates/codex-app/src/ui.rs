@@ -6362,6 +6362,16 @@ impl WorkspaceView {
             self.open_composer_status(window, cx);
             return true;
         }
+        if command == "/shell" && self.state.selected_task_id.is_some() {
+            let value = "/shell ".to_owned();
+            self.dispatch(Action::ComposerChanged(value.clone()), cx);
+            self.composer.update(cx, |input, cx| {
+                input.set_value(value, window, cx);
+                input.focus(window, cx);
+            });
+            self.sync_composer_placeholder(window, cx);
+            return true;
+        }
         if !matches!(
             command,
             "/feedback" | "/goal" | "/init" | "/model" | "/plan" | "/reasoning"
@@ -20336,8 +20346,20 @@ impl WorkspaceView {
             };
         let has_input =
             !self.state.composer.trim().is_empty() || !self.state.composer_attachments.is_empty();
-        let can_submit = has_input && self.state.composer_error.is_none();
         let composer_text = self.state.composer.trim();
+        let shell_command = composer_text.strip_prefix("/shell").filter(|command| {
+            command.is_empty()
+                || command
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_whitespace)
+        });
+        let shell_command_mode = shell_command.is_some();
+        let shell_command_ready = shell_command.is_some_and(|command| !command.trim().is_empty());
+        let can_submit = has_input
+            && self.state.composer_error.is_none()
+            && (!shell_command_mode
+                || (shell_command_ready && self.state.composer_attachments.is_empty()));
         let active_timeline = self
             .state
             .selected_task_id
@@ -20436,6 +20458,15 @@ impl WorkspaceView {
             && reasoning_description.is_some()
             && !composer_text.is_empty()
             && "/reasoning".starts_with(composer_text);
+        let show_shell_command = has_selected_task
+            && !composer_text.is_empty()
+            && "/shell".starts_with(composer_text)
+            && !self
+                .state
+                .composer
+                .as_bytes()
+                .last()
+                .is_some_and(u8::is_ascii_whitespace);
         let show_status_command = !composer_text.is_empty() && "/status".starts_with(composer_text);
         let show_mcp_status = self.composer_mcp_status_open && composer_text == "/mcp";
         let show_project_picker = self.composer_project_picker_open && composer_text == "/project";
@@ -20452,6 +20483,7 @@ impl WorkspaceView {
             || show_plan_command
             || show_project_command
             || show_reasoning_command
+            || show_shell_command
             || !service_tier_commands.is_empty()
             || show_status_command
             || !skill_commands.is_empty();
@@ -20530,7 +20562,7 @@ impl WorkspaceView {
             })
             .collect::<Vec<_>>();
         let mut slash_commands =
-            Vec::with_capacity(13 + service_tier_commands.len() + skill_commands.len());
+            Vec::with_capacity(14 + service_tier_commands.len() + skill_commands.len());
         if show_chat_command {
             slash_commands.push(self.render_composer_slash_command(
                 "chat-slash-command",
@@ -20685,6 +20717,16 @@ impl WorkspaceView {
                     self.render_composer_service_tier_command(index, command, cx)
                 }),
         );
+        if show_shell_command {
+            slash_commands.push(self.render_composer_slash_command(
+                "shell-slash-command",
+                "/shell",
+                "Shell command",
+                "Run an explicit command with full system access".to_owned(),
+                IconName::SquareTerminal,
+                cx,
+            ));
+        }
         if show_status_command {
             slash_commands.push(self.render_composer_slash_command(
                 "status-slash-command",
@@ -20743,6 +20785,39 @@ impl WorkspaceView {
                     .border_color(cx.theme().border)
                     .bg(cx.theme().background)
                     .shadow_sm()
+                    .when(shell_command_mode, |composer| {
+                        composer.child(
+                            h_flex()
+                                .id("shell-command-warning")
+                                .px_3()
+                                .pt_3()
+                                .gap_2()
+                                .items_start()
+                                .child(
+                                    Icon::new(IconName::TriangleAlert)
+                                        .xsmall()
+                                        .text_color(cx.theme().warning),
+                                )
+                                .child(
+                                    v_flex()
+                                        .gap_0p5()
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(cx.theme().warning)
+                                                .child("Full system access"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child(
+                                                    "Runs outside the chat sandbox. Enter only a command you intend to execute.",
+                                                ),
+                                        ),
+                                ),
+                        )
+                    })
                     .when(!attachments.is_empty(), |composer| {
                         composer.child(
                             h_flex()
@@ -20779,6 +20854,7 @@ impl WorkspaceView {
                                             .tooltip("Add files or change mode")
                                             .small()
                                             .ghost()
+                                            .disabled(shell_command_mode)
                                             .dropdown_menu(move |menu, _, _| {
                                                 Self::composer_add_menu(
                                                     menu,
@@ -20794,7 +20870,10 @@ impl WorkspaceView {
                                             .w(px(permission_width))
                                             .menu_width(px(240.0))
                                             .placeholder("Permissions")
-                                            .disabled(self.synced_permission_items.is_empty()),
+                                            .disabled(
+                                                shell_command_mode
+                                                    || self.synced_permission_items.is_empty(),
+                                            ),
                                     )
                                     .when(plan_mode || show_goal_indicator, |controls| {
                                         controls.child(
@@ -20809,10 +20888,11 @@ impl WorkspaceView {
                                         controls.child(
                                             Button::new("composer-plan-mode")
                                                 .icon(IconName::Map)
-                                                .label("Plan")
-                                                .small()
-                                                .ghost()
-                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                 .label("Plan")
+                                                 .small()
+                                                 .ghost()
+                                                 .disabled(shell_command_mode)
+                                                 .on_click(cx.listener(|this, _, window, cx| {
                                                     this.dispatch(Action::TogglePlanMode, cx);
                                                     this.sync_composer_placeholder(window, cx);
                                                 })),
@@ -20822,10 +20902,11 @@ impl WorkspaceView {
                                         controls.child(
                                             Button::new("composer-goal-mode")
                                                 .icon(IconName::Asterisk)
-                                                .label("Goal")
-                                                .small()
-                                                .ghost()
-                                                .on_click(cx.listener(
+                                                 .label("Goal")
+                                                 .small()
+                                                 .ghost()
+                                                 .disabled(shell_command_mode)
+                                                 .on_click(cx.listener(
                                                     move |this, _, window, cx| {
                                                         if has_thread_goal {
                                                             this.dispatch(Action::ClearGoal, cx);
@@ -20851,26 +20932,33 @@ impl WorkspaceView {
                                         Select::new(&self.model_picker)
                                             .small()
                                             .w(px(model_width))
-                                            .menu_width(px(280.0))
-                                            .placeholder("Model")
-                                            .search_placeholder("Search models…")
-                                            .disabled(self.synced_model_items.is_empty()),
+                                             .menu_width(px(280.0))
+                                             .placeholder("Model")
+                                             .search_placeholder("Search models…")
+                                             .disabled(
+                                                 shell_command_mode
+                                                     || self.synced_model_items.is_empty(),
+                                             ),
                                     )
                                     .child(
                                         Select::new(&self.effort_picker)
                                             .small()
                                             .w(px(effort_width))
-                                            .menu_width(px(190.0))
-                                            .placeholder("Effort")
-                                            .disabled(self.synced_effort_items.is_empty()),
+                                             .menu_width(px(190.0))
+                                             .placeholder("Effort")
+                                             .disabled(
+                                                 shell_command_mode
+                                                     || self.synced_effort_items.is_empty(),
+                                             ),
                                     )
                                     .when(!self.synced_service_tier_items.is_empty(), |row| {
                                         row.child(
                                             Select::new(&self.service_tier_picker)
                                                 .small()
                                                 .w(px(service_tier_width))
-                                                .menu_width(px(250.0))
-                                                .placeholder("Speed"),
+                                                 .menu_width(px(250.0))
+                                                 .placeholder("Speed")
+                                                 .disabled(shell_command_mode),
                                         )
                                     })
                                     .child(if active_turn && !has_input {
@@ -20886,9 +20974,15 @@ impl WorkspaceView {
                                                 this.dispatch(Action::InterruptActiveTurn, cx);
                                             }))
                                     } else {
-                                        Button::new("send")
-                                            .icon(IconName::ArrowUp)
-                                            .tooltip(if active_turn { "Steer" } else { "Send" })
+                                         Button::new("send")
+                                             .icon(IconName::ArrowUp)
+                                             .tooltip(if shell_command_mode {
+                                                 "Run shell command"
+                                             } else if active_turn {
+                                                 "Steer"
+                                             } else {
+                                                 "Send"
+                                             })
                                             .primary()
                                             .w(px(36.0))
                                             .h(px(36.0))
@@ -37691,7 +37785,7 @@ fn composer_slash_command_for_prefix(
     if prefix.is_empty() {
         return None;
     }
-    const COMMANDS: [&str; 13] = [
+    const COMMANDS: [&str; 14] = [
         "/chat",
         "/compact",
         "/feedback",
@@ -37704,6 +37798,7 @@ fn composer_slash_command_for_prefix(
         "/plan",
         "/project",
         "/reasoning",
+        "/shell",
         "/status",
     ];
     let mut matches = COMMANDS
@@ -39824,6 +39919,14 @@ mod tests {
         );
         assert_eq!(
             composer_slash_command_for_prefix("/s", true, true, true),
+            None
+        );
+        assert_eq!(
+            composer_slash_command_for_prefix("/sh", true, true, true),
+            Some("/shell")
+        );
+        assert_eq!(
+            composer_slash_command_for_prefix("/st", true, true, true),
             Some("/status")
         );
         assert_eq!(
@@ -39832,6 +39935,10 @@ mod tests {
         );
         assert_eq!(
             composer_slash_command_for_prefix("/i", true, false, true),
+            None
+        );
+        assert_eq!(
+            composer_slash_command_for_prefix("/sh", false, true, true),
             None
         );
         assert_eq!(

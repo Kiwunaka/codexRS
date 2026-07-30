@@ -41,10 +41,11 @@ use codex_protocol::{
     ThreadReadParams, ThreadReadResponse, ThreadResumeParams, ThreadResumeResponse,
     ThreadRollbackParams, ThreadRollbackResponse, ThreadSearchParams, ThreadSearchResponse,
     ThreadSetNameParams, ThreadSettingsUpdateParams, ThreadSettingsUpdateResponse,
-    ThreadStartParams, ThreadStartResponse, ThreadTurnsListParams, ThreadTurnsListResponse,
-    ThreadUnarchiveParams, ThreadUnarchiveResponse, TurnInterruptParams, TurnStartParams,
-    TurnStartResponse, TurnSteerParams, decode_incoming, decode_result, encode_error_response,
-    encode_json_line, encode_success_response, encode_unsupported_request, read_bounded_frame,
+    ThreadShellCommandParams, ThreadShellCommandResponse, ThreadStartParams, ThreadStartResponse,
+    ThreadTurnsListParams, ThreadTurnsListResponse, ThreadUnarchiveParams, ThreadUnarchiveResponse,
+    TurnInterruptParams, TurnStartParams, TurnStartResponse, TurnSteerParams, decode_incoming,
+    decode_result, encode_error_response, encode_json_line, encode_success_response,
+    encode_unsupported_request, read_bounded_frame,
 };
 use crossbeam_channel::{Receiver as CrossbeamReceiver, Sender as CrossbeamSender, TrySendError};
 use serde::Serialize;
@@ -974,6 +975,14 @@ impl AppServerConnection {
     ) -> Result<ThreadCompactStartResponse, AppServerError> {
         self.require_initialized()?;
         self.request("thread/compact/start", params)
+    }
+
+    pub fn run_thread_shell_command(
+        &self,
+        params: ThreadShellCommandParams,
+    ) -> Result<ThreadShellCommandResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("thread/shellCommand", params)
     }
 
     pub fn archive_thread(&self, params: ThreadArchiveParams) -> Result<Value, AppServerError> {

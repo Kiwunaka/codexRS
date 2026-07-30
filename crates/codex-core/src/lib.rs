@@ -3938,6 +3938,10 @@ pub enum Action {
         task_id: String,
         message: String,
     },
+    ThreadShellCommandFailed {
+        task_id: String,
+        message: String,
+    },
     ThreadTokenUsageUpdated {
         task_id: String,
         last_total_tokens: i64,
@@ -4904,6 +4908,10 @@ pub enum Effect {
     },
     CompactThread {
         task_id: String,
+    },
+    RunThreadShellCommand {
+        task_id: String,
+        command: String,
     },
     ResumeTask {
         task_id: String,
@@ -8393,6 +8401,12 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.status_message = Some(bounded_string(message, MAX_COMPOSER_BYTES));
             Vec::new()
         }
+        Action::ThreadShellCommandFailed { task_id, message } => {
+            if state.selected_task_id.as_deref() == Some(task_id.as_str()) {
+                state.status_message = Some(bounded_string(message, MAX_COMPOSER_BYTES));
+            }
+            Vec::new()
+        }
         Action::ThreadTokenUsageUpdated {
             task_id,
             last_total_tokens,
@@ -9481,6 +9495,35 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.composer.clear();
                 state.composer_error = None;
                 return vec![Effect::CompactThread { task_id }];
+            }
+            if let Some(command) = text.strip_prefix("/shell")
+                && (command.is_empty()
+                    || command
+                        .as_bytes()
+                        .first()
+                        .is_some_and(u8::is_ascii_whitespace))
+            {
+                if !state.composer_attachments.is_empty() {
+                    state.composer_error =
+                        Some("Shell commands do not support attachments.".to_owned());
+                    return Vec::new();
+                }
+                let Some(task_id) = state.selected_task_id.clone() else {
+                    state.composer_error =
+                        Some("Open a chat before running a shell command.".to_owned());
+                    return Vec::new();
+                };
+                let command = command.trim();
+                if command.is_empty() {
+                    state.composer_error = Some("Enter a shell command to run.".to_owned());
+                    return Vec::new();
+                }
+                state.composer.clear();
+                state.composer_error = None;
+                return vec![Effect::RunThreadShellCommand {
+                    task_id,
+                    command: command.to_owned(),
+                }];
             }
             let permission_mode = state
                 .composer_controls
@@ -17674,6 +17717,52 @@ mod tests {
         assert_eq!(
             state.composer_error.as_deref(),
             Some("Compact is disabled while a chat is in progress.")
+        );
+    }
+
+    #[test]
+    fn shell_slash_command_is_explicit_and_preserves_shell_syntax() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        state
+            .timelines
+            .entry("t1".to_owned())
+            .or_default()
+            .active_turn_id = Some("turn-1".to_owned());
+        reduce(
+            &mut state,
+            Action::ComposerChanged("/shell git status --short | rg src".to_owned()),
+        );
+
+        assert_eq!(
+            reduce(&mut state, Action::SubmitComposer),
+            [Effect::RunThreadShellCommand {
+                task_id: "t1".to_owned(),
+                command: "git status --short | rg src".to_owned(),
+            }]
+        );
+        assert!(state.composer.is_empty());
+
+        reduce(&mut state, Action::ComposerChanged("/shell".to_owned()));
+        assert!(reduce(&mut state, Action::SubmitComposer).is_empty());
+        assert_eq!(
+            state.composer_error.as_deref(),
+            Some("Enter a shell command to run.")
+        );
+
+        state.composer_attachments.push(ComposerAttachment {
+            path: PathBuf::from("C:\\repo\\note.txt"),
+            name: "note.txt".to_owned(),
+            kind: ComposerAttachmentKind::Mention,
+        });
+        reduce(
+            &mut state,
+            Action::ComposerChanged("/shell echo ready".to_owned()),
+        );
+        assert!(reduce(&mut state, Action::SubmitComposer).is_empty());
+        assert_eq!(
+            state.composer_error.as_deref(),
+            Some("Shell commands do not support attachments.")
         );
     }
 

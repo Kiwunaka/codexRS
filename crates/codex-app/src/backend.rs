@@ -144,10 +144,11 @@ use codex_protocol::{
     ThreadGoalSetParams, ThreadGoalStatus as ProtocolThreadGoalStatus,
     ThreadGoalUpdatedNotification, ThreadItemsListParams, ThreadListParams, ThreadLoadedListParams,
     ThreadReadParams, ThreadResumeInitialTurnsPageParams, ThreadResumeParams, ThreadRollbackParams,
-    ThreadSearchParams, ThreadSetNameParams, ThreadSettingsUpdateParams, ThreadStartParams,
-    ThreadTokenUsageUpdatedNotification, ThreadTurnsListParams, ThreadUnarchiveParams,
-    ToolRequestUserInputAnswer, ToolRequestUserInputParams, ToolRequestUserInputResponse,
-    TurnDiffUpdatedNotification, TurnInterruptParams, TurnStartParams, TurnSteerParams, UserInput,
+    ThreadSearchParams, ThreadSetNameParams, ThreadSettingsUpdateParams, ThreadShellCommandParams,
+    ThreadStartParams, ThreadTokenUsageUpdatedNotification, ThreadTurnsListParams,
+    ThreadUnarchiveParams, ToolRequestUserInputAnswer, ToolRequestUserInputParams,
+    ToolRequestUserInputResponse, TurnDiffUpdatedNotification, TurnInterruptParams,
+    TurnStartParams, TurnSteerParams, UserInput,
 };
 use codex_storage::{
     BrowserDownloadRecordStatus, MAX_BROWSER_DOWNLOAD_RECORDS, Store, StoredBrowserDownload,
@@ -6042,6 +6043,23 @@ fn run_effect(
                     Action::CompactThreadFailed {
                         task_id,
                         message: "Could not compact this chat's context.".to_owned(),
+                    },
+                );
+            }
+        }
+        Effect::RunThreadShellCommand { task_id, command } => {
+            if app_server
+                .run_thread_shell_command(ThreadShellCommandParams {
+                    thread_id: task_id.clone(),
+                    command,
+                })
+                .is_err()
+            {
+                emit(
+                    events,
+                    Action::ThreadShellCommandFailed {
+                        task_id,
+                        message: "Could not run the shell command.".to_owned(),
                     },
                 );
             }
