@@ -27,24 +27,24 @@ use codex_core::{
     HookHandlerType as CoreHookHandlerType, HookIssue, HookProjectEntry,
     HookSource as CoreHookSource, HookTrustStatus as CoreHookTrustStatus, InspectorPane,
     IntegratedTerminalShell, KEYBOARD_SHORTCUT_COMMAND_IDS, KeyboardShortcutPreferences,
-    MAX_APPEARANCE_FONT_FAMILY_BYTES, MAX_ATTACHMENT_LABEL_BYTES, MAX_BACKGROUND_TERMINALS,
-    MAX_BROWSER_DOWNLOAD_PATH_BYTES, MAX_BROWSER_PERMISSION_ORIGIN_BYTES,
+    LocalProjectSummary, MAX_APPEARANCE_FONT_FAMILY_BYTES, MAX_ATTACHMENT_LABEL_BYTES,
+    MAX_BACKGROUND_TERMINALS, MAX_BROWSER_DOWNLOAD_PATH_BYTES, MAX_BROWSER_PERMISSION_ORIGIN_BYTES,
     MAX_BROWSER_SITE_PERMISSIONS, MAX_COMPOSER_ATTACHMENTS, MAX_COMPUTER_ALLOWED_APPS,
     MAX_COMPUTER_APP_ID_BYTES, MAX_FUZZY_FILE_PATH_BYTES, MAX_FUZZY_FILE_QUERY_BYTES,
     MAX_FUZZY_FILE_RESULTS, MAX_FUZZY_FILE_ROOTS, MAX_GIT_BRANCH_PREFIX_BYTES, MAX_GIT_DIFF_BYTES,
     MAX_GIT_INSTRUCTIONS_BYTES, MAX_GIT_SHA_BYTES, MAX_HOOK_FIELD_BYTES, MAX_HOOK_ISSUES,
     MAX_HOOK_ITEMS, MAX_HOOK_PROJECTS, MAX_KEYBOARD_SHORTCUT_ACCELERATOR_BYTES,
-    MAX_KEYBOARD_SHORTCUTS_PER_COMMAND, MAX_MCP_FORM_FIELDS, MAX_MCP_FORM_IMAGE_DATA_URL_BYTES,
-    MAX_MCP_FORM_OPTIONS, MAX_MCP_FORM_VALUE_BYTES, MAX_MCP_SERVER_FIELD_BYTES,
-    MAX_MCP_SERVER_LIST_ITEMS, MAX_PENDING_APPROVALS, MAX_RETRYABLE_TURN_MESSAGES,
-    MAX_TERMINAL_TABS, MAX_TURN_DIFF_BYTES, MAX_USER_INPUT_OPTIONS, MAX_USER_INPUT_QUESTIONS,
-    MAX_USER_INPUT_VALUE_BYTES, MAX_VISIBLE_THREADS, MAX_WORKTREE_ROOT_BYTES, MainRoute,
-    MarketplaceSourceCard, MarketplaceUpgradeFailure, McpAuthStatus as CoreMcpAuthStatus,
-    McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
-    McpElicitationContent, McpElicitationDecision, McpElicitationValue, McpFormElicitation,
-    McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpFormOption, McpFormStringFormat,
-    McpResourceCard, McpResourceContentCard, McpResourceTemplateCard, McpServerCard,
-    McpServerDraft, McpServerInfoCard,
+    MAX_KEYBOARD_SHORTCUTS_PER_COMMAND, MAX_LOCAL_PROJECTS, MAX_MCP_FORM_FIELDS,
+    MAX_MCP_FORM_IMAGE_DATA_URL_BYTES, MAX_MCP_FORM_OPTIONS, MAX_MCP_FORM_VALUE_BYTES,
+    MAX_MCP_SERVER_FIELD_BYTES, MAX_MCP_SERVER_LIST_ITEMS, MAX_PENDING_APPROVALS,
+    MAX_RETRYABLE_TURN_MESSAGES, MAX_TERMINAL_TABS, MAX_TURN_DIFF_BYTES, MAX_USER_INPUT_OPTIONS,
+    MAX_USER_INPUT_QUESTIONS, MAX_USER_INPUT_VALUE_BYTES, MAX_VISIBLE_THREADS,
+    MAX_WORKTREE_ROOT_BYTES, MainRoute, MarketplaceSourceCard, MarketplaceUpgradeFailure,
+    McpAuthStatus as CoreMcpAuthStatus, McpBrowserOriginElicitation, McpBrowserResourceElicitation,
+    McpElicitation, McpElicitationContent, McpElicitationDecision, McpElicitationValue,
+    McpFormElicitation, McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpFormOption,
+    McpFormStringFormat, McpResourceCard, McpResourceContentCard, McpResourceTemplateCard,
+    McpServerCard, McpServerDraft, McpServerInfoCard,
     McpServerStartupFailureReason as CoreMcpServerStartupFailureReason,
     McpServerStartupState as CoreMcpServerStartupState, McpToolCard, McpTransportKind,
     McpUrlElicitation, ModelOption, NetworkApprovalContext as CoreNetworkApprovalContext,
@@ -1901,12 +1901,20 @@ fn open_storage(events: &Sender<Action>) -> Option<Store> {
             .preference(PINNED_TASK_IDS_PREFERENCE)?
             .and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
             .unwrap_or_default();
-        let recent_workspace = store
-            .recent_workspaces(1, 0)?
-            .items
-            .into_iter()
-            .map(|workspace| workspace.path)
+        let recent_workspaces = store.recent_workspaces(MAX_LOCAL_PROJECTS, 0)?.items;
+        let recent_workspace = recent_workspaces
+            .iter()
+            .map(|workspace| workspace.path.clone())
             .find(|path| path.is_absolute() && path.is_dir());
+        let local_projects = recent_workspaces
+            .into_iter()
+            .map(|workspace| LocalProjectSummary {
+                path: workspace.path,
+                name: workspace.name.unwrap_or_default(),
+                pinned: workspace.pinned,
+                last_opened_at: workspace.last_opened_at,
+            })
+            .collect::<Vec<_>>();
         Ok((
             store,
             route,
@@ -1923,6 +1931,7 @@ fn open_storage(events: &Sender<Action>) -> Option<Store> {
             git_include_unstaged,
             pinned_task_ids,
             recent_workspace,
+            local_projects,
         ))
     }) {
         Ok((
@@ -1941,6 +1950,7 @@ fn open_storage(events: &Sender<Action>) -> Option<Store> {
             git_include_unstaged,
             pinned_task_ids,
             recent_workspace,
+            local_projects,
         )) => {
             emit(
                 events,
@@ -1965,6 +1975,7 @@ fn open_storage(events: &Sender<Action>) -> Option<Store> {
                     recent_workspace,
                 },
             );
+            emit(events, Action::LocalProjectsLoaded(local_projects));
             if let Some(preferences) = appearance_preferences
                 .as_deref()
                 .and_then(parse_appearance_preferences)
@@ -3538,6 +3549,36 @@ fn run_effect(
             let result = storage.as_mut().map_or(Ok(()), |store| {
                 store.remember_workspace(path, unix_timestamp())
             });
+            if let Err(error) = result {
+                storage.take();
+                emit(events, Action::StorageFailed(error.to_string()));
+            }
+            return;
+        }
+        Effect::RenameLocalProject { path, name } => {
+            let result = storage.as_mut().map_or(Ok(()), |store| {
+                store.rename_workspace(path, name, unix_timestamp())
+            });
+            if let Err(error) = result {
+                storage.take();
+                emit(events, Action::StorageFailed(error.to_string()));
+            }
+            return;
+        }
+        Effect::SetLocalProjectPinned { path, pinned } => {
+            let result = storage
+                .as_mut()
+                .map_or(Ok(()), |store| store.set_workspace_pinned(path, *pinned));
+            if let Err(error) = result {
+                storage.take();
+                emit(events, Action::StorageFailed(error.to_string()));
+            }
+            return;
+        }
+        Effect::RemoveLocalProject { path } => {
+            let result = storage
+                .as_mut()
+                .map_or(Ok(()), |store| store.remove_workspace(path));
             if let Err(error) = result {
                 storage.take();
                 emit(events, Action::StorageFailed(error.to_string()));
@@ -7012,6 +7053,9 @@ fn run_effect(
         | Effect::PersistGitIncludeUnstaged(_)
         | Effect::PersistPinnedTasks { .. }
         | Effect::RememberWorkspace { .. }
+        | Effect::RenameLocalProject { .. }
+        | Effect::SetLocalProjectPinned { .. }
+        | Effect::RemoveLocalProject { .. }
         | Effect::ScheduleGoalContinuation { .. }
         | Effect::ConfigureComputerUse { .. }
         | Effect::StartBrowser { .. }

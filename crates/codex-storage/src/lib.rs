@@ -15,9 +15,11 @@ pub const DIAGNOSTIC_LOG_BUDGET_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_PREFERENCE_KEY_BYTES: usize = 128;
 pub const MAX_PREFERENCE_VALUE_BYTES: usize = 64 * 1024;
 pub const MAX_WORKSPACE_PATH_BYTES: usize = 64 * 1024;
+pub const MAX_LOCAL_PROJECTS: usize = 64;
+pub const MAX_LOCAL_PROJECT_NAME_BYTES: usize = 256;
 pub const MAX_BROWSER_DOWNLOAD_RECORDS: usize = 200;
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const MAX_BROWSER_DOWNLOAD_ID_BYTES: usize = 256;
 const MAX_BROWSER_DOWNLOAD_CONTEXT_BYTES: usize = 256;
 const MAX_BROWSER_DOWNLOAD_FILENAME_BYTES: usize = 512;
@@ -50,6 +52,7 @@ pub enum StoreError {
     PreferenceKeyTooLarge,
     PreferenceValueTooLarge,
     WorkspacePathTooLarge,
+    WorkspaceNameInvalid,
     BrowserDownloadInvalid,
 }
 
@@ -70,6 +73,7 @@ impl fmt::Display for StoreError {
             Self::WorkspacePathTooLarge => {
                 formatter.write_str("workspace path exceeds the 64 KiB storage limit")
             }
+            Self::WorkspaceNameInvalid => formatter.write_str("workspace name is invalid"),
             Self::BrowserDownloadInvalid => {
                 formatter.write_str("browser download record is invalid")
             }
@@ -87,6 +91,7 @@ impl Error for StoreError {
             | Self::PreferenceKeyTooLarge
             | Self::PreferenceValueTooLarge
             | Self::WorkspacePathTooLarge
+            | Self::WorkspaceNameInvalid
             | Self::BrowserDownloadInvalid => None,
         }
     }
@@ -108,6 +113,8 @@ impl From<rusqlite::Error> for StoreError {
 pub struct RecentWorkspace {
     pub path: PathBuf,
     pub last_opened_at: i64,
+    pub name: Option<String>,
+    pub pinned: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -230,13 +237,69 @@ impl Store {
         if encoded.len() > MAX_WORKSPACE_PATH_BYTES {
             return Err(StoreError::WorkspacePathTooLarge);
         }
-        self.connection.execute(
+        let transaction = self.connection.transaction()?;
+        transaction.execute(
             "INSERT INTO recent_workspaces(path, last_opened_at)
              VALUES (?1, ?2)
              ON CONFLICT(path) DO UPDATE
              SET last_opened_at = excluded.last_opened_at",
             params![encoded, last_opened_at],
         )?;
+        transaction.execute(
+            "DELETE FROM recent_workspaces
+             WHERE path NOT IN (
+                SELECT path FROM recent_workspaces
+                ORDER BY pinned DESC, last_opened_at DESC, path ASC
+                LIMIT ?1
+             )",
+            [i64::try_from(MAX_LOCAL_PROJECTS).unwrap_or(i64::MAX)],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn rename_workspace(
+        &mut self,
+        path: &Path,
+        name: &str,
+        updated_at: i64,
+    ) -> Result<(), StoreError> {
+        self.ensure_owner()?;
+        let name = validate_workspace_name(name)?;
+        let encoded = encode_path(path);
+        if encoded.len() > MAX_WORKSPACE_PATH_BYTES {
+            return Err(StoreError::WorkspacePathTooLarge);
+        }
+        self.connection.execute(
+            "UPDATE recent_workspaces
+             SET name = ?2, last_opened_at = ?3
+             WHERE path = ?1",
+            params![encoded, name, updated_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_workspace_pinned(&mut self, path: &Path, pinned: bool) -> Result<(), StoreError> {
+        self.ensure_owner()?;
+        let encoded = encode_path(path);
+        if encoded.len() > MAX_WORKSPACE_PATH_BYTES {
+            return Err(StoreError::WorkspacePathTooLarge);
+        }
+        self.connection.execute(
+            "UPDATE recent_workspaces SET pinned = ?2 WHERE path = ?1",
+            params![encoded, i64::from(pinned)],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_workspace(&mut self, path: &Path) -> Result<(), StoreError> {
+        self.ensure_owner()?;
+        let encoded = encode_path(path);
+        if encoded.len() > MAX_WORKSPACE_PATH_BYTES {
+            return Err(StoreError::WorkspacePathTooLarge);
+        }
+        self.connection
+            .execute("DELETE FROM recent_workspaces WHERE path = ?1", [encoded])?;
         Ok(())
     }
 
@@ -250,7 +313,7 @@ impl Store {
         let sql_limit = i64::try_from(limit).unwrap_or(i64::MAX);
         let sql_offset = i64::try_from(offset).unwrap_or(i64::MAX);
         let mut statement = self.connection.prepare_cached(
-            "SELECT path, last_opened_at
+            "SELECT path, last_opened_at, name, pinned
              FROM recent_workspaces
              ORDER BY last_opened_at DESC, path ASC
              LIMIT ?1 OFFSET ?2",
@@ -258,14 +321,18 @@ impl Store {
         let rows = statement.query_map(params![sql_limit, sql_offset], |row| {
             let encoded: Vec<u8> = row.get(0)?;
             let last_opened_at = row.get(1)?;
-            Ok((encoded, last_opened_at))
+            let name = row.get(2)?;
+            let pinned: i64 = row.get(3)?;
+            Ok((encoded, last_opened_at, name, pinned != 0))
         })?;
         let mut items = Vec::with_capacity(limit);
         for row in rows {
-            let (encoded, last_opened_at) = row?;
+            let (encoded, last_opened_at, name, pinned) = row?;
             items.push(RecentWorkspace {
                 path: decode_path(encoded),
                 last_opened_at,
+                name,
+                pinned,
             });
         }
         let next_offset = (items.len() == limit).then(|| offset.saturating_add(items.len()));
@@ -426,7 +493,9 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
              ) STRICT;
              CREATE TABLE recent_workspaces (
                 path BLOB PRIMARY KEY NOT NULL,
-                last_opened_at INTEGER NOT NULL
+                last_opened_at INTEGER NOT NULL,
+                name TEXT,
+                pinned INTEGER NOT NULL DEFAULT 0 CHECK(pinned IN (0, 1))
              ) STRICT;
              CREATE TABLE browser_downloads (
                 id TEXT PRIMARY KEY NOT NULL,
@@ -442,7 +511,7 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
              ) STRICT;
              CREATE INDEX browser_downloads_updated
              ON browser_downloads(updated_at_ms DESC, id ASC);
-             PRAGMA user_version = 2;",
+             PRAGMA user_version = 3;",
         )?;
         transaction.commit()?;
     }
@@ -463,7 +532,20 @@ fn migrate(connection: &mut Connection) -> Result<(), StoreError> {
              ) STRICT;
              CREATE INDEX browser_downloads_updated
              ON browser_downloads(updated_at_ms DESC, id ASC);
-             PRAGMA user_version = 2;",
+             ALTER TABLE recent_workspaces ADD COLUMN name TEXT;
+             ALTER TABLE recent_workspaces
+             ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0 CHECK(pinned IN (0, 1));
+             PRAGMA user_version = 3;",
+        )?;
+        transaction.commit()?;
+    }
+    if version == 2 {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(
+            "ALTER TABLE recent_workspaces ADD COLUMN name TEXT;
+             ALTER TABLE recent_workspaces
+             ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0 CHECK(pinned IN (0, 1));
+             PRAGMA user_version = 3;",
         )?;
         transaction.commit()?;
     }
@@ -478,6 +560,17 @@ fn validate_preference(key: &str, value: &str) -> Result<(), StoreError> {
         return Err(StoreError::PreferenceValueTooLarge);
     }
     Ok(())
+}
+
+fn validate_workspace_name(name: &str) -> Result<&str, StoreError> {
+    let name = name.trim();
+    if name.is_empty()
+        || name.len() > MAX_LOCAL_PROJECT_NAME_BYTES
+        || name.chars().any(char::is_control)
+    {
+        return Err(StoreError::WorkspaceNameInvalid);
+    }
+    Ok(name)
 }
 
 fn validate_browser_download(download: &StoredBrowserDownload) -> Result<(), StoreError> {
@@ -564,8 +657,8 @@ mod tests {
 
     use super::{
         BrowserDownloadRecordStatus, DEFAULT_HISTORY_PAGE_SIZE, MAX_BROWSER_DOWNLOAD_RECORDS,
-        MAX_HISTORY_PAGE_SIZE, MAX_INLINE_EVENT_BYTES, Store, StoredBrowserDownload,
-        bounded_history_page_size, validate_inline_event_size,
+        MAX_HISTORY_PAGE_SIZE, MAX_INLINE_EVENT_BYTES, MAX_LOCAL_PROJECTS, Store,
+        StoredBrowserDownload, bounded_history_page_size, validate_inline_event_size,
     };
 
     #[test]
@@ -603,6 +696,8 @@ mod tests {
         let page = store.recent_workspaces(10, 0)?;
         assert_eq!(page.items.len(), 1);
         assert_eq!(page.items[0].path, Path::new(r"C:\workspace\кириллица"));
+        assert_eq!(page.items[0].name, None);
+        assert!(!page.items[0].pinned);
         assert_eq!(page.next_offset, None);
         Ok(())
     }
@@ -622,6 +717,44 @@ mod tests {
         let second = store.recent_workspaces(2, 2)?;
         assert_eq!(second.items[0].path, Path::new("one"));
         assert_eq!(second.next_offset, None);
+        Ok(())
+    }
+
+    #[test]
+    fn local_project_registry_is_bounded_renameable_pinnable_and_removable()
+    -> Result<(), Box<dyn Error>> {
+        let mut store = Store::open_in_memory()?;
+        for index in 0..=MAX_LOCAL_PROJECTS {
+            store.remember_workspace(
+                Path::new(&format!("project-{index:02}")),
+                i64::try_from(index).unwrap_or_default(),
+            )?;
+        }
+
+        let projects = store.recent_workspaces(MAX_LOCAL_PROJECTS, 0)?;
+        assert_eq!(projects.items.len(), MAX_LOCAL_PROJECTS);
+        assert!(
+            projects
+                .items
+                .iter()
+                .all(|project| project.path != Path::new("project-00"))
+        );
+
+        let path = Path::new("project-64");
+        store.rename_workspace(path, "  Native client  ", 100)?;
+        store.set_workspace_pinned(path, true)?;
+        let project = store.recent_workspaces(1, 0)?.items.remove(0);
+        assert_eq!(project.name.as_deref(), Some("Native client"));
+        assert!(project.pinned);
+
+        store.remove_workspace(path)?;
+        assert!(
+            store
+                .recent_workspaces(MAX_LOCAL_PROJECTS, 0)?
+                .items
+                .iter()
+                .all(|project| project.path != path)
+        );
         Ok(())
     }
 
@@ -689,8 +822,53 @@ mod tests {
              ) STRICT;
              PRAGMA user_version = 1;",
         )?;
-        let store = Store::from_connection(connection)?;
+        let mut store = Store::from_connection(connection)?;
         assert!(store.browser_downloads(10, 0)?.items.is_empty());
+        store.remember_workspace(Path::new("project"), 1)?;
+        store.rename_workspace(Path::new("project"), "Migrated", 2)?;
+        store.set_workspace_pinned(Path::new("project"), true)?;
+        let project = store.recent_workspaces(1, 0)?.items.remove(0);
+        assert_eq!(project.name.as_deref(), Some("Migrated"));
+        assert!(project.pinned);
+        Ok(())
+    }
+
+    #[test]
+    fn version_two_storage_migrates_local_project_metadata() -> Result<(), Box<dyn Error>> {
+        let connection = Connection::open_in_memory()?;
+        connection.execute_batch(
+            "CREATE TABLE ui_preferences (
+                key TEXT PRIMARY KEY NOT NULL,
+                value TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+             ) STRICT;
+             CREATE TABLE recent_workspaces (
+                path BLOB PRIMARY KEY NOT NULL,
+                last_opened_at INTEGER NOT NULL
+             ) STRICT;
+             CREATE TABLE browser_downloads (
+                id TEXT PRIMARY KEY NOT NULL,
+                context_id TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                path BLOB NOT NULL,
+                received_bytes INTEGER NOT NULL CHECK(received_bytes >= 0),
+                started_at_ms INTEGER NOT NULL CHECK(started_at_ms >= 0),
+                status INTEGER NOT NULL CHECK(status IN (0, 1, 2)),
+                total_bytes INTEGER NOT NULL CHECK(total_bytes >= 0),
+                updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms >= 0),
+                user_initiated INTEGER NOT NULL CHECK(user_initiated IN (0, 1))
+             ) STRICT;
+             CREATE INDEX browser_downloads_updated
+             ON browser_downloads(updated_at_ms DESC, id ASC);
+             PRAGMA user_version = 2;",
+        )?;
+        let mut store = Store::from_connection(connection)?;
+        store.remember_workspace(Path::new("project"), 1)?;
+        store.rename_workspace(Path::new("project"), "Migrated", 2)?;
+        assert_eq!(
+            store.recent_workspaces(1, 0)?.items[0].name.as_deref(),
+            Some("Migrated")
+        );
         Ok(())
     }
 }
