@@ -1,6 +1,6 @@
 use std::error::Error;
 use std::fmt;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
@@ -43,8 +43,10 @@ pub enum ArtifactError {
     NotAFile,
     UnsupportedExtension,
     FileChanged,
+    InvalidDestination,
     Io(io::Error),
     Launch(io::Error),
+    Save(io::Error),
 }
 
 impl fmt::Display for ArtifactError {
@@ -60,8 +62,12 @@ impl fmt::Display for ArtifactError {
                 formatter.write_str("this output type is not supported by the stable viewer")
             }
             Self::FileChanged => formatter.write_str("the output changed while it was being read"),
+            Self::InvalidDestination => {
+                formatter.write_str("the selected download destination is invalid")
+            }
             Self::Io(_) => formatter.write_str("the output file could not be read"),
             Self::Launch(_) => formatter.write_str("the file manager could not be opened"),
+            Self::Save(_) => formatter.write_str("the output file could not be saved"),
         }
     }
 }
@@ -69,13 +75,14 @@ impl fmt::Display for ArtifactError {
 impl Error for ArtifactError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Io(error) | Self::Launch(error) => Some(error),
+            Self::Io(error) | Self::Launch(error) | Self::Save(error) => Some(error),
             Self::InvalidWorkspace
             | Self::InvalidPath
             | Self::PathOutsideWorkspace
             | Self::NotAFile
             | Self::UnsupportedExtension
-            | Self::FileChanged => None,
+            | Self::FileChanged
+            | Self::InvalidDestination => None,
         }
     }
 }
@@ -235,6 +242,42 @@ pub fn reveal_artifact(workspace: &Path, requested_path: &Path) -> Result<(), Ar
     open_workspace_path(workspace, requested_path)
 }
 
+pub fn save_artifact_copy(
+    workspace: &Path,
+    requested_path: &Path,
+    destination: &Path,
+) -> Result<(), ArtifactError> {
+    let source = resolve_artifact_path(workspace, requested_path)?;
+    let source_metadata = source.metadata().map_err(ArtifactError::Io)?;
+    if !source_metadata.is_file() {
+        return Err(ArtifactError::NotAFile);
+    }
+    if destination.as_os_str().is_empty()
+        || !destination.is_absolute()
+        || destination.to_string_lossy().len() > MAX_ARTIFACT_PATH_BYTES
+        || destination.file_name().is_none()
+    {
+        return Err(ArtifactError::InvalidDestination);
+    }
+    let destination_parent = destination
+        .parent()
+        .filter(|parent| parent.is_dir())
+        .ok_or(ArtifactError::InvalidDestination)?;
+    if !destination_parent.is_absolute() {
+        return Err(ArtifactError::InvalidDestination);
+    }
+    if destination.exists()
+        && destination
+            .canonicalize()
+            .is_ok_and(|existing| existing == source)
+    {
+        return Err(ArtifactError::InvalidDestination);
+    }
+    fs::copy(source, destination)
+        .map(|_| ())
+        .map_err(ArtifactError::Save)
+}
+
 pub fn open_workspace_path(workspace: &Path, requested_path: &Path) -> Result<(), ArtifactError> {
     let path = resolve_artifact_path(workspace, requested_path)?;
     let metadata = path.metadata().map_err(ArtifactError::Io)?;
@@ -356,7 +399,7 @@ fn reap_child(mut child: Child) {
 mod tests {
     use super::{
         ArtifactError, ArtifactFileKind, MAX_ARTIFACT_TEXT_BYTES, inspect_artifact,
-        inspect_workspace_file, is_supported_artifact_path,
+        inspect_workspace_file, is_supported_artifact_path, save_artifact_copy,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -420,6 +463,42 @@ mod tests {
         fs::remove_file(outside)?;
         fs::remove_file(source)?;
         fs::remove_file(binary)?;
+        fs::remove_dir(root)?;
+        fs::remove_dir(sandbox)?;
+        Ok(())
+    }
+
+    #[test]
+    fn artifact_copy_is_workspace_confined() -> Result<(), Box<dyn std::error::Error>> {
+        let unique = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+        let sandbox =
+            std::env::temp_dir().join(format!("codexrs-download-{}-{unique}", std::process::id()));
+        let root = sandbox.join("workspace");
+        fs::create_dir_all(&root)?;
+        let source = root.join("generated.png");
+        let outside = sandbox.join("outside.png");
+        let destination = sandbox.join("Codex Image.png");
+        fs::write(&source, b"generated image")?;
+        fs::write(&outside, b"outside")?;
+
+        save_artifact_copy(
+            &root,
+            PathBuf::from("generated.png").as_path(),
+            &destination,
+        )?;
+        assert_eq!(fs::read(&destination)?, b"generated image");
+        assert!(matches!(
+            save_artifact_copy(&root, &outside, &sandbox.join("blocked.png")),
+            Err(ArtifactError::PathOutsideWorkspace)
+        ));
+        assert!(matches!(
+            save_artifact_copy(&root, &source, &source),
+            Err(ArtifactError::InvalidDestination)
+        ));
+
+        fs::remove_file(source)?;
+        fs::remove_file(outside)?;
+        fs::remove_file(destination)?;
         fs::remove_dir(root)?;
         fs::remove_dir(sandbox)?;
         Ok(())
