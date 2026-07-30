@@ -252,6 +252,12 @@ pub enum GitHubPullRequestReviewEvent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitHubPullRequestReviewState {
+    Draft,
+    Ready,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GitHubPullRequestMergeMethod {
     Merge,
     Squash,
@@ -324,6 +330,7 @@ pub enum GitHubError {
     DiffTooLarge,
     CommentFailed(ProcessError),
     ReviewFailed(ProcessError),
+    UpdateFailed(ProcessError),
     MergeFailed(ProcessError),
     CreateFailed(ProcessError),
     OpenFailed(ProcessError),
@@ -369,6 +376,9 @@ impl fmt::Display for GitHubError {
             Self::ReviewFailed(error) => {
                 write!(formatter, "Failed to submit pull request review: {error}")
             }
+            Self::UpdateFailed(error) => {
+                write!(formatter, "Failed to update pull request: {error}")
+            }
             Self::MergeFailed(error) => {
                 write!(formatter, "Failed to merge pull request: {error}")
             }
@@ -393,6 +403,7 @@ impl Error for GitHubError {
             | Self::HeadRevisionFailed(error)
             | Self::CommentFailed(error)
             | Self::ReviewFailed(error)
+            | Self::UpdateFailed(error)
             | Self::MergeFailed(error)
             | Self::CreateFailed(error)
             | Self::OpenFailed(error) => Some(error),
@@ -625,12 +636,7 @@ pub fn submit_pull_request_review(
     {
         return Err(GitHubError::InvalidInput);
     }
-    let repository = format!("{}/{}", identity.owner, identity.repository);
-    let number = identity.number.to_string();
-    let actual_head_revision = pull_request_head_revision(root, &number, &repository)?;
-    if actual_head_revision != expected_head_revision {
-        return Err(GitHubError::HeadChanged);
-    }
+    verify_pull_request_head(root, identity, expected_head_revision)?;
     let args = pull_request_review_args(identity, expected_head_revision, event, body);
     let string_args = args.iter().map(String::as_str).collect::<Vec<_>>();
     gh_output_with_limit(
@@ -641,6 +647,97 @@ pub fn submit_pull_request_review(
     )
     .map_err(|error| match error {
         GitHubError::Process(error) => GitHubError::ReviewFailed(error),
+        error => error,
+    })?;
+    Ok(())
+}
+
+pub fn set_pull_request_review_state(
+    root: &Path,
+    identity: &GitHubPullRequestIdentity,
+    expected_head_revision: &str,
+    state: GitHubPullRequestReviewState,
+) -> Result<(), GitHubError> {
+    require_available(root)?;
+    let expected_head_revision = expected_head_revision.trim();
+    if !valid_identity(identity) || !valid_head_revision(expected_head_revision) {
+        return Err(GitHubError::InvalidInput);
+    }
+    verify_pull_request_head(root, identity, expected_head_revision)?;
+    let args = pull_request_review_state_args(identity, state);
+    let string_args = args.iter().map(String::as_str).collect::<Vec<_>>();
+    gh_output_with_limit(
+        root,
+        &string_args,
+        MAX_GH_STDOUT_BYTES,
+        GH_OPERATION_TIMEOUT,
+    )
+    .map_err(|error| match error {
+        GitHubError::Process(error) => GitHubError::UpdateFailed(error),
+        error => error,
+    })?;
+    Ok(())
+}
+
+pub fn update_pull_request_title(
+    root: &Path,
+    identity: &GitHubPullRequestIdentity,
+    expected_head_revision: &str,
+    title: &str,
+) -> Result<(), GitHubError> {
+    require_available(root)?;
+    let expected_head_revision = expected_head_revision.trim();
+    let title = title.trim();
+    if !valid_identity(identity)
+        || !valid_head_revision(expected_head_revision)
+        || title.is_empty()
+        || title.chars().count() > MAX_GH_TITLE_CHARS
+        || title.chars().any(char::is_control)
+    {
+        return Err(GitHubError::InvalidInput);
+    }
+    verify_pull_request_head(root, identity, expected_head_revision)?;
+    let args = pull_request_title_args(identity, title);
+    let string_args = args.iter().map(String::as_str).collect::<Vec<_>>();
+    gh_output_with_limit(
+        root,
+        &string_args,
+        MAX_GH_STDOUT_BYTES,
+        GH_OPERATION_TIMEOUT,
+    )
+    .map_err(|error| match error {
+        GitHubError::Process(error) => GitHubError::UpdateFailed(error),
+        error => error,
+    })?;
+    Ok(())
+}
+
+pub fn update_pull_request_body(
+    root: &Path,
+    identity: &GitHubPullRequestIdentity,
+    expected_head_revision: &str,
+    body: &str,
+) -> Result<(), GitHubError> {
+    require_available(root)?;
+    let expected_head_revision = expected_head_revision.trim();
+    if !valid_identity(identity)
+        || !valid_head_revision(expected_head_revision)
+        || body.chars().count() > MAX_GH_BODY_CHARS
+        || body.contains('\0')
+    {
+        return Err(GitHubError::InvalidInput);
+    }
+    verify_pull_request_head(root, identity, expected_head_revision)?;
+    let args = pull_request_body_args(identity, body);
+    let string_args = args.iter().map(String::as_str).collect::<Vec<_>>();
+    gh_output_with_limit(
+        root,
+        &string_args,
+        MAX_GH_STDOUT_BYTES,
+        GH_OPERATION_TIMEOUT,
+    )
+    .map_err(|error| match error {
+        GitHubError::Process(error) => GitHubError::UpdateFailed(error),
         error => error,
     })?;
     Ok(())
@@ -715,6 +812,49 @@ fn pull_request_review_args(
     args
 }
 
+fn pull_request_review_state_args(
+    identity: &GitHubPullRequestIdentity,
+    state: GitHubPullRequestReviewState,
+) -> Vec<String> {
+    let mut args = vec![
+        "pr".to_owned(),
+        "ready".to_owned(),
+        identity.number.to_string(),
+    ];
+    if state == GitHubPullRequestReviewState::Draft {
+        args.push("--undo".to_owned());
+    }
+    args.extend([
+        "--repo".to_owned(),
+        format!("{}/{}", identity.owner, identity.repository),
+    ]);
+    args
+}
+
+fn pull_request_title_args(identity: &GitHubPullRequestIdentity, title: &str) -> Vec<String> {
+    vec![
+        "pr".to_owned(),
+        "edit".to_owned(),
+        identity.number.to_string(),
+        "--title".to_owned(),
+        title.to_owned(),
+        "--repo".to_owned(),
+        format!("{}/{}", identity.owner, identity.repository),
+    ]
+}
+
+fn pull_request_body_args(identity: &GitHubPullRequestIdentity, body: &str) -> Vec<String> {
+    vec![
+        "pr".to_owned(),
+        "edit".to_owned(),
+        identity.number.to_string(),
+        "--body".to_owned(),
+        body.to_owned(),
+        "--repo".to_owned(),
+        format!("{}/{}", identity.owner, identity.repository),
+    ]
+}
+
 fn pull_request_merge_args(
     identity: &GitHubPullRequestIdentity,
     expected_head_revision: &str,
@@ -734,6 +874,20 @@ fn pull_request_merge_args(
         "--repo".to_owned(),
         format!("{}/{}", identity.owner, identity.repository),
     ]
+}
+
+fn verify_pull_request_head(
+    root: &Path,
+    identity: &GitHubPullRequestIdentity,
+    expected_head_revision: &str,
+) -> Result<(), GitHubError> {
+    let repository = format!("{}/{}", identity.owner, identity.repository);
+    let number = identity.number.to_string();
+    let actual_head_revision = pull_request_head_revision(root, &number, &repository)?;
+    if actual_head_revision != expected_head_revision {
+        return Err(GitHubError::HeadChanged);
+    }
+    Ok(())
 }
 
 fn pull_request_head_revision(
@@ -1947,9 +2101,11 @@ mod tests {
     use super::{
         GitHubCiStatus, GitHubCreatePullRequest, GitHubPullRequestIdentity,
         GitHubPullRequestLifecycle, GitHubPullRequestMergeMethod, GitHubPullRequestRelationship,
-        GitHubPullRequestReviewEvent, GitHubPullRequestSearchFilters, PullRequestSearchResponse,
-        create_pull_request_args, first_url, pull_request_comment_args, pull_request_merge_args,
-        pull_request_number, pull_request_review_args, pull_request_search_query,
+        GitHubPullRequestReviewEvent, GitHubPullRequestReviewState, GitHubPullRequestSearchFilters,
+        PullRequestSearchResponse, create_pull_request_args, first_url, pull_request_body_args,
+        pull_request_comment_args, pull_request_merge_args, pull_request_number,
+        pull_request_review_args, pull_request_review_state_args, pull_request_search_query,
+        pull_request_title_args,
     };
 
     #[test]
@@ -2060,6 +2216,38 @@ mod tests {
                 "--squash",
                 "--match-head-commit",
                 "e3296b1",
+                "--repo",
+                "Kiwunaka/codexRS"
+            ]
+        );
+        assert_eq!(
+            pull_request_review_state_args(&identity, GitHubPullRequestReviewState::Draft),
+            ["pr", "ready", "42", "--undo", "--repo", "Kiwunaka/codexRS"]
+        );
+        assert_eq!(
+            pull_request_review_state_args(&identity, GitHubPullRequestReviewState::Ready),
+            ["pr", "ready", "42", "--repo", "Kiwunaka/codexRS"]
+        );
+        assert_eq!(
+            pull_request_title_args(&identity, "Keep this bounded"),
+            [
+                "pr",
+                "edit",
+                "42",
+                "--title",
+                "Keep this bounded",
+                "--repo",
+                "Kiwunaka/codexRS"
+            ]
+        );
+        assert_eq!(
+            pull_request_body_args(&identity, "Native body"),
+            [
+                "pr",
+                "edit",
+                "42",
+                "--body",
+                "Native body",
                 "--repo",
                 "Kiwunaka/codexRS"
             ]
