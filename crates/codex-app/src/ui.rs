@@ -47,11 +47,11 @@ use codex_core::{
     ProcessManagerState, PullRequestActivity, PullRequestActivityKind, PullRequestCheck,
     PullRequestCheckStatus, PullRequestCiStatus, PullRequestDetail, PullRequestDetailTab,
     PullRequestLifecycle, PullRequestMergeMethod, PullRequestMutation, PullRequestMutationKind,
-    PullRequestRelationship, PullRequestReviewEvent, PullRequestState, PullRequestSummary,
-    ReasoningEffortOption, ReducedMotionPreference, STANDARD_SERVICE_TIER_ID, ServiceTierOption,
-    SkillCard, SkillScope, TaskRunStatus, TaskSearchResult, TaskSummary, TerminalDockLocation,
-    TerminalTabState, ThreadGoalStatus, TimelineCitation, TimelineItem, TimelineKind,
-    UsageLimitWindow, UserInputAnswer, UserInputAnswers, UserInputRequest,
+    PullRequestRelationship, PullRequestReviewEvent, PullRequestReviewState, PullRequestState,
+    PullRequestSummary, ReasoningEffortOption, ReducedMotionPreference, STANDARD_SERVICE_TIER_ID,
+    ServiceTierOption, SkillCard, SkillScope, TaskRunStatus, TaskSearchResult, TaskSummary,
+    TerminalDockLocation, TerminalTabState, ThreadGoalStatus, TimelineCitation, TimelineItem,
+    TimelineKind, UsageLimitWindow, UserInputAnswer, UserInputAnswers, UserInputRequest,
     appearance_code_theme_supports_variant, composer_plugin_display_name,
     composer_plugin_is_mentionable, is_appearance_code_theme_id, reduce, validate_mcp_form_content,
 };
@@ -1909,6 +1909,7 @@ enum WorkspaceModal {
     Commit,
     CreatePullRequest,
     PullRequestAction(PullRequestActionKind),
+    EditPullRequest(PullRequestEditKind),
     CreateGitBranch,
     GitBranchConflict,
     AddMarketplace,
@@ -1961,6 +1962,12 @@ enum PullRequestActionKind {
     ReviewComment,
     RequestChanges,
     Merge,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PullRequestEditKind {
+    Title,
+    Description,
 }
 
 fn browser_navigation_url(value: &str) -> Option<String> {
@@ -4834,16 +4841,34 @@ impl WorkspaceView {
             }),
             cx.subscribe(&pull_request_title, |this, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::PressEnter { secondary: true }) {
-                    let is_draft = this.pull_request_default_to_draft;
-                    this.submit_create_pull_request(is_draft, false, cx);
+                    match this.workspace_modal.as_ref() {
+                        Some(WorkspaceModal::CreatePullRequest) => {
+                            let is_draft = this.pull_request_default_to_draft;
+                            this.submit_create_pull_request(is_draft, false, cx);
+                        }
+                        Some(WorkspaceModal::EditPullRequest(PullRequestEditKind::Title)) => {
+                            this.submit_pull_request_edit(PullRequestEditKind::Title, cx);
+                        }
+                        _ => {}
+                    }
                 }
             }),
             cx.subscribe(
                 &pull_request_description,
                 |this, _, event: &InputEvent, cx| {
                     if matches!(event, InputEvent::PressEnter { secondary: true }) {
-                        let is_draft = this.pull_request_default_to_draft;
-                        this.submit_create_pull_request(is_draft, false, cx);
+                        match this.workspace_modal.as_ref() {
+                            Some(WorkspaceModal::CreatePullRequest) => {
+                                let is_draft = this.pull_request_default_to_draft;
+                                this.submit_create_pull_request(is_draft, false, cx);
+                            }
+                            Some(WorkspaceModal::EditPullRequest(
+                                PullRequestEditKind::Description,
+                            )) => {
+                                this.submit_pull_request_edit(PullRequestEditKind::Description, cx);
+                            }
+                            _ => {}
+                        }
                     }
                 },
             ),
@@ -8587,6 +8612,78 @@ impl WorkspaceView {
         }
     }
 
+    fn open_pull_request_edit(
+        &mut self,
+        kind: PullRequestEditKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(detail) = self.state.pull_requests.detail.as_ref() else {
+            return;
+        };
+        if self.state.pull_requests.pending_mutation.is_some()
+            || !detail.summary.is_author
+            || detail.summary.state != PullRequestState::Open
+        {
+            return;
+        }
+        let (input, value, placeholder) = match kind {
+            PullRequestEditKind::Title => (
+                self.pull_request_title.clone(),
+                detail.summary.title.clone(),
+                "Pull request title",
+            ),
+            PullRequestEditKind::Description => (
+                self.pull_request_description.clone(),
+                detail.body.clone(),
+                "Pull request description",
+            ),
+        };
+        input.update(cx, |input, cx| {
+            input.set_value(value, window, cx);
+            input.set_placeholder(placeholder, window, cx);
+        });
+        self.dispatch(Action::ClearPullRequestMutationError, cx);
+        self.workspace_modal = Some(WorkspaceModal::EditPullRequest(kind));
+        cx.notify();
+        window.defer(cx, move |window, cx| {
+            input.update(cx, |input, cx| input.focus(window, cx));
+        });
+    }
+
+    fn submit_pull_request_edit(&mut self, kind: PullRequestEditKind, cx: &mut Context<Self>) {
+        if self.state.pull_requests.pending_mutation.is_some() {
+            return;
+        }
+        let mutation = match kind {
+            PullRequestEditKind::Title => PullRequestMutation::EditTitle {
+                title: self.pull_request_title.read(cx).value().to_string(),
+            },
+            PullRequestEditKind::Description => PullRequestMutation::EditDescription {
+                body: self.pull_request_description.read(cx).value().to_string(),
+            },
+        };
+        self.dispatch(Action::SubmitPullRequestMutation(mutation), cx);
+        if self.state.pull_requests.pending_mutation.is_some() {
+            self.workspace_modal = None;
+            cx.notify();
+        }
+    }
+
+    fn set_pull_request_review_state(
+        &mut self,
+        state: PullRequestReviewState,
+        cx: &mut Context<Self>,
+    ) {
+        if self.state.pull_requests.pending_mutation.is_some() {
+            return;
+        }
+        self.dispatch(
+            Action::SubmitPullRequestMutation(PullRequestMutation::SetReviewState { state }),
+            cx,
+        );
+    }
+
     fn open_pull_request_action_modal(
         &mut self,
         kind: PullRequestActionKind,
@@ -8786,7 +8883,7 @@ impl WorkspaceView {
         }
         if matches!(
             self.workspace_modal,
-            Some(WorkspaceModal::PullRequestAction(_))
+            Some(WorkspaceModal::PullRequestAction(_) | WorkspaceModal::EditPullRequest(_))
         ) && self.state.pull_requests.pending_mutation.is_some()
         {
             return;
@@ -9996,6 +10093,31 @@ impl WorkspaceView {
                             let mut preferences = this.state.git_preferences.clone();
                             preferences.pull_request_merge_method = method;
                             this.dispatch(Action::SetGitPreferences(preferences), cx);
+                        });
+                    }),
+            );
+        }
+        menu
+    }
+
+    fn pull_request_review_state_menu(
+        mut menu: PopupMenu,
+        view: WeakEntity<Self>,
+        selected: PullRequestReviewState,
+        pending: bool,
+    ) -> PopupMenu {
+        for (state, label) in [
+            (PullRequestReviewState::Draft, "Draft"),
+            (PullRequestReviewState::Ready, "Ready for review"),
+        ] {
+            let state_view = view.clone();
+            menu = menu.item(
+                PopupMenuItem::new(label)
+                    .checked(selected == state)
+                    .disabled(pending || selected == state)
+                    .on_click(move |_, _, cx| {
+                        let _ = state_view.update(cx, |this, cx| {
+                            this.set_pull_request_review_state(state, cx);
                         });
                     }),
             );
@@ -12310,6 +12432,11 @@ impl WorkspaceView {
                         Button::new("pull-request-merge")
                             .label("Merge")
                             .icon(IconName::ArrowUp)
+                            .tooltip(if detail.summary.is_draft {
+                                "Mark this pull request ready for review before merging"
+                            } else {
+                                "Merge pull request"
+                            })
                             .small()
                             .primary()
                             .loading(matches!(
@@ -12354,6 +12481,8 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let summary = detail.summary.clone();
+        let pending = self.state.pull_requests.pending_mutation;
+        let can_manage = summary.is_author && summary.state == PullRequestState::Open;
         let state_label = if summary.is_draft {
             "Draft"
         } else {
@@ -12367,6 +12496,46 @@ impl WorkspaceView {
             PullRequestState::Open => cx.theme().success,
             PullRequestState::Closed => cx.theme().danger,
             PullRequestState::Merged => cx.theme().info,
+        };
+        let selected_review_state = if summary.is_draft {
+            PullRequestReviewState::Draft
+        } else {
+            PullRequestReviewState::Ready
+        };
+        let review_state_control = if can_manage {
+            let view = cx.entity().downgrade();
+            Button::new("pull-request-review-state")
+                .label(match selected_review_state {
+                    PullRequestReviewState::Draft => "Draft",
+                    PullRequestReviewState::Ready => "Ready for review",
+                })
+                .small()
+                .dropdown_caret(true)
+                .loading(matches!(
+                    pending,
+                    Some(PullRequestMutationKind::MarkDraft | PullRequestMutationKind::MarkReady)
+                ))
+                .disabled(pending.is_some())
+                .dropdown_menu(move |menu, _, _| {
+                    Self::pull_request_review_state_menu(
+                        menu,
+                        view.clone(),
+                        selected_review_state,
+                        pending.is_some(),
+                    )
+                })
+                .into_any_element()
+        } else {
+            div()
+                .px_2()
+                .py_1()
+                .rounded_full()
+                .bg(cx.theme().secondary)
+                .text_xs()
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(state_color)
+                .child(state_label)
+                .into_any_element()
         };
         let checks = match summary.ci_status {
             PullRequestCiStatus::None => (
@@ -12397,7 +12566,7 @@ impl WorkspaceView {
             div()
                 .text_sm()
                 .text_color(cx.theme().muted_foreground)
-                .child("No description provided.")
+                .child("No description provided")
                 .into_any_element()
         } else if let Some(markdown) = sanitize_assistant_markdown(&body_text) {
             TextView::markdown(
@@ -12538,26 +12707,48 @@ impl WorkspaceView {
                             v_flex()
                                 .gap_3()
                                 .child(
-                                    div()
-                                        .text_xl()
-                                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .child(summary.title),
+                                    h_flex()
+                                        .gap_2()
+                                        .items_start()
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .text_xl()
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .child(summary.title.clone()),
+                                        )
+                                        .when(can_manage, |title| {
+                                            title.child(
+                                                Button::new("edit-pull-request-title")
+                                                    .icon(IconName::CaseSensitive)
+                                                    .tooltip("Edit title")
+                                                    .xsmall()
+                                                    .ghost()
+                                                    .loading(
+                                                        pending
+                                                            == Some(
+                                                                PullRequestMutationKind::EditTitle,
+                                                            ),
+                                                    )
+                                                    .disabled(pending.is_some())
+                                                    .on_click(cx.listener(
+                                                        |this, _, window, cx| {
+                                                            this.open_pull_request_edit(
+                                                                PullRequestEditKind::Title,
+                                                                window,
+                                                                cx,
+                                                            );
+                                                        },
+                                                    )),
+                                            )
+                                        }),
                                 )
                                 .child(
                                     h_flex()
                                         .gap_3()
                                         .items_center()
-                                        .child(
-                                            div()
-                                                .px_2()
-                                                .py_1()
-                                                .rounded_full()
-                                                .bg(cx.theme().secondary)
-                                                .text_xs()
-                                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                                .text_color(state_color)
-                                                .child(state_label),
-                                        )
+                                        .child(review_state_control)
                                         .child(
                                             div()
                                                 .text_sm()
@@ -12604,10 +12795,41 @@ impl WorkspaceView {
                             v_flex()
                                 .gap_3()
                                 .child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .child("Description"),
+                                    h_flex()
+                                        .gap_2()
+                                        .items_center()
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .text_sm()
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .child("Description"),
+                                        )
+                                        .when(can_manage, |heading| {
+                                            heading.child(
+                                                Button::new("edit-pull-request-description")
+                                                    .icon(IconName::File)
+                                                    .tooltip("Edit description")
+                                                    .xsmall()
+                                                    .ghost()
+                                                    .loading(
+                                                        pending
+                                                            == Some(
+                                                                PullRequestMutationKind::EditDescription,
+                                                            ),
+                                                    )
+                                                    .disabled(pending.is_some())
+                                                    .on_click(cx.listener(
+                                                        |this, _, window, cx| {
+                                                            this.open_pull_request_edit(
+                                                                PullRequestEditKind::Description,
+                                                                window,
+                                                                cx,
+                                                            );
+                                                        },
+                                                    )),
+                                            )
+                                        }),
                                 )
                                 .child(
                                     div()
@@ -33438,6 +33660,134 @@ impl WorkspaceView {
             .into_any_element()
     }
 
+    #[inline(never)]
+    fn render_pull_request_edit_modal(
+        &mut self,
+        kind: PullRequestEditKind,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let pending_mutation = self.state.pull_requests.pending_mutation;
+        let pending = pending_mutation.is_some();
+        let mutation_error = self.state.pull_requests.mutation_error.clone();
+        let (heading, label, input, input_height, submit_disabled, pending_kind) = match kind {
+            PullRequestEditKind::Title => {
+                let value = self.pull_request_title.read(cx).value().to_string();
+                (
+                    "Edit title",
+                    "Pull request title",
+                    self.pull_request_title.clone(),
+                    40.0,
+                    value.trim().is_empty()
+                        || value.chars().count() > MAX_GIT_PULL_REQUEST_TITLE_CHARS
+                        || value.chars().any(char::is_control),
+                    PullRequestMutationKind::EditTitle,
+                )
+            }
+            PullRequestEditKind::Description => {
+                let value = self.pull_request_description.read(cx).value().to_string();
+                (
+                    "Edit description",
+                    "Pull request description",
+                    self.pull_request_description.clone(),
+                    160.0,
+                    value.chars().count() > MAX_GIT_PULL_REQUEST_BODY_CHARS || value.contains('\0'),
+                    PullRequestMutationKind::EditDescription,
+                )
+            }
+        };
+        let save_kind = kind;
+
+        v_flex()
+            .w(px(modal_surface_width(self.shell_viewport_width, 520.0)))
+            .max_w(px(620.0))
+            .rounded(px(12.0))
+            .bg(cx.theme().popover)
+            .shadow_xl()
+            .occlude()
+            .overflow_hidden()
+            .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+            .child(
+                h_flex()
+                    .px_5()
+                    .py_4()
+                    .gap_3()
+                    .items_center()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_lg()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(heading),
+                    )
+                    .child(
+                        Button::new("close-pull-request-edit")
+                            .icon(IconName::Close)
+                            .small()
+                            .ghost()
+                            .disabled(pending)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.close_workspace_modal(cx);
+                            })),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .p_5()
+                    .gap_3()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Update the pull request and save it to GitHub."),
+                    )
+                    .child(
+                        v_flex()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child(label),
+                            )
+                            .child(Input::new(&input).h(px(input_height)).disabled(pending)),
+                    )
+                    .when_some(mutation_error, |content, error| {
+                        content.child(div().text_sm().text_color(cx.theme().danger).child(error))
+                    }),
+            )
+            .child(
+                h_flex()
+                    .px_5()
+                    .py_4()
+                    .gap_2()
+                    .justify_end()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        Button::new("cancel-pull-request-edit")
+                            .label("Cancel")
+                            .ghost()
+                            .disabled(pending)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.close_workspace_modal(cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("save-pull-request-edit")
+                            .label("Save")
+                            .primary()
+                            .loading(pending_mutation == Some(pending_kind))
+                            .disabled(pending || submit_disabled)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.submit_pull_request_edit(save_kind, cx);
+                            })),
+                    ),
+            )
+            .into_any_element()
+    }
+
     fn render_pending_worktree_fork_modal(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(pending) = self.state.pending_worktree_fork.as_ref() else {
             return div().into_any_element();
@@ -33710,6 +34060,11 @@ impl WorkspaceView {
                 let panel = self.render_git_pull_request_modal(cx);
                 self.render_workspace_modal_overlay(panel, dismiss_on_overlay, cx)
             }
+            WorkspaceModal::EditPullRequest(kind) => {
+                let dismiss_on_overlay = self.state.pull_requests.pending_mutation.is_none();
+                let panel = self.render_pull_request_edit_modal(kind, cx);
+                self.render_workspace_modal_overlay(panel, dismiss_on_overlay, cx)
+            }
             WorkspaceModal::PullRequestAction(PullRequestActionKind::Merge) => {
                 let dismiss_on_overlay = self.state.pull_requests.pending_mutation.is_none();
                 let panel = self.render_pull_request_merge_modal(cx);
@@ -33783,6 +34138,7 @@ impl WorkspaceView {
                 | WorkspaceModal::Feedback
                 | WorkspaceModal::Commit
                 | WorkspaceModal::CreatePullRequest
+                | WorkspaceModal::EditPullRequest(_)
                 | WorkspaceModal::PullRequestAction(_)
                 | WorkspaceModal::CreateGitBranch
                 | WorkspaceModal::GitBranchConflict
@@ -33809,6 +34165,7 @@ impl WorkspaceView {
             | WorkspaceModal::AllowAllBrowserSites { .. }
             | WorkspaceModal::Commit
             | WorkspaceModal::CreatePullRequest
+            | WorkspaceModal::EditPullRequest(_)
             | WorkspaceModal::PullRequestAction(_)
             | WorkspaceModal::CreateGitBranch
             | WorkspaceModal::GitBranchConflict
