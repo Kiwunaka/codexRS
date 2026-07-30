@@ -56,7 +56,7 @@ repository redistributes.
 | Terminal | Native PTY/ConPTY session with bounded VT output |
 | Computer Use | Native window discovery and control with per-app approval, task access, and an app-server-owned always-allowed list |
 | Plugins | Native directory tabs, bounded artwork, installed/source management, creation handoff, marketplace add/remove/upgrade, install, and uninstall through app-server methods |
-| Persistence | Single-writer codexRS SQLite for UI preferences and recent workspaces only |
+| Persistence | Single-writer codexRS SQLite for UI preferences and a bounded local-project registry with names and pins |
 | Platforms | Windows source build smoke-tested; Ubuntu build and tests run in CI |
 
 Computer Use is opt-in for each task. Every read or control action carries the

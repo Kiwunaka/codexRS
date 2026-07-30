@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub const MAX_COMPOSER_BYTES: usize = 256 * 1024;
@@ -77,6 +77,8 @@ pub const MAX_TASK_SEARCH_QUERY_BYTES: usize = 1_024;
 pub const MAX_TASK_SEARCH_RESULTS: usize = 500;
 pub const MAX_PINNED_TASKS: usize = 50;
 pub const MAX_PINNED_TASK_ID_BYTES: usize = 256;
+pub const MAX_LOCAL_PROJECTS: usize = 64;
+pub const MAX_LOCAL_PROJECT_NAME_BYTES: usize = 256;
 pub const MAX_PENDING_WORKTREE_FORK_ERROR_BYTES: usize = 16 * 1024;
 pub const MAX_GOAL_OBJECTIVE_BYTES: usize = 16 * 1024;
 pub const MAX_ACCOUNT_FIELD_BYTES: usize = 512;
@@ -855,6 +857,14 @@ pub struct TaskSummary {
     pub parent_task_id: Option<String>,
     pub forked_from_id: Option<String>,
     pub status: TaskRunStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalProjectSummary {
+    pub path: PathBuf,
+    pub name: String,
+    pub pinned: bool,
+    pub last_opened_at: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3551,6 +3561,7 @@ pub struct AppState {
     pub pending_worktree_fork: Option<PendingWorktreeFork>,
     pub archived_tasks: ArchivedTasksState,
     pub pinned_task_ids: Vec<String>,
+    pub local_projects: Vec<LocalProjectSummary>,
     pub selected_task_id: Option<String>,
     pub new_chat_cwd: Option<PathBuf>,
     pub timelines: HashMap<String, TimelineState>,
@@ -3608,6 +3619,7 @@ impl Default for AppState {
             pending_worktree_fork: None,
             archived_tasks: ArchivedTasksState::default(),
             pinned_task_ids: Vec::new(),
+            local_projects: Vec::new(),
             selected_task_id: None,
             new_chat_cwd: None,
             timelines: HashMap::new(),
@@ -3677,6 +3689,7 @@ pub enum Action {
         pinned_task_ids: Vec<String>,
         recent_workspace: Option<PathBuf>,
     },
+    LocalProjectsLoaded(Vec<LocalProjectSummary>),
     StorageFailed(String),
     RuntimeResolved {
         codex_binary: PathBuf,
@@ -3760,6 +3773,13 @@ pub enum Action {
     BeginProjectlessChat,
     SelectWorkspace(PathBuf),
     SelectComposerWorkspace(PathBuf),
+    RenameLocalProject {
+        path: PathBuf,
+        name: String,
+    },
+    ToggleLocalProjectPinned(PathBuf),
+    RemoveLocalProject(PathBuf),
+    OpenLocalProject(PathBuf),
     UseGitWorktree(PathBuf),
     ForkSelectedTask,
     ForkSelectedTaskIntoWorktree,
@@ -5349,6 +5369,17 @@ pub enum Effect {
     RememberWorkspace {
         path: PathBuf,
     },
+    RenameLocalProject {
+        path: PathBuf,
+        name: String,
+    },
+    SetLocalProjectPinned {
+        path: PathBuf,
+        pinned: bool,
+    },
+    RemoveLocalProject {
+        path: PathBuf,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -5594,6 +5625,73 @@ fn normalize_pinned_task_ids(task_ids: Vec<String>) -> Vec<String> {
         }
     }
     normalized
+}
+
+fn valid_local_project_name(name: &str) -> Option<String> {
+    let name = name.trim();
+    (!name.is_empty()
+        && name.len() <= MAX_LOCAL_PROJECT_NAME_BYTES
+        && !name.chars().any(char::is_control))
+    .then(|| name.to_owned())
+}
+
+fn default_local_project_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy())
+        .and_then(|name| valid_local_project_name(&name))
+        .unwrap_or_else(|| "Project".to_owned())
+}
+
+fn normalize_local_projects(projects: Vec<LocalProjectSummary>) -> Vec<LocalProjectSummary> {
+    let mut seen = HashSet::new();
+    let mut projects = projects
+        .into_iter()
+        .filter_map(|mut project| {
+            if !project.path.is_absolute() || !seen.insert(project.path.clone()) {
+                return None;
+            }
+            project.name = valid_local_project_name(&project.name)
+                .unwrap_or_else(|| default_local_project_name(&project.path));
+            Some(project)
+        })
+        .collect::<Vec<_>>();
+    projects.sort_by(|left, right| {
+        right
+            .pinned
+            .cmp(&left.pinned)
+            .then_with(|| right.last_opened_at.cmp(&left.last_opened_at))
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    projects.truncate(MAX_LOCAL_PROJECTS);
+    projects
+}
+
+fn remember_local_project(state: &mut AppState, path: &PathBuf) {
+    if !path.is_absolute() {
+        return;
+    }
+    let last_opened_at = state
+        .local_projects
+        .iter()
+        .map(|project| project.last_opened_at)
+        .max()
+        .unwrap_or_default()
+        .saturating_add(1);
+    if let Some(project) = state
+        .local_projects
+        .iter_mut()
+        .find(|project| project.path == *path)
+    {
+        project.last_opened_at = last_opened_at;
+    } else {
+        state.local_projects.push(LocalProjectSummary {
+            path: path.clone(),
+            name: default_local_project_name(path),
+            pinned: false,
+            last_opened_at,
+        });
+    }
+    state.local_projects = normalize_local_projects(std::mem::take(&mut state.local_projects));
 }
 
 fn normalize_computer_app_id(app_id: String) -> String {
@@ -6419,6 +6517,10 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 Vec::new()
             }
         }
+        Action::LocalProjectsLoaded(projects) => {
+            state.local_projects = normalize_local_projects(projects);
+            Vec::new()
+        }
         Action::StorageFailed(message) => {
             state.storage.ready = false;
             state.storage.error = Some(message.clone());
@@ -7094,6 +7196,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     Some("The selected project folder is unavailable.".to_owned());
                 Vec::new()
             } else {
+                remember_local_project(state, &path);
                 let mut effects = prepare_new_chat(state, Some(path.clone()));
                 effects.push(Effect::RememberWorkspace { path });
                 effects
@@ -7107,6 +7210,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     Some("The selected project folder is unavailable.".to_owned());
                 Vec::new()
             } else {
+                remember_local_project(state, &path);
                 let mut effects = clear_fuzzy_file_search(state);
                 state.route = MainRoute::Tasks;
                 state.new_chat_cwd = Some(path.clone());
@@ -7125,6 +7229,96 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 });
                 effects.push(Effect::RememberWorkspace { path });
                 effects
+            }
+        }
+        Action::RenameLocalProject { path, name } => {
+            let Some(name) = valid_local_project_name(&name) else {
+                state.status_message =
+                    Some("Project names must be short and recognizable.".to_owned());
+                return Vec::new();
+            };
+            let last_opened_at = state
+                .local_projects
+                .iter()
+                .map(|project| project.last_opened_at)
+                .max()
+                .unwrap_or_default()
+                .saturating_add(1);
+            let Some(project) = state
+                .local_projects
+                .iter_mut()
+                .find(|project| project.path == path)
+            else {
+                return Vec::new();
+            };
+            if project.name == name {
+                return Vec::new();
+            }
+            project.name = name.clone();
+            project.last_opened_at = last_opened_at;
+            state.local_projects =
+                normalize_local_projects(std::mem::take(&mut state.local_projects));
+            state.status_message = Some("Project renamed".to_owned());
+            vec![Effect::RenameLocalProject { path, name }]
+        }
+        Action::ToggleLocalProjectPinned(path) => {
+            let Some(project) = state
+                .local_projects
+                .iter_mut()
+                .find(|project| project.path == path)
+            else {
+                return Vec::new();
+            };
+            project.pinned = !project.pinned;
+            let pinned = project.pinned;
+            state.status_message = Some(if pinned {
+                "Project pinned".to_owned()
+            } else {
+                "Project unpinned".to_owned()
+            });
+            state.local_projects =
+                normalize_local_projects(std::mem::take(&mut state.local_projects));
+            vec![Effect::SetLocalProjectPinned { path, pinned }]
+        }
+        Action::RemoveLocalProject(path) => {
+            let original_len = state.local_projects.len();
+            state.local_projects.retain(|project| project.path != path);
+            if state.local_projects.len() == original_len {
+                return Vec::new();
+            }
+            let mut effects = Vec::new();
+            if state.selected_task_id.is_none() && state.new_chat_cwd.as_ref() == Some(&path) {
+                effects = clear_fuzzy_file_search(state);
+                state.new_chat_cwd = None;
+                state.marketplace.skills_status = Some(LoadStatus::Loading);
+                effects.push(Effect::RefreshSkills {
+                    cwds: Vec::new(),
+                    force_reload: false,
+                });
+                effects.push(Effect::RefreshComposerPlugins {
+                    cwds: Vec::new(),
+                    force_refetch: false,
+                });
+            }
+            state.status_message = Some("Project removed".to_owned());
+            effects.push(Effect::RemoveLocalProject { path });
+            effects
+        }
+        Action::OpenLocalProject(path) => {
+            if !path.is_absolute()
+                || !state
+                    .local_projects
+                    .iter()
+                    .any(|project| project.path == path)
+            {
+                state.status_message =
+                    Some("The selected project folder is unavailable.".to_owned());
+                Vec::new()
+            } else {
+                vec![Effect::OpenWorkspacePath {
+                    root: path.clone(),
+                    path,
+                }]
             }
         }
         Action::UseGitWorktree(path) => {
@@ -7514,6 +7708,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         Action::TaskCreated(task) => {
             let task_id = task.id.clone();
             let cwd = task.cwd.clone();
+            remember_local_project(state, &cwd);
             state.new_chat_cwd = None;
             state.tasks.retain(|existing| existing.id != task_id);
             state.tasks.insert(0, task);
@@ -7637,18 +7832,19 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     ..ProcessManagerState::default()
                 };
             }
-            let mut effects = state
+            let selected_cwd = state
                 .tasks
                 .iter()
                 .find(|task| task.id == task_id)
-                .map(|task| {
+                .map(|task| task.cwd.clone());
+            if let Some(cwd) = selected_cwd.as_ref() {
+                remember_local_project(state, cwd);
+            }
+            let mut effects = selected_cwd
+                .map(|cwd| {
                     vec![
-                        Effect::RememberWorkspace {
-                            path: task.cwd.clone(),
-                        },
-                        Effect::RefreshGit {
-                            cwd: task.cwd.clone(),
-                        },
+                        Effect::RememberWorkspace { path: cwd.clone() },
+                        Effect::RefreshGit { cwd },
                     ]
                 })
                 .into_iter()
@@ -14881,7 +15077,7 @@ mod tests {
         GitPullRequestPhase, GitPullRequestProvider, GitPullRequestState, GitReviewCommitState,
         GitReviewMode, GitState, GitWorktreeState, HookCard, HookEventName, HookHandlerType,
         HookProjectEntry, HookSource, HookTrustStatus, InspectorPane, IntegratedTerminalShell,
-        KeyboardShortcutPreferences, KeyboardShortcutUpdateTarget, LoadStatus,
+        KeyboardShortcutPreferences, KeyboardShortcutUpdateTarget, LoadStatus, LocalProjectSummary,
         MAX_BROWSER_DOWNLOADS, MAX_COMPOSER_BYTES, MAX_GIT_DIFF_BYTES, MAX_GIT_INSTRUCTIONS_BYTES,
         MAX_GIT_SHA_BYTES, MAX_PLUGIN_DETAIL_ITEMS, MAX_TURN_DIFF_BYTES, MainRoute,
         MarketplaceManageTab, MarketplaceSectionFilter, MarketplaceSourceCard, MarketplaceTab,
@@ -16718,6 +16914,110 @@ mod tests {
             .is_empty()
         );
         assert_eq!(state.new_chat_cwd, prior_workspace);
+    }
+
+    #[test]
+    fn local_projects_load_and_support_add_rename_pin_open_and_remove() {
+        let first = if cfg!(windows) {
+            PathBuf::from(r"C:\projects\first")
+        } else {
+            PathBuf::from("/projects/first")
+        };
+        let second = if cfg!(windows) {
+            PathBuf::from(r"C:\projects\second")
+        } else {
+            PathBuf::from("/projects/second")
+        };
+        let mut state = AppState::default();
+        reduce(
+            &mut state,
+            Action::LocalProjectsLoaded(vec![
+                LocalProjectSummary {
+                    path: first.clone(),
+                    name: String::new(),
+                    pinned: false,
+                    last_opened_at: 1,
+                },
+                LocalProjectSummary {
+                    path: second.clone(),
+                    name: "Second".to_owned(),
+                    pinned: true,
+                    last_opened_at: 2,
+                },
+                LocalProjectSummary {
+                    path: PathBuf::from("relative"),
+                    name: "Ignored".to_owned(),
+                    pinned: false,
+                    last_opened_at: 3,
+                },
+            ]),
+        );
+        assert_eq!(state.local_projects.len(), 2);
+        assert_eq!(state.local_projects[0].path, second);
+        assert_eq!(state.local_projects[1].name, "first");
+
+        let select_effects = reduce(&mut state, Action::SelectWorkspace(first.clone()));
+        assert!(select_effects.contains(&Effect::RememberWorkspace {
+            path: first.clone(),
+        }));
+        assert_eq!(state.new_chat_cwd.as_ref(), Some(&first));
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::RenameLocalProject {
+                    path: first.clone(),
+                    name: "  Native client  ".to_owned(),
+                },
+            ),
+            [Effect::RenameLocalProject {
+                path: first.clone(),
+                name: "Native client".to_owned(),
+            }]
+        );
+        assert_eq!(
+            state
+                .local_projects
+                .iter()
+                .find(|project| project.path == first)
+                .map(|project| project.name.as_str()),
+            Some("Native client")
+        );
+
+        assert_eq!(
+            reduce(&mut state, Action::ToggleLocalProjectPinned(first.clone())),
+            [Effect::SetLocalProjectPinned {
+                path: first.clone(),
+                pinned: true,
+            }]
+        );
+        assert_eq!(
+            reduce(&mut state, Action::OpenLocalProject(first.clone())),
+            [Effect::OpenWorkspacePath {
+                root: first.clone(),
+                path: first.clone(),
+            }]
+        );
+
+        let mut chat = task("chat");
+        chat.cwd = first.clone();
+        state.tasks.push(chat);
+        let remove_effects = reduce(&mut state, Action::RemoveLocalProject(first.clone()));
+        assert!(remove_effects.contains(&Effect::RemoveLocalProject {
+            path: first.clone(),
+        }));
+        assert!(remove_effects.contains(&Effect::RefreshSkills {
+            cwds: Vec::new(),
+            force_reload: false,
+        }));
+        assert_eq!(state.tasks.len(), 1);
+        assert!(state.new_chat_cwd.is_none());
+        assert!(
+            state
+                .local_projects
+                .iter()
+                .all(|project| project.path != first)
+        );
     }
 
     #[test]

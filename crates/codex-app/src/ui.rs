@@ -30,28 +30,29 @@ use codex_core::{
     GitReviewCommitState, GitReviewMode, GitWorktreeState, HookCard, HookEventName,
     HookHandlerType, HookIssue, HookProjectEntry, HookSource, HookTrustStatus, InspectorPane,
     IntegratedTerminalShell, KeyboardShortcutPreferences, KeyboardShortcutUpdateTarget, LoadStatus,
-    MAX_COMPOSER_OPTIONS, MAX_FEEDBACK_DETAILS_BYTES, MAX_FUZZY_FILE_QUERY_BYTES,
-    MAX_GIT_COMMIT_MESSAGE_CHARS, MAX_GIT_PULL_REQUEST_BODY_CHARS,
+    LocalProjectSummary, MAX_COMPOSER_OPTIONS, MAX_FEEDBACK_DETAILS_BYTES,
+    MAX_FUZZY_FILE_QUERY_BYTES, MAX_GIT_COMMIT_MESSAGE_CHARS, MAX_GIT_PULL_REQUEST_BODY_CHARS,
     MAX_GIT_PULL_REQUEST_TITLE_CHARS, MAX_KEYBOARD_SHORTCUT_ACCELERATOR_BYTES,
-    MAX_KEYBOARD_SHORTCUTS_PER_COMMAND, MAX_MCP_FORM_IMAGE_DATA_URL_BYTES,
-    MAX_MCP_FORM_VALUE_BYTES, MAX_TASK_SEARCH_RESULTS, MAX_TIMELINE_ITEMS,
-    MAX_USER_INPUT_VALUE_BYTES, MAX_WORKTREE_ROOT_BYTES, MainRoute, MarketplaceManageTab,
-    MarketplaceSectionFilter, MarketplaceTab, McpAuthStatus, McpBrowserOriginElicitation,
-    McpBrowserResourceElicitation, McpElicitation, McpElicitationContent, McpElicitationDecision,
-    McpElicitationValue, McpFormElicitation, McpFormField, McpFormFieldKind,
-    McpFormImagePickerItem, McpResourceCard, McpResourceContentCard, McpResourceTemplateCard,
-    McpServerCard, McpServerDraft, McpServerStartupFailureReason, McpServerStartupState,
-    McpToolCard, McpTransportKind, NetworkApprovalProtocol, OutputArtifact, OutputArtifactKind,
-    PendingWorktreeForkPhase, PermissionRequestDetail, Personality, PluginCard, PluginDetailItem,
-    PluginDetailView, PluginDirectoryTab, PluginSkillDetail, PrimaryWindowPlacement,
-    ProcessManagerState, PullRequestActivity, PullRequestActivityKind, PullRequestCheck,
-    PullRequestCheckStatus, PullRequestCiStatus, PullRequestDetail, PullRequestDetailTab,
-    PullRequestLifecycle, PullRequestMergeMethod, PullRequestMutation, PullRequestMutationKind,
-    PullRequestRelationship, PullRequestReviewEvent, PullRequestReviewState, PullRequestState,
-    PullRequestSummary, ReasoningEffortOption, ReducedMotionPreference, STANDARD_SERVICE_TIER_ID,
-    ServiceTierOption, SkillCard, SkillScope, TaskRunStatus, TaskSearchResult, TaskSummary,
-    TerminalDockLocation, TerminalTabState, ThreadGoalStatus, TimelineCitation, TimelineItem,
-    TimelineKind, UsageLimitWindow, UserInputAnswer, UserInputAnswers, UserInputRequest,
+    MAX_KEYBOARD_SHORTCUTS_PER_COMMAND, MAX_LOCAL_PROJECT_NAME_BYTES,
+    MAX_MCP_FORM_IMAGE_DATA_URL_BYTES, MAX_MCP_FORM_VALUE_BYTES, MAX_TASK_SEARCH_RESULTS,
+    MAX_TIMELINE_ITEMS, MAX_USER_INPUT_VALUE_BYTES, MAX_WORKTREE_ROOT_BYTES, MainRoute,
+    MarketplaceManageTab, MarketplaceSectionFilter, MarketplaceTab, McpAuthStatus,
+    McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
+    McpElicitationContent, McpElicitationDecision, McpElicitationValue, McpFormElicitation,
+    McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpResourceCard,
+    McpResourceContentCard, McpResourceTemplateCard, McpServerCard, McpServerDraft,
+    McpServerStartupFailureReason, McpServerStartupState, McpToolCard, McpTransportKind,
+    NetworkApprovalProtocol, OutputArtifact, OutputArtifactKind, PendingWorktreeForkPhase,
+    PermissionRequestDetail, Personality, PluginCard, PluginDetailItem, PluginDetailView,
+    PluginDirectoryTab, PluginSkillDetail, PrimaryWindowPlacement, ProcessManagerState,
+    PullRequestActivity, PullRequestActivityKind, PullRequestCheck, PullRequestCheckStatus,
+    PullRequestCiStatus, PullRequestDetail, PullRequestDetailTab, PullRequestLifecycle,
+    PullRequestMergeMethod, PullRequestMutation, PullRequestMutationKind, PullRequestRelationship,
+    PullRequestReviewEvent, PullRequestReviewState, PullRequestState, PullRequestSummary,
+    ReasoningEffortOption, ReducedMotionPreference, STANDARD_SERVICE_TIER_ID, ServiceTierOption,
+    SkillCard, SkillScope, TaskRunStatus, TaskSearchResult, TaskSummary, TerminalDockLocation,
+    TerminalTabState, ThreadGoalStatus, TimelineCitation, TimelineItem, TimelineKind,
+    UsageLimitWindow, UserInputAnswer, UserInputAnswers, UserInputRequest,
     appearance_code_theme_supports_variant, composer_plugin_display_name,
     composer_plugin_is_mentionable, is_appearance_code_theme_id, reduce, validate_mcp_form_content,
 };
@@ -1932,6 +1933,13 @@ enum WorkspaceModal {
     },
     ImportAppearanceTheme(AppearanceVariant),
     LogOutAccount,
+    RenameLocalProject {
+        path: PathBuf,
+    },
+    RemoveLocalProject {
+        path: PathBuf,
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2346,6 +2354,14 @@ struct TaskActionMenuTarget {
     title: String,
     cwd: PathBuf,
     is_pinned: bool,
+}
+
+#[derive(Clone)]
+struct LocalProjectActionMenuTarget {
+    path: PathBuf,
+    name: String,
+    pinned: bool,
+    available: bool,
 }
 
 struct GitReviewSourceMenuState {
@@ -4899,7 +4915,14 @@ impl WorkspaceView {
             ),
             cx.subscribe(&rename_input, |this, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::PressEnter { .. }) {
-                    this.finish_task_rename(cx);
+                    if matches!(
+                        this.workspace_modal,
+                        Some(WorkspaceModal::RenameLocalProject { .. })
+                    ) {
+                        this.finish_local_project_rename(cx);
+                    } else {
+                        this.finish_task_rename(cx);
+                    }
                 }
             }),
             cx.subscribe(&plugin_search, |this, input, event: &InputEvent, cx| {
@@ -7263,6 +7286,50 @@ impl WorkspaceView {
         cx.notify();
     }
 
+    fn begin_local_project_rename(
+        &mut self,
+        path: PathBuf,
+        current_name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.renaming_task_id = None;
+        self.workspace_modal = Some(WorkspaceModal::RenameLocalProject { path });
+        self.rename_input.update(cx, |input, cx| {
+            input.set_placeholder("Project name", window, cx);
+            input.set_value(current_name, window, cx);
+            input.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    fn finish_local_project_rename(&mut self, cx: &mut Context<Self>) {
+        let Some(WorkspaceModal::RenameLocalProject { path }) = self.workspace_modal.clone() else {
+            return;
+        };
+        let name = self.rename_input.read(cx).value().trim().to_owned();
+        if !valid_local_project_name(&name) {
+            return;
+        }
+        self.workspace_modal = None;
+        self.dispatch(Action::RenameLocalProject { path, name }, cx);
+    }
+
+    fn confirm_remove_local_project(
+        &mut self,
+        path: PathBuf,
+        name: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.workspace_modal = Some(WorkspaceModal::RemoveLocalProject { path, name });
+        cx.notify();
+    }
+
+    fn remove_local_project_from_modal(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.workspace_modal = None;
+        self.dispatch(Action::RemoveLocalProject(path), cx);
+    }
+
     fn prompt_for_workspace(&mut self, cx: &mut Context<Self>) {
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: false,
@@ -9303,6 +9370,88 @@ impl WorkspaceView {
         menu
     }
 
+    fn local_project_actions_menu(
+        menu: PopupMenu,
+        view: WeakEntity<Self>,
+        target: LocalProjectActionMenuTarget,
+        _window: &mut Window,
+        _cx: &mut Context<PopupMenu>,
+    ) -> PopupMenu {
+        let LocalProjectActionMenuTarget {
+            path,
+            name,
+            pinned,
+            available,
+        } = target;
+        let new_chat_view = view.clone();
+        let new_chat_path = path.clone();
+        let rename_view = view.clone();
+        let rename_path = path.clone();
+        let rename_name = name.clone();
+        let open_view = view.clone();
+        let open_path = path.clone();
+        let pin_view = view.clone();
+        let pin_path = path.clone();
+        let remove_view = view;
+        menu.item(
+            PopupMenuItem::new("New chat")
+                .icon(IconName::Plus)
+                .disabled(!available)
+                .on_click(move |_, _, cx| {
+                    let path = new_chat_path.clone();
+                    let _ = new_chat_view.update(cx, |this, cx| {
+                        this.dispatch(Action::SelectWorkspace(path), cx);
+                        this.close_narrow_sidebar();
+                    });
+                }),
+        )
+        .item(
+            PopupMenuItem::new("Rename project").on_click(move |_, window, cx| {
+                let path = rename_path.clone();
+                let name = rename_name.clone();
+                let _ = rename_view.update(cx, |this, cx| {
+                    this.begin_local_project_rename(path, name, window, cx);
+                });
+            }),
+        )
+        .item(
+            PopupMenuItem::new(local_project_open_label())
+                .icon(IconName::FolderOpen)
+                .disabled(!available)
+                .on_click(move |_, _, cx| {
+                    let path = open_path.clone();
+                    let _ = open_view.update(cx, |this, cx| {
+                        this.dispatch(Action::OpenLocalProject(path), cx);
+                    });
+                }),
+        )
+        .item(
+            PopupMenuItem::new(if pinned {
+                "Unpin project"
+            } else {
+                "Pin project"
+            })
+            .on_click(move |_, _, cx| {
+                let path = pin_path.clone();
+                let _ = pin_view.update(cx, |this, cx| {
+                    this.dispatch(Action::ToggleLocalProjectPinned(path), cx);
+                });
+            }),
+        )
+        .separator()
+        .item(
+            PopupMenuItem::new("Remove")
+                .icon(IconName::Delete)
+                .on_click(move |_, _, cx| {
+                    let path = path.clone();
+                    let name = name.clone();
+                    let _ = remove_view.update(cx, |this, cx| {
+                        this.confirm_remove_local_project(path, name, cx);
+                    });
+                }),
+        )
+    }
+
     fn task_actions_menu(
         menu: PopupMenu,
         view: WeakEntity<Self>,
@@ -11268,7 +11417,21 @@ impl WorkspaceView {
             .copied()
             .filter(|index| !pinned_task_indices.contains(index))
             .collect::<Vec<_>>();
-        let project_groups = self.sidebar_project_groups(&recent_task_indices);
+        let local_projects = self.state.local_projects.clone();
+        let registered_paths = local_projects
+            .iter()
+            .map(|project| project.path.clone())
+            .collect::<HashSet<_>>();
+        let ungrouped_task_indices = recent_task_indices
+            .iter()
+            .copied()
+            .filter(|index| {
+                self.state
+                    .tasks
+                    .get(*index)
+                    .is_some_and(|task| !registered_paths.contains(&task.cwd))
+            })
+            .collect::<Vec<_>>();
 
         let mut task_list = v_flex()
             .id("task-list")
@@ -11276,75 +11439,146 @@ impl WorkspaceView {
             .min_h_0()
             .gap_1()
             .overflow_y_scrollbar();
-        if task_indices.is_empty() {
+        if !pinned_task_indices.is_empty() {
+            task_list = task_list
+                .child(
+                    h_flex()
+                        .h(px(32.0))
+                        .px_2()
+                        .mt_1()
+                        .items_center()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Pinned"),
+                )
+                .children(
+                    pinned_task_indices
+                        .iter()
+                        .copied()
+                        .map(|index| self.render_task(index, cx)),
+                );
+        }
+        task_list = task_list.child(
+            h_flex()
+                .h(px(32.0))
+                .px_2()
+                .mt_1()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Projects"),
+                )
+                .child(
+                    Button::new("add-new-project")
+                        .icon(IconName::Plus)
+                        .tooltip("Add new project")
+                        .xsmall()
+                        .ghost()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.prompt_for_workspace(cx);
+                        })),
+                ),
+        );
+        if local_projects.is_empty() {
+            task_list = task_list.child(
+                div()
+                    .px_2()
+                    .py_2()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("No projects"),
+            );
+        } else {
+            for project in local_projects {
+                let indices = recent_task_indices
+                    .iter()
+                    .copied()
+                    .filter(|index| {
+                        self.state
+                            .tasks
+                            .get(*index)
+                            .is_some_and(|task| task.cwd == project.path)
+                    })
+                    .collect::<Vec<_>>();
+                task_list = task_list.child(self.render_local_project(project, indices, cx));
+            }
+        }
+        task_list = task_list.child(
+            h_flex()
+                .h(px(32.0))
+                .px_2()
+                .mt_1()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Chats"),
+                )
+                .child(
+                    h_flex()
+                        .gap_0p5()
+                        .child(
+                            Button::new("toggle-task-search")
+                                .icon(IconName::Search)
+                                .tooltip("Search chats · Ctrl+G")
+                                .xsmall()
+                                .ghost()
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_command_palette(PaletteMode::Chats, window, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("refresh-tasks")
+                                .icon(IconName::Redo)
+                                .tooltip("Refresh chats")
+                                .xsmall()
+                                .ghost()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.dispatch(Action::RefreshTasks, cx);
+                                })),
+                        ),
+                ),
+        );
+        if ungrouped_task_indices.is_empty() {
             let empty_message = match self.state.task_status {
                 LoadStatus::Loading => "Loading chats…",
                 LoadStatus::Failed => "Chats could not be loaded",
-                _ => "No chats yet",
+                _ => "No chats",
             };
             task_list = task_list.child(
                 div()
-                    .px_3()
-                    .py_5()
+                    .px_2()
+                    .py_2()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
                     .child(empty_message),
             );
         } else {
-            if !pinned_task_indices.is_empty() {
-                task_list = task_list
-                    .child(
-                        h_flex()
-                            .h(px(32.0))
-                            .px_2()
-                            .mt_1()
-                            .items_center()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Pinned"),
-                    )
-                    .children(
-                        pinned_task_indices
-                            .into_iter()
-                            .map(|index| self.render_task(index, cx)),
-                    );
-            }
-            for (project_name, indices) in project_groups {
-                task_list = task_list
-                    .child(
-                        h_flex()
-                            .h(px(32.0))
-                            .px_2()
-                            .mt_1()
-                            .gap_2()
-                            .items_center()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(Icon::new(IconName::FolderClosed).xsmall())
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_sm()
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .truncate()
-                                    .child(project_name),
-                            ),
-                    )
-                    .children(indices.into_iter().map(|index| self.render_task(index, cx)));
-            }
-            if self.state.next_task_cursor.is_some() {
-                task_list = task_list.child(
-                    Button::new("load-more-tasks")
-                        .label("Load more")
-                        .small()
-                        .ghost()
-                        .w_full()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.dispatch(Action::LoadMoreTasks, cx);
-                        })),
-                );
-            }
+            task_list = task_list.children(
+                ungrouped_task_indices
+                    .into_iter()
+                    .map(|index| self.render_task(index, cx)),
+            );
+        }
+        if self.state.next_task_cursor.is_some() {
+            task_list = task_list.child(
+                Button::new("load-more-tasks")
+                    .label("Load more")
+                    .small()
+                    .ghost()
+                    .w_full()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.dispatch(Action::LoadMoreTasks, cx);
+                    })),
+            );
         }
 
         v_flex()
@@ -11456,50 +11690,6 @@ impl WorkspaceView {
                     .p_2()
                     .gap_1()
                     .when(route == MainRoute::Tasks, |sidebar| {
-                        sidebar.child(
-                            h_flex()
-                                .h(px(32.0))
-                                .px_2()
-                                .items_center()
-                                .justify_between()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .font_weight(gpui::FontWeight::MEDIUM)
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child("Chats"),
-                                )
-                                .child(
-                                    h_flex()
-                                        .gap_0p5()
-                                        .child(
-                                            Button::new("toggle-task-search")
-                                                .icon(IconName::Search)
-                                                .tooltip("Search chats · Ctrl+G")
-                                                .xsmall()
-                                                .ghost()
-                                                .on_click(cx.listener(|this, _, window, cx| {
-                                                    this.open_command_palette(
-                                                        PaletteMode::Chats,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                })),
-                                        )
-                                        .child(
-                                            Button::new("refresh-tasks")
-                                                .icon(IconName::Redo)
-                                                .tooltip("Refresh chats")
-                                                .xsmall()
-                                                .ghost()
-                                                .on_click(cx.listener(|this, _, _, cx| {
-                                                    this.dispatch(Action::RefreshTasks, cx);
-                                                })),
-                                        ),
-                                ),
-                        )
-                    })
-                    .when(route == MainRoute::Tasks, |sidebar| {
                         sidebar.child(task_list)
                     }),
             )
@@ -11507,22 +11697,169 @@ impl WorkspaceView {
             .into_any_element()
     }
 
-    fn sidebar_project_groups(&self, task_indices: &[usize]) -> Vec<(String, Vec<usize>)> {
-        let mut groups: Vec<(PathBuf, String, Vec<usize>)> = Vec::new();
-        for &index in task_indices {
-            let Some(task) = self.state.tasks.get(index) else {
-                continue;
-            };
-            if let Some((_, _, indices)) = groups.iter_mut().find(|(cwd, _, _)| *cwd == task.cwd) {
-                indices.push(index);
-                continue;
-            }
-            groups.push((task.cwd.clone(), project_name(&task.cwd), vec![index]));
-        }
-        groups
-            .into_iter()
-            .map(|(_, name, indices)| (name, indices))
-            .collect()
+    fn render_local_project(
+        &mut self,
+        project: LocalProjectSummary,
+        task_indices: Vec<usize>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let available = project.path.is_dir();
+        let has_chats = self.state.tasks.iter().any(|task| task.cwd == project.path);
+        let selected = self
+            .state
+            .selected_task_id
+            .as_deref()
+            .and_then(|task_id| self.state.tasks.iter().find(|task| task.id == task_id))
+            .map_or_else(
+                || self.state.new_chat_cwd.as_ref() == Some(&project.path),
+                |task| task.cwd == project.path,
+            );
+        let key = local_project_element_key(&project.path);
+        let target = LocalProjectActionMenuTarget {
+            path: project.path.clone(),
+            name: project.name.clone(),
+            pinned: project.pinned,
+            available,
+        };
+        let context_target = target.clone();
+        let dropdown_target = target.clone();
+        let context_view = cx.entity().downgrade();
+        let dropdown_view = context_view.clone();
+        let new_chat_path = project.path.clone();
+        let select_path = project.path.clone();
+        let name = project.name;
+        let pinned = project.pinned;
+
+        v_flex()
+            .child(
+                h_flex()
+                    .id(SharedString::from(format!("local-project-{key:016x}")))
+                    .h(px(34.0))
+                    .px_2()
+                    .gap_2()
+                    .items_center()
+                    .rounded_md()
+                    .when(selected, |row| row.bg(cx.theme().sidebar_accent))
+                    .when(!selected, |row| {
+                        row.hover(|style| style.bg(cx.theme().list_hover))
+                    })
+                    .child(
+                        h_flex()
+                            .id(SharedString::from(format!("select-project-{key:016x}")))
+                            .flex_1()
+                            .min_w_0()
+                            .gap_2()
+                            .items_center()
+                            .when(pointer_cursors_enabled(cx), |element| {
+                                element.cursor_pointer()
+                            })
+                            .child(
+                                Icon::new(if available {
+                                    IconName::FolderClosed
+                                } else {
+                                    IconName::TriangleAlert
+                                })
+                                .xsmall()
+                                .text_color(if available {
+                                    cx.theme().muted_foreground
+                                } else {
+                                    cx.theme().warning
+                                }),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .truncate()
+                                    .child(name),
+                            )
+                            .when(pinned, |label| {
+                                label.child(
+                                    Icon::new(IconName::Star)
+                                        .xsmall()
+                                        .text_color(cx.theme().muted_foreground),
+                                )
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if available {
+                                    this.dispatch(Action::SelectWorkspace(select_path.clone()), cx);
+                                    this.close_narrow_sidebar();
+                                } else {
+                                    this.dispatch(
+                                        Action::SetStatus(
+                                            "This project folder was deleted or moved".to_owned(),
+                                        ),
+                                        cx,
+                                    );
+                                }
+                            })),
+                    )
+                    .child(
+                        Button::new(SharedString::from(format!("new-chat-project-{key:016x}")))
+                            .icon(IconName::Plus)
+                            .tooltip("New chat")
+                            .xsmall()
+                            .ghost()
+                            .disabled(!available)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.dispatch(Action::SelectWorkspace(new_chat_path.clone()), cx);
+                                this.close_narrow_sidebar();
+                            })),
+                    )
+                    .child(
+                        Button::new(SharedString::from(format!("project-menu-{key:016x}")))
+                            .icon(IconName::Ellipsis)
+                            .tooltip("Project actions")
+                            .xsmall()
+                            .ghost()
+                            .dropdown_menu(move |menu, window, cx| {
+                                Self::local_project_actions_menu(
+                                    menu,
+                                    dropdown_view.clone(),
+                                    dropdown_target.clone(),
+                                    window,
+                                    cx,
+                                )
+                            }),
+                    )
+                    .context_menu(move |menu, window, cx| {
+                        Self::local_project_actions_menu(
+                            menu,
+                            context_view.clone(),
+                            context_target.clone(),
+                            window,
+                            cx,
+                        )
+                    }),
+            )
+            .when(!available, |group| {
+                group.child(
+                    div()
+                        .px_8()
+                        .pb_1()
+                        .text_xs()
+                        .text_color(cx.theme().warning)
+                        .child("This project folder was deleted or moved"),
+                )
+            })
+            .when(available && !has_chats, |group| {
+                group.child(
+                    div()
+                        .px_8()
+                        .pb_1()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("No chats"),
+                )
+            })
+            .children(
+                task_indices
+                    .into_iter()
+                    .map(|index| self.render_task(index, cx)),
+            )
+            .into_any_element()
     }
 
     fn render_task(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -34146,6 +34483,8 @@ impl WorkspaceView {
                 | WorkspaceModal::EditMcpServer { .. }
                 | WorkspaceModal::InspectMcpServer { .. }
                 | WorkspaceModal::ImportAppearanceTheme(_)
+                | WorkspaceModal::RenameLocalProject { .. }
+                | WorkspaceModal::RemoveLocalProject { .. }
         ) && !branch_pending
             && !commit_pending
             && !pull_request_pending
@@ -34170,6 +34509,99 @@ impl WorkspaceView {
             | WorkspaceModal::CreateGitBranch
             | WorkspaceModal::GitBranchConflict
             | WorkspaceModal::InspectMcpServer { .. } => unreachable!(),
+            WorkspaceModal::RenameLocalProject { .. } => render_modal_branch(|| {
+                let name = self.rename_input.read(cx).value().trim().to_owned();
+                v_flex()
+                    .w(px(modal_surface_width(self.shell_viewport_width, 440.0)))
+                    .p_5()
+                    .gap_4()
+                    .rounded(px(16.0))
+                    .bg(cx.theme().popover)
+                    .shadow_xl()
+                    .occlude()
+                    .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("Rename project"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Keep it short and recognizable"),
+                    )
+                    .child(Input::new(&self.rename_input))
+                    .child(
+                        h_flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                Button::new("cancel-rename-project")
+                                    .label("Cancel")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.close_workspace_modal(cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("save-rename-project")
+                                    .label("Save")
+                                    .primary()
+                                    .disabled(!valid_local_project_name(&name))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.finish_local_project_rename(cx);
+                                    })),
+                            ),
+                    )
+                    .into_any_element()
+            }),
+            WorkspaceModal::RemoveLocalProject { path, name } => render_modal_branch(|| {
+                v_flex()
+                    .w(px(modal_surface_width(self.shell_viewport_width, 460.0)))
+                    .p_5()
+                    .gap_4()
+                    .rounded(px(16.0))
+                    .bg(cx.theme().popover)
+                    .shadow_xl()
+                    .occlude()
+                    .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(format!("Remove {name}?")),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(
+                                "This removes the project from the app. Files on your computer and existing chats won't be deleted.",
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                Button::new("cancel-remove-project")
+                                    .label("Cancel")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.close_workspace_modal(cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("confirm-remove-project")
+                                    .label("Remove project")
+                                    .danger()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.remove_local_project_from_modal(path.clone(), cx);
+                                    })),
+                            ),
+                    )
+                    .into_any_element()
+            }),
             WorkspaceModal::ImportAppearanceTheme(variant) => render_modal_branch(|| {
                 let variant_label = appearance_variant_label(variant);
                 v_flex()
@@ -35537,6 +35969,34 @@ fn project_name(path: &Path) -> String {
         .filter(|name| !name.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| path.display().to_string())
+}
+
+fn valid_local_project_name(name: &str) -> bool {
+    let name = name.trim();
+    !name.is_empty()
+        && name.len() <= MAX_LOCAL_PROJECT_NAME_BYTES
+        && !name.chars().any(char::is_control)
+}
+
+fn local_project_element_key(path: &Path) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    path.hash(&mut hasher);
+    hasher.finish()
+}
+
+#[cfg(target_os = "windows")]
+const fn local_project_open_label() -> &'static str {
+    "Open in Explorer"
+}
+
+#[cfg(target_os = "macos")]
+const fn local_project_open_label() -> &'static str {
+    "Reveal in Finder"
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+const fn local_project_open_label() -> &'static str {
+    "Open in File Manager"
 }
 
 fn output_artifact_type_label(path: &Path) -> Option<String> {
