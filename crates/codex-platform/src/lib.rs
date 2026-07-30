@@ -63,11 +63,12 @@ pub use computer_use_helper::{
     run_computer_use_helper,
 };
 pub use git::{
-    GitBranch, GitBranchMutationOutcome, GitDiff, GitError, GitFile, GitFileKind, GitReviewCommit,
-    GitSnapshot, GitWorktree, MAX_GIT_BRANCH_BYTES, MAX_GIT_BRANCHES, MAX_GIT_COMMIT_CONTEXT_BYTES,
-    MAX_GIT_COMMIT_MESSAGE_CHARS, MAX_GIT_CONFLICT_PATHS, MAX_GIT_DIFF_BYTES, MAX_GIT_FILES,
-    MAX_GIT_PULL_REQUEST_CONTEXT_BYTES, MAX_GIT_REVIEW_COMMITS, MAX_GIT_WORKTREES,
-    MAX_MANAGED_WORKTREE_DIFF_BYTES, ManagedWorktree, commit as git_commit, commit_diff,
+    GitBranch, GitBranchDiff, GitBranchMutationOutcome, GitDiff, GitError, GitFile, GitFileKind,
+    GitReviewCommit, GitSnapshot, GitWorktree, MAX_GIT_BRANCH_BYTES, MAX_GIT_BRANCHES,
+    MAX_GIT_COMMIT_CONTEXT_BYTES, MAX_GIT_COMMIT_MESSAGE_CHARS, MAX_GIT_CONFLICT_PATHS,
+    MAX_GIT_DIFF_BYTES, MAX_GIT_FILES, MAX_GIT_PULL_REQUEST_CONTEXT_BYTES, MAX_GIT_REVIEW_BRANCHES,
+    MAX_GIT_REVIEW_COMMITS, MAX_GIT_WORKTREES, MAX_MANAGED_WORKTREE_DIFF_BYTES, ManagedWorktree,
+    branch_diff as git_branch_diff, commit as git_commit, commit_diff,
     commit_message_diff as git_commit_message_diff, create_branch, create_managed_worktree,
     create_managed_worktree_cancellable, create_worktree, diff as git_diff,
     pull_request_context as git_pull_request_context, push as git_push, snapshot as git_snapshot,

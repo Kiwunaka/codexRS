@@ -87,8 +87,8 @@ use codex_platform::{
     create_branch as git_create_branch,
     create_managed_worktree_cancellable as git_create_managed_worktree,
     create_worktree as git_create_worktree, default_browser_download_dir, drag_computer_window,
-    git_commit, git_commit_message_diff, git_diff, git_pull_request_context, git_push,
-    git_snapshot, git_stage, git_stage_all, git_unstage, git_unstage_all,
+    git_branch_diff, git_commit, git_commit_message_diff, git_diff, git_pull_request_context,
+    git_push, git_snapshot, git_stage, git_stage_all, git_unstage, git_unstage_all,
     github_create_pull_request, github_merge_pull_request, github_post_pull_request_comment,
     github_pull_request_detail, github_pull_request_diff, github_pull_request_status,
     github_search_pull_requests, github_submit_pull_request_review, inspect_artifact,
@@ -4536,27 +4536,52 @@ fn run_effect(
                 Action::AccountLogoutFailed("Could not log out. Please try again.".to_owned()),
             ),
         },
-        Effect::LoadBranchDiff { generation, cwd } => {
-            match app_server.git_diff_to_remote(GitDiffToRemoteParams { cwd }) {
-                Ok(response) => {
-                    let truncated = response.diff.len() > MAX_GIT_DIFF_BYTES;
-                    emit(
+        Effect::LoadBranchDiff {
+            generation,
+            cwd,
+            base,
+        } => {
+            if let Some(base) = base {
+                match git_branch_diff(&cwd, &base) {
+                    Ok(response) => emit(
                         events,
                         Action::BranchDiffLoaded {
                             generation,
-                            base_sha: bounded(response.sha, MAX_GIT_SHA_BYTES),
-                            text: bounded(response.diff, MAX_GIT_DIFF_BYTES),
-                            truncated,
+                            base_sha: bounded(response.base_sha, MAX_GIT_SHA_BYTES),
+                            text: bounded(response.text, MAX_GIT_DIFF_BYTES),
+                            truncated: response.truncated,
                         },
-                    );
+                    ),
+                    Err(_) => emit(
+                        events,
+                        Action::BranchDiffFailed {
+                            generation,
+                            message: format!("Could not compare this branch with {base}."),
+                        },
+                    ),
                 }
-                Err(_) => emit(
-                    events,
-                    Action::BranchDiffFailed {
-                        generation,
-                        message: "Could not load changes for this branch.".to_owned(),
-                    },
-                ),
+            } else {
+                match app_server.git_diff_to_remote(GitDiffToRemoteParams { cwd }) {
+                    Ok(response) => {
+                        let truncated = response.diff.len() > MAX_GIT_DIFF_BYTES;
+                        emit(
+                            events,
+                            Action::BranchDiffLoaded {
+                                generation,
+                                base_sha: bounded(response.sha, MAX_GIT_SHA_BYTES),
+                                text: bounded(response.diff, MAX_GIT_DIFF_BYTES),
+                                truncated,
+                            },
+                        );
+                    }
+                    Err(_) => emit(
+                        events,
+                        Action::BranchDiffFailed {
+                            generation,
+                            message: "Could not load changes for this branch.".to_owned(),
+                        },
+                    ),
+                }
             }
         }
         Effect::SubmitFeedback {
@@ -8792,6 +8817,7 @@ fn map_git_snapshot(snapshot: GitSnapshot) -> GitState {
         repository_root: Some(snapshot.repository_root),
         branch: snapshot.branch,
         default_branch: snapshot.default_branch,
+        review_default_base: snapshot.review_default_base,
         upstream_ref: snapshot.upstream_ref,
         ahead: snapshot.ahead,
         behind: snapshot.behind,
@@ -8830,6 +8856,7 @@ fn map_git_snapshot(snapshot: GitSnapshot) -> GitState {
                 current: branch.current,
             })
             .collect(),
+        review_branches: snapshot.review_branches,
         worktrees: snapshot
             .worktrees
             .into_iter()
@@ -8852,6 +8879,7 @@ fn map_git_snapshot(snapshot: GitSnapshot) -> GitState {
             })
             .collect(),
         selected_commit_sha: None,
+        selected_review_base: None,
         diff_generation: 0,
         selected_scope: codex_core::GitDiffScope::default(),
         selected_path: None,
@@ -11158,13 +11186,13 @@ fn refresh_git(cwd: &std::path::Path, events: &Sender<Action>) {
     match git_snapshot(cwd) {
         Ok(snapshot) => emit(
             events,
-            Action::GitSnapshotLoaded(map_git_snapshot(snapshot)),
+            Action::GitSnapshotLoaded(Box::new(map_git_snapshot(snapshot))),
         ),
         Err(GitError::InvalidRepository) => {
-            emit(events, Action::GitSnapshotLoaded(GitState::default()));
+            emit(events, Action::GitSnapshotLoaded(Box::default()));
         }
         Err(error) => {
-            emit(events, Action::GitSnapshotLoaded(GitState::default()));
+            emit(events, Action::GitSnapshotLoaded(Box::default()));
             emit(
                 events,
                 Action::SetStatus(format!("failed to inspect Git repository: {error}")),

@@ -80,6 +80,9 @@ commit lists have explicit limits. Mutations use argument separators and
 validated native paths:
 
 - branch switching accepts only names that pass `git check-ref-format`;
+- Review keeps the official app-server remote diff for its default target; an
+  explicit bounded ref is resolved through native `git merge-base`, and its
+  resulting tracked and untracked patch is capped before it reaches UI state;
 - worktree paths must be absolute siblings outside the selected repository;
 - managed conversation forks create a detached checkout under
   the bounded absolute Worktree root saved in codexRS-owned preferences, or

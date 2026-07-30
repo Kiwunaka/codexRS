@@ -19,6 +19,7 @@ use crate::process::{BoundedOutput, ProcessError, run_bounded, run_bounded_cance
 pub const MAX_GIT_FILES: usize = 2_000;
 pub const MAX_GIT_BRANCHES: usize = 500;
 pub const MAX_GIT_WORKTREES: usize = 100;
+pub const MAX_GIT_REVIEW_BRANCHES: usize = 30;
 pub const MAX_GIT_REVIEW_COMMITS: usize = 30;
 pub const MAX_GIT_DIFF_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_GIT_BRANCH_BYTES: usize = 1_024;
@@ -94,11 +95,13 @@ pub struct GitSnapshot {
     pub repository_root: PathBuf,
     pub branch: Option<String>,
     pub default_branch: Option<String>,
+    pub review_default_base: Option<String>,
     pub upstream_ref: Option<String>,
     pub ahead: u32,
     pub behind: u32,
     pub files: Vec<GitFile>,
     pub branches: Vec<GitBranch>,
+    pub review_branches: Vec<String>,
     pub worktrees: Vec<GitWorktree>,
     pub commits: Vec<GitReviewCommit>,
     pub truncated: bool,
@@ -108,6 +111,13 @@ type ParsedGitStatus = (Option<String>, Option<String>, u32, u32, Vec<GitFile>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitDiff {
+    pub text: String,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitBranchDiff {
+    pub base_sha: String,
     pub text: String,
     pub truncated: bool,
 }
@@ -133,6 +143,7 @@ pub enum GitError {
     Io(std::io::Error),
     InvalidRepository,
     InvalidOutput,
+    InvalidReference,
     PathOutsideRepository,
     InvalidBranchName,
     InvalidWorktreePath,
@@ -153,6 +164,7 @@ impl fmt::Display for GitError {
                 formatter.write_str("working directory is not a Git repository")
             }
             Self::InvalidOutput => formatter.write_str("Git returned malformed output"),
+            Self::InvalidReference => formatter.write_str("Git reference is invalid"),
             Self::PathOutsideRepository => {
                 formatter.write_str("path is outside the selected Git repository")
             }
@@ -182,6 +194,7 @@ impl Error for GitError {
             Self::Io(error) => Some(error),
             Self::InvalidRepository
             | Self::InvalidOutput
+            | Self::InvalidReference
             | Self::PathOutsideRepository
             | Self::InvalidBranchName
             | Self::InvalidWorktreePath
@@ -266,6 +279,8 @@ pub fn snapshot(start: &Path) -> Result<GitSnapshot, GitError> {
         &root,
         [
             "for-each-ref",
+            "--count=501",
+            "--sort=-committerdate",
             "--format=%(refname:short)%09%(objectname:short)%09%(HEAD)",
             "refs/heads",
         ],
@@ -276,6 +291,14 @@ pub fn snapshot(start: &Path) -> Result<GitSnapshot, GitError> {
     truncated |= branch_output.stdout_truncated || branches.len() > MAX_GIT_BRANCHES;
     branches.truncate(MAX_GIT_BRANCHES);
     let default_branch = default_branch(&root, branch.as_deref(), &branches)?;
+    let review_default_base =
+        review_default_base(&root, branch.as_deref(), default_branch.as_deref())?;
+    let review_branches = branches
+        .iter()
+        .filter(|candidate| !candidate.current)
+        .take(MAX_GIT_REVIEW_BRANCHES)
+        .map(|candidate| candidate.name.clone())
+        .collect();
 
     let worktree_output = git_output(
         &root,
@@ -294,11 +317,13 @@ pub fn snapshot(start: &Path) -> Result<GitSnapshot, GitError> {
         repository_root: root,
         branch,
         default_branch,
+        review_default_base,
         upstream_ref,
         ahead,
         behind,
         files,
         branches,
+        review_branches,
         worktrees,
         commits,
         truncated,
@@ -385,37 +410,51 @@ pub fn uncommitted_diff(root: &Path) -> Result<GitDiff, GitError> {
         truncated |= unstaged.stdout_truncated;
     }
 
-    if !truncated {
-        let untracked = git_output(
-            root,
-            ["ls-files", "--others", "--exclude-standard", "-z"],
-            MAX_GIT_METADATA_BYTES,
-            GIT_TIMEOUT,
-        )?;
-        let mut paths = untracked
-            .stdout
-            .split(|byte| *byte == 0)
-            .filter(|path| !path.is_empty());
-        for path in paths.by_ref().take(MAX_GIT_FILES) {
-            let remaining = MAX_GIT_DIFF_BYTES.saturating_sub(text.len());
-            if remaining == 0 {
-                truncated = true;
-                break;
-            }
-            if !text.is_empty() {
-                push_bounded_text(&mut text, "\n", MAX_GIT_DIFF_BYTES, &mut truncated);
-            }
-            let diff = untracked_diff_with_limit(root, &git_path(path), remaining)?;
-            push_bounded_text(&mut text, &diff.text, MAX_GIT_DIFF_BYTES, &mut truncated);
-            truncated |= diff.truncated;
-            if truncated {
-                break;
-            }
-        }
-        truncated |= paths.next().is_some() || untracked.stdout_truncated;
-    }
+    append_untracked_diffs(root, &mut text, &mut truncated)?;
 
     Ok(GitDiff { text, truncated })
+}
+
+pub fn branch_diff(root: &Path, base_ref: &str) -> Result<GitBranchDiff, GitError> {
+    let base_ref = base_ref.trim();
+    if base_ref.is_empty()
+        || base_ref.len() > MAX_GIT_BRANCH_BYTES
+        || base_ref.starts_with('-')
+        || base_ref.chars().any(char::is_control)
+    {
+        return Err(GitError::InvalidReference);
+    }
+
+    let merge_base = git_output(root, ["merge-base", "HEAD", base_ref], 128, GIT_TIMEOUT)?;
+    let base_sha = String::from_utf8(merge_base.stdout)
+        .map_err(|_| GitError::InvalidOutput)?
+        .trim()
+        .to_owned();
+    if !(7..=64).contains(&base_sha.len()) || !base_sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(GitError::InvalidOutput);
+    }
+
+    let tracked = git_output(
+        root,
+        [
+            "diff",
+            base_sha.as_str(),
+            "--no-ext-diff",
+            "--no-color",
+            "--unified=3",
+        ],
+        MAX_GIT_DIFF_BYTES,
+        GIT_TIMEOUT,
+    )?;
+    let mut text = String::from_utf8_lossy(&tracked.stdout).into_owned();
+    let mut truncated = tracked.stdout_truncated;
+    append_untracked_diffs(root, &mut text, &mut truncated)?;
+    Ok(GitBranchDiff {
+        base_sha,
+        text,
+        truncated,
+    })
 }
 
 pub fn commit_diff(root: &Path, sha: &str) -> Result<GitDiff, GitError> {
@@ -1239,6 +1278,34 @@ fn default_branch(
         .map(str::to_owned))
 }
 
+fn review_default_base(
+    root: &Path,
+    branch: Option<&str>,
+    default_branch: Option<&str>,
+) -> Result<Option<String>, GitError> {
+    let Some(default_branch) = default_branch else {
+        return Ok(None);
+    };
+    let remote = branch
+        .map(|branch| push_remote(root, branch))
+        .transpose()?
+        .flatten();
+    if let Some(remote) = remote {
+        let remote_ref = format!("refs/remotes/{remote}/{default_branch}");
+        if optional_git_output(
+            root,
+            ["rev-parse", "--verify", "--quiet", remote_ref.as_str()],
+            128,
+            GIT_TIMEOUT,
+        )?
+        .is_some()
+        {
+            return Ok(Some(format!("{remote}/{default_branch}")));
+        }
+    }
+    Ok(Some(default_branch.to_owned()))
+}
+
 fn review_commits(
     root: &Path,
     branch: Option<&str>,
@@ -1512,6 +1579,44 @@ fn untracked_diff_with_limit(
         text: output,
         truncated: input_truncated || output_truncated,
     })
+}
+
+fn append_untracked_diffs(
+    root: &Path,
+    text: &mut String,
+    truncated: &mut bool,
+) -> Result<(), GitError> {
+    if *truncated {
+        return Ok(());
+    }
+    let untracked = git_output(
+        root,
+        ["ls-files", "--others", "--exclude-standard", "-z"],
+        MAX_GIT_METADATA_BYTES,
+        GIT_TIMEOUT,
+    )?;
+    let mut paths = untracked
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty());
+    for path in paths.by_ref().take(MAX_GIT_FILES) {
+        let remaining = MAX_GIT_DIFF_BYTES.saturating_sub(text.len());
+        if remaining == 0 {
+            *truncated = true;
+            break;
+        }
+        if !text.is_empty() {
+            push_bounded_text(text, "\n", MAX_GIT_DIFF_BYTES, truncated);
+        }
+        let diff = untracked_diff_with_limit(root, &git_path(path), remaining)?;
+        push_bounded_text(text, &diff.text, MAX_GIT_DIFF_BYTES, truncated);
+        *truncated |= diff.truncated;
+        if *truncated {
+            break;
+        }
+    }
+    *truncated |= paths.next().is_some() || untracked.stdout_truncated;
+    Ok(())
 }
 
 fn escaped_git_path(path: &Path) -> String {
@@ -1790,10 +1895,10 @@ mod tests {
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     use super::{
-        GitFileKind, MAX_GIT_COMMIT_CONTEXT_BYTES, MAX_GIT_CONFLICT_PATHS, commit, commit_diff,
-        commit_message_diff, parse_branches, parse_checkout_conflicts, parse_numstat, parse_status,
-        parse_worktrees, pull_request_context, push, repository_relative_path, snapshot,
-        uncommitted_diff, untracked_diff, valid_worktree_path,
+        GitFileKind, MAX_GIT_COMMIT_CONTEXT_BYTES, MAX_GIT_CONFLICT_PATHS, branch_diff, commit,
+        commit_diff, commit_message_diff, parse_branches, parse_checkout_conflicts, parse_numstat,
+        parse_status, parse_worktrees, pull_request_context, push, repository_relative_path,
+        snapshot, uncommitted_diff, untracked_diff, valid_worktree_path,
     };
 
     struct TemporaryDirectory(PathBuf);
@@ -1962,6 +2067,12 @@ mod tests {
     fn review_sources_keep_branch_commits_and_working_tree_changes_separate()
     -> Result<(), super::GitError> {
         let directory = temporary_git_repository("codexrs-review-sources")?;
+        let base_branch = run_git(&directory.0, &["branch", "--show-current"])?
+            .trim()
+            .to_owned();
+        let base_sha = run_git(&directory.0, &["rev-parse", "HEAD"])?
+            .trim()
+            .to_owned();
         run_git(
             &directory.0,
             &["switch", "-q", "-c", "feature/review-sources"],
@@ -1992,6 +2103,14 @@ mod tests {
         assert_eq!(repository.commits[0].subject, "Add committed feature");
         assert!(repository.commits[0].message.contains("Review source body"));
         assert!(repository.commits[0].committed_at > 0);
+        assert_eq!(
+            repository.review_default_base.as_deref(),
+            Some(base_branch.as_str())
+        );
+        assert_eq!(
+            repository.review_branches,
+            std::slice::from_ref(&base_branch)
+        );
 
         let working_tree = uncommitted_diff(&directory.0)?;
         assert!(!working_tree.truncated);
@@ -2005,6 +2124,15 @@ mod tests {
         assert!(committed.text.contains("+committed feature"));
         assert!(!committed.text.contains("working tree change"));
         assert!(!committed.text.contains("untracked change"));
+
+        let branch = branch_diff(&directory.0, &base_branch)?;
+        assert_eq!(branch.base_sha, base_sha);
+        assert!(!branch.truncated);
+        assert!(branch.text.contains("+committed feature"));
+        assert!(branch.text.contains("+working tree change"));
+        assert!(branch.text.contains("+++ b/untracked.txt"));
+        assert!(branch.text.contains("+untracked change"));
+        assert!(branch_diff(&directory.0, "\ninvalid").is_err());
         Ok(())
     }
 
