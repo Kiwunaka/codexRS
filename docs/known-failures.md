@@ -32,7 +32,7 @@ reports. They are test inputs, not behavior to reproduce.
 - Thread metadata page: 20 by default, 100 maximum.
 - Git metadata: 2 MiB per command.
 - Unified diff: 4 MiB.
-- Git files: 2,000; branches: 500; worktrees: 100.
+- Git files: 2,000; branches: 500; worktrees: 100; review commits: 30.
 - Terminal input: 64 KiB; terminal events: 256.
 - Computer capture: 1600×1200 and 3 MiB maximum.
 - Computer text input: 16 KiB.
