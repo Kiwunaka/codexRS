@@ -61,13 +61,13 @@ use codex_platform::{
 };
 use gpui::{
     AnyElement, AnyWindowHandle, App, Application, Asset, Bounds, ClipboardItem, Context,
-    DragMoveEvent, Entity, FocusHandle, Focusable, Global, Hsla, Image, ImageCacheError,
-    ImageFormat, IntoElement, KeyBinding, KeyContext, KeyDownEvent, Keystroke, ListAlignment,
-    ListState, MouseButton, MouseDownEvent, MouseUpEvent, NavigationDirection, ObjectFit,
-    PathPromptOptions, Render, RenderImage, ScrollHandle, ScrollWheelEvent, SharedString,
-    Subscription, Task, Timer, WeakEntity, Window, WindowBounds, WindowControlArea, WindowKind,
-    WindowOptions, canvas, div, hsla, img, list, point, prelude::*, px, relative, rgb, size,
-    uniform_list,
+    DragMoveEvent, Entity, FocusHandle, Focusable, Global, HighlightStyle, Hsla, Image,
+    ImageCacheError, ImageFormat, IntoElement, KeyBinding, KeyContext, KeyDownEvent, Keystroke,
+    ListAlignment, ListState, MouseButton, MouseDownEvent, MouseUpEvent, NavigationDirection,
+    ObjectFit, PathPromptOptions, Render, RenderImage, ScrollHandle, ScrollWheelEvent,
+    SharedString, StyledText, Subscription, Task, Timer, WeakEntity, Window, WindowBounds,
+    WindowControlArea, WindowKind, WindowOptions, canvas, div, hsla, img, list, point, prelude::*,
+    px, relative, rgb, size, uniform_list,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, IndexPath, InteractiveElementExt, Root, Selectable,
@@ -4524,7 +4524,7 @@ struct WorkspaceView {
     timeline_list_items: Vec<(String, TimelineKind)>,
     expanded_timeline_item: Option<(String, String)>,
     thread_find_open: bool,
-    thread_find_active_item_id: Option<String>,
+    thread_find_active_match: Option<ThreadFindActiveMatch>,
     navigation_history: NavigationHistory,
     navigation_history_replaying: bool,
     sidebar_visible: bool,
@@ -5506,7 +5506,7 @@ impl WorkspaceView {
             timeline_list_items: Vec::new(),
             expanded_timeline_item: None,
             thread_find_open: false,
-            thread_find_active_item_id: None,
+            thread_find_active_match: None,
             navigation_history,
             navigation_history_replaying: false,
             sidebar_visible: true,
@@ -5988,7 +5988,7 @@ impl WorkspaceView {
                 || previous_location != next_location)
         {
             self.thread_find_open = false;
-            self.thread_find_active_item_id = None;
+            self.thread_find_active_match = None;
         }
         if !self.navigation_history_replaying && previous_location != next_location {
             self.navigation_history.record(next_location);
@@ -10558,18 +10558,26 @@ impl WorkspaceView {
 
     fn refresh_thread_find_active(&mut self, cx: &mut Context<Self>) {
         let matches = self.thread_find_matches(cx);
-        let active_index = matches.item_indices.first().copied();
-        self.thread_find_active_item_id = active_index.and_then(|index| {
+        let active = matches.matches.first().and_then(|matched| {
             let task_id = self.state.selected_task_id.as_deref()?;
-            self.state
+            let item = self
+                .state
                 .timelines
                 .get(task_id)?
                 .items
-                .get(index)
-                .map(|item| item.id.clone())
+                .get(matched.item_index)?;
+            Some((
+                ThreadFindActiveMatch {
+                    item_id: item.id.clone(),
+                    surface: matched.surface,
+                    range: matched.range.clone(),
+                },
+                matched.item_index,
+            ))
         });
+        self.thread_find_active_match = active.as_ref().map(|(active, _)| active.clone());
         if self.thread_find_open
-            && let Some(index) = active_index
+            && let Some((_, index)) = active
         {
             self.timeline_list.scroll_to_reveal_item(index);
         }
@@ -10589,14 +10597,14 @@ impl WorkspaceView {
 
     fn close_thread_find(&mut self, cx: &mut Context<Self>) {
         self.thread_find_open = false;
-        self.thread_find_active_item_id = None;
+        self.thread_find_active_match = None;
         cx.notify();
     }
 
     fn navigate_thread_find(&mut self, next: bool, cx: &mut Context<Self>) {
         let matches = self.thread_find_matches(cx);
-        if matches.item_indices.is_empty() {
-            self.thread_find_active_item_id = None;
+        if matches.matches.is_empty() {
+            self.thread_find_active_match = None;
             cx.notify();
             return;
         }
@@ -10606,26 +10614,32 @@ impl WorkspaceView {
         let Some(timeline) = self.state.timelines.get(task_id) else {
             return;
         };
-        let active_position = self
-            .thread_find_active_item_id
-            .as_deref()
-            .and_then(|active_id| {
-                matches.item_indices.iter().position(|index| {
-                    timeline
-                        .items
-                        .get(*index)
-                        .is_some_and(|item| item.id == active_id)
-                })
-            });
+        let active_position = self.thread_find_active_match.as_ref().and_then(|active| {
+            matches.matches.iter().position(|matched| {
+                timeline
+                    .items
+                    .get(matched.item_index)
+                    .is_some_and(|item| item.id == active.item_id)
+                    && matched.surface == active.surface
+                    && matched.range == active.range
+            })
+        });
         let position = match (active_position, next) {
-            (Some(position), true) => (position + 1) % matches.item_indices.len(),
-            (Some(0), false) | (None, false) => matches.item_indices.len() - 1,
+            (Some(position), true) => (position + 1) % matches.matches.len(),
+            (Some(0), false) | (None, false) => matches.matches.len() - 1,
             (Some(position), false) => position - 1,
             (None, true) => 0,
         };
-        let index = matches.item_indices[position];
-        self.thread_find_active_item_id = timeline.items.get(index).map(|item| item.id.clone());
-        self.timeline_list.scroll_to_reveal_item(index);
+        let matched = &matches.matches[position];
+        let Some(item) = timeline.items.get(matched.item_index) else {
+            return;
+        };
+        self.thread_find_active_match = Some(ThreadFindActiveMatch {
+            item_id: item.id.clone(),
+            surface: matched.surface,
+            range: matched.range.clone(),
+        });
+        self.timeline_list.scroll_to_reveal_item(matched.item_index);
         cx.notify();
     }
 
@@ -10666,29 +10680,28 @@ impl WorkspaceView {
         let matches = self.thread_find_matches(cx);
         let query = self.thread_find_input.read(cx).value().trim().to_owned();
         let has_query = !query.is_empty();
-        let active_position = self
-            .thread_find_active_item_id
-            .as_deref()
-            .and_then(|active_id| {
-                let task_id = self.state.selected_task_id.as_deref()?;
-                let timeline = self.state.timelines.get(task_id)?;
-                matches.item_indices.iter().position(|index| {
-                    timeline
-                        .items
-                        .get(*index)
-                        .is_some_and(|item| item.id == active_id)
-                })
-            });
+        let active_position = self.thread_find_active_match.as_ref().and_then(|active| {
+            let task_id = self.state.selected_task_id.as_deref()?;
+            let timeline = self.state.timelines.get(task_id)?;
+            matches.matches.iter().position(|matched| {
+                timeline
+                    .items
+                    .get(matched.item_index)
+                    .is_some_and(|item| item.id == active.item_id)
+                    && matched.surface == active.surface
+                    && matched.range == active.range
+            })
+        });
         let result_label = if !has_query {
             None
-        } else if matches.item_indices.is_empty() {
+        } else if matches.matches.is_empty() {
             Some("0 results".to_owned())
         } else {
             let suffix = if matches.is_capped { "+" } else { "" };
             Some(format!(
                 "{} / {}{suffix} results",
                 active_position.unwrap_or(0) + 1,
-                matches.item_indices.len()
+                matches.matches.len()
             ))
         };
         let right = self.thread_find_right_offset();
@@ -10736,7 +10749,7 @@ impl WorkspaceView {
                     .tooltip("Previous result · Shift+F3")
                     .xsmall()
                     .ghost()
-                    .disabled(matches.item_indices.is_empty())
+                    .disabled(matches.matches.is_empty())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.navigate_thread_find(false, cx);
                     })),
@@ -10747,7 +10760,7 @@ impl WorkspaceView {
                     .tooltip("Next result · Ctrl+G")
                     .xsmall()
                     .ghost()
-                    .disabled(matches.item_indices.is_empty())
+                    .disabled(matches.matches.is_empty())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.navigate_thread_find(true, cx);
                     })),
@@ -14860,8 +14873,9 @@ impl WorkspaceView {
                                             .get(&task_id_for_list)
                                             .and_then(|timeline| timeline.items.get(index))
                                             .is_some_and(|item: &TimelineItem| {
-                                                this.thread_find_active_item_id.as_deref()
-                                                    == Some(item.id.as_str())
+                                                this.thread_find_active_match
+                                                    .as_ref()
+                                                    .is_some_and(|active| active.item_id == item.id)
                                             });
                                         let item = this.render_timeline_item(
                                             &task_id_for_list,
@@ -14932,6 +14946,15 @@ impl WorkspaceView {
         let Some(mut item) = timeline.items.get(index).cloned() else {
             return div().into_any_element();
         };
+        let thread_find_query = self
+            .thread_find_open
+            .then(|| self.thread_find_input.read(cx).value().trim().to_owned())
+            .filter(|query| !query.is_empty());
+        let active_find_match = self
+            .thread_find_active_match
+            .as_ref()
+            .filter(|active| active.item_id == item.id)
+            .cloned();
         if item.kind == TimelineKind::Command
             && !item.completed
             && item.process_id.is_some()
@@ -14955,7 +14978,15 @@ impl WorkspaceView {
                 .text_color(cx.theme().muted_foreground)
                 .child(div().h(px(1.0)).flex_1().bg(cx.theme().border))
                 .child(Icon::new(icon).xsmall())
-                .child(item.text)
+                .child(styled_thread_find_text(
+                    item.text,
+                    thread_find_query.as_deref(),
+                    active_find_match
+                        .as_ref()
+                        .filter(|active| active.surface == ThreadFindSurface::Primary)
+                        .map(|active| &active.range),
+                    cx,
+                ))
                 .child(div().h(px(1.0)).flex_1().bg(cx.theme().border))
                 .into_any_element();
         }
@@ -15063,7 +15094,15 @@ impl WorkspaceView {
                 div()
                     .text_sm()
                     .line_height(px(20.0))
-                    .child(text)
+                    .child(styled_thread_find_text(
+                        text,
+                        thread_find_query.as_deref(),
+                        active_find_match
+                            .as_ref()
+                            .filter(|active| active.surface == ThreadFindSurface::Primary)
+                            .map(|active| &active.range),
+                        cx,
+                    ))
                     .into_any_element()
             };
             return v_flex()
@@ -15233,7 +15272,15 @@ impl WorkspaceView {
                         );
                     }))
                 })
-                .child(text)
+                .child(styled_thread_find_text(
+                    text,
+                    thread_find_query.as_deref(),
+                    active_find_match
+                        .as_ref()
+                        .filter(|active| active.surface == ThreadFindSurface::Primary)
+                        .map(|active| &active.range),
+                    cx,
+                ))
                 .into_any_element()
         };
 
@@ -15593,6 +15640,15 @@ impl WorkspaceView {
         item: TimelineItem,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let thread_find_query = self
+            .thread_find_open
+            .then(|| self.thread_find_input.read(cx).value().trim().to_owned())
+            .filter(|query| !query.is_empty());
+        let active_find_match = self
+            .thread_find_active_match
+            .as_ref()
+            .filter(|active| active.item_id == item.id)
+            .cloned();
         let (summary, detail) = timeline_activity_content(&item);
         let item_key = (task_id.to_owned(), item.id.clone());
         let expanded = self.expanded_timeline_item.as_ref() == Some(&item_key);
@@ -15669,7 +15725,15 @@ impl WorkspaceView {
                     .truncate()
                     .text_sm()
                     .text_color(cx.theme().foreground)
-                    .child(summary),
+                    .child(styled_thread_find_text(
+                        summary,
+                        thread_find_query.as_deref(),
+                        active_find_match
+                            .as_ref()
+                            .filter(|active| active.surface == ThreadFindSurface::Primary)
+                            .map(|active| &active.range),
+                        cx,
+                    )),
             )
             .when(!item.completed, |row| {
                 row.child(
@@ -15714,7 +15778,15 @@ impl WorkspaceView {
                         .text_xs()
                         .line_height(px(18.0))
                         .line_clamp(12)
-                        .child(detail),
+                        .child(styled_thread_find_text(
+                            detail,
+                            thread_find_query.as_deref(),
+                            active_find_match
+                                .as_ref()
+                                .filter(|active| active.surface == ThreadFindSurface::Detail)
+                                .map(|active| &active.range),
+                            cx,
+                        )),
                 );
             }
             for (source_index, source) in sources.into_iter().enumerate() {
@@ -15784,6 +15856,17 @@ impl WorkspaceView {
         item: TimelineItem,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let thread_find_query = self
+            .thread_find_open
+            .then(|| self.thread_find_input.read(cx).value().trim().to_owned())
+            .filter(|query| !query.is_empty());
+        let active_find_range = self
+            .thread_find_active_match
+            .as_ref()
+            .filter(|active| {
+                active.item_id == item.id && active.surface == ThreadFindSurface::Primary
+            })
+            .map(|active| &active.range);
         let source = item
             .sources
             .into_iter()
@@ -15817,13 +15900,14 @@ impl WorkspaceView {
                                     .child("Extra safety checks are on"),
                             ),
                     )
-                    .child(
-                        div()
-                            .pl_6()
-                            .text_sm()
-                            .line_height(px(20.0))
-                            .child(item.text),
-                    )
+                    .child(div().pl_6().text_sm().line_height(px(20.0)).child(
+                        styled_thread_find_text(
+                            item.text,
+                            thread_find_query.as_deref(),
+                            active_find_range,
+                            cx,
+                        ),
+                    ))
                     .when_some(source, |warning, source| {
                         let url = source.url;
                         warning.child(
@@ -38285,9 +38369,30 @@ fn humanize_identifier(value: &str) -> String {
     label
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ThreadFindSurface {
+    Primary,
+    Detail,
+    Metadata,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ThreadFindMatch {
+    item_index: usize,
+    surface: ThreadFindSurface,
+    range: Range<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ThreadFindActiveMatch {
+    item_id: String,
+    surface: ThreadFindSurface,
+    range: Range<usize>,
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 struct ThreadFindMatches {
-    item_indices: Vec<usize>,
+    matches: Vec<ThreadFindMatch>,
     is_capped: bool,
 }
 
@@ -38850,41 +38955,305 @@ fn settings_section_matches(section: SettingsSection, raw_query: &str) -> bool {
         .all(|term| searchable_text.contains(term))
 }
 
+#[derive(Debug, Clone, Copy)]
+struct FoldedSearchSpan {
+    folded_start: usize,
+    folded_end: usize,
+    original_start: usize,
+    original_end: usize,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct TextMatchRanges {
+    ranges: Vec<Range<usize>>,
+    is_capped: bool,
+}
+
+fn folded_search_text(value: &str) -> (String, Vec<FoldedSearchSpan>) {
+    let mut folded = String::with_capacity(value.len());
+    let mut spans = Vec::with_capacity(value.chars().count());
+    let mut characters = value.char_indices().peekable();
+    while let Some((original_start, character)) = characters.next() {
+        let original_end = characters.peek().map_or(value.len(), |(offset, _)| *offset);
+        let folded_start = folded.len();
+        folded.extend(character.to_lowercase());
+        let folded_end = folded.len();
+        if folded_start != folded_end {
+            spans.push(FoldedSearchSpan {
+                folded_start,
+                folded_end,
+                original_start,
+                original_end,
+            });
+        }
+    }
+    (folded, spans)
+}
+
+fn case_insensitive_match_ranges(value: &str, query: &str, max_matches: usize) -> TextMatchRanges {
+    let query = query.trim();
+    if query.is_empty() || value.is_empty() {
+        return TextMatchRanges::default();
+    }
+
+    let folded_query = query
+        .chars()
+        .flat_map(char::to_lowercase)
+        .collect::<String>();
+    if folded_query.is_empty() {
+        return TextMatchRanges::default();
+    }
+    let (folded_value, spans) = folded_search_text(value);
+    if folded_value.is_empty() || spans.is_empty() {
+        return TextMatchRanges::default();
+    }
+
+    let mut result = TextMatchRanges::default();
+    let mut cursor = 0;
+    while cursor < folded_value.len() {
+        let Some(relative_start) = folded_value[cursor..].find(&folded_query) else {
+            break;
+        };
+        let match_start = cursor + relative_start;
+        let match_end = match_start + folded_query.len();
+        let start_index = spans.partition_point(|span| span.folded_end <= match_start);
+        let end_offset = match_end.saturating_sub(1);
+        let end_index = spans.partition_point(|span| span.folded_end <= end_offset);
+        let Some(start_span) = spans.get(start_index) else {
+            break;
+        };
+        let Some(end_span) = spans.get(end_index) else {
+            break;
+        };
+        if start_span.folded_start >= match_end || end_span.folded_end < match_end {
+            cursor = match_end;
+            continue;
+        }
+        let range = start_span.original_start..end_span.original_end;
+        let overlaps_previous = result
+            .ranges
+            .last()
+            .is_some_and(|previous| previous.end > range.start);
+        if !overlaps_previous {
+            if result.ranges.len() == max_matches {
+                result.is_capped = true;
+                break;
+            }
+            result.ranges.push(range);
+        }
+        cursor = match_end;
+    }
+    result
+}
+
+fn markdown_value_range(source: &str, node: &Node, value: &str) -> Option<Range<usize>> {
+    let position = node.position()?;
+    if position.start.offset > position.end.offset
+        || position.end.offset > source.len()
+        || !source.is_char_boundary(position.start.offset)
+        || !source.is_char_boundary(position.end.offset)
+    {
+        return None;
+    }
+    let node_source = &source[position.start.offset..position.end.offset];
+    if node_source == value {
+        return Some(position.start.offset..position.end.offset);
+    }
+    let relative_start = node_source.find(value)?;
+    let start = position.start.offset + relative_start;
+    let end = start + value.len();
+    (source.is_char_boundary(start) && source.is_char_boundary(end)).then_some(start..end)
+}
+
+fn collect_markdown_search_spans(source: &str, node: &Node, spans: &mut Vec<Range<usize>>) {
+    let span = match node {
+        Node::Text(text) => markdown_value_range(source, node, &text.value),
+        Node::InlineCode(code) => markdown_value_range(source, node, &code.value),
+        Node::Code(code) => markdown_value_range(source, node, &code.value),
+        _ => None,
+    };
+    if let Some(span) = span {
+        spans.push(span);
+        return;
+    }
+    if let Some(children) = node.children() {
+        for child in children {
+            collect_markdown_search_spans(source, child, spans);
+        }
+    }
+}
+
+fn assistant_markdown_search_spans(value: &str) -> Option<Vec<Range<usize>>> {
+    let tree = markdown::to_mdast(value, &ParseOptions::gfm()).ok()?;
+    let mut spans = Vec::new();
+    collect_markdown_search_spans(value, &tree, &mut spans);
+    spans.sort_unstable_by_key(|span| span.start);
+    Some(spans)
+}
+
+fn assistant_markdown_match_ranges(
+    value: &str,
+    query: &str,
+    max_matches: usize,
+) -> TextMatchRanges {
+    let Some(spans) = assistant_markdown_search_spans(value) else {
+        return case_insensitive_match_ranges(value, query, max_matches);
+    };
+    let mut result = TextMatchRanges::default();
+    for span in spans {
+        let remaining = max_matches.saturating_sub(result.ranges.len());
+        let span_matches = case_insensitive_match_ranges(&value[span.clone()], query, remaining);
+        result.ranges.extend(
+            span_matches
+                .ranges
+                .into_iter()
+                .map(|range| (span.start + range.start)..(span.start + range.end)),
+        );
+        if span_matches.is_capped {
+            result.is_capped = true;
+            break;
+        }
+    }
+    result
+}
+
+fn styled_thread_find_text(
+    value: String,
+    query: Option<&str>,
+    active_range: Option<&Range<usize>>,
+    cx: &App,
+) -> StyledText {
+    let Some(query) = query.filter(|query| !query.is_empty()) else {
+        return StyledText::new(value);
+    };
+    let matches = case_insensitive_match_ranges(&value, query, MAX_THREAD_FIND_MATCHES);
+    let highlights = matches.ranges.into_iter().map(|range| {
+        let active = active_range.is_some_and(|active| *active == range);
+        (
+            range,
+            HighlightStyle {
+                background_color: Some(if active {
+                    cx.theme().warning
+                } else {
+                    cx.theme().warning.opacity(0.35)
+                }),
+                ..Default::default()
+            },
+        )
+    });
+    StyledText::new(value).with_highlights(highlights)
+}
+
+fn timeline_find_content(item: &TimelineItem) -> (String, Option<String>, bool) {
+    if is_compact_timeline_activity(item.kind) {
+        let (summary, detail) = timeline_activity_content(item);
+        return (summary, detail, false);
+    }
+    if item.kind == TimelineKind::Agent {
+        let text = if item.text.trim().is_empty() {
+            "Codex response".to_owned()
+        } else {
+            bounded_render_text(item.text.trim(), 64 * 1024)
+        };
+        return match sanitize_assistant_markdown(&text) {
+            Some(markdown) => (markdown, item.detail.clone(), true),
+            None => (text, item.detail.clone(), false),
+        };
+    }
+    (item.text.clone(), item.detail.clone(), false)
+}
+
+fn push_thread_find_ranges(
+    matches: &mut ThreadFindMatches,
+    item_index: usize,
+    surface: ThreadFindSurface,
+    value: &str,
+    query: &str,
+    markdown: bool,
+) -> bool {
+    let remaining = MAX_THREAD_FIND_MATCHES.saturating_sub(matches.matches.len());
+    let found = if markdown {
+        assistant_markdown_match_ranges(value, query, remaining)
+    } else {
+        case_insensitive_match_ranges(value, query, remaining)
+    };
+    matches
+        .matches
+        .extend(found.ranges.into_iter().map(|range| ThreadFindMatch {
+            item_index,
+            surface,
+            range,
+        }));
+    if found.is_capped {
+        matches.is_capped = true;
+    }
+    found.is_capped
+}
+
+fn timeline_metadata_contains(item: &TimelineItem, query: &str) -> bool {
+    let contains = |value: &str| {
+        let matches = case_insensitive_match_ranges(value, query, 1);
+        !matches.ranges.is_empty() || matches.is_capped
+    };
+    item.memory_citations
+        .iter()
+        .any(|citation| contains(&citation.path) || contains(&citation.note))
+        || item
+            .sources
+            .iter()
+            .any(|source| contains(&source.title) || contains(&source.url))
+        || item.attachments.iter().any(|attachment| {
+            contains(&attachment.name) || contains(&attachment.path.to_string_lossy())
+        })
+        || item
+            .output_artifacts
+            .iter()
+            .any(|artifact| contains(&artifact.path.to_string_lossy()))
+}
+
 fn find_timeline_matches(items: &[TimelineItem], query: &str) -> ThreadFindMatches {
     let query = bounded_thread_find_query(query);
-    let query = query.trim().to_lowercase();
+    let query = query.trim();
     if query.is_empty() {
         return ThreadFindMatches::default();
     }
 
     let mut matches = ThreadFindMatches::default();
     for (index, item) in items.iter().enumerate() {
-        let contains = |value: &str| value.to_lowercase().contains(&query);
-        let item_matches = contains(&item.text)
-            || item.detail.as_deref().is_some_and(&contains)
-            || item
-                .memory_citations
-                .iter()
-                .any(|citation| contains(&citation.path) || contains(&citation.note))
-            || item
-                .sources
-                .iter()
-                .any(|source| contains(&source.title) || contains(&source.url))
-            || item.attachments.iter().any(|attachment| {
-                contains(&attachment.name) || contains(&attachment.path.to_string_lossy())
-            })
-            || item
-                .output_artifacts
-                .iter()
-                .any(|artifact| contains(&artifact.path.to_string_lossy()));
-        if !item_matches {
-            continue;
-        }
-        if matches.item_indices.len() == MAX_THREAD_FIND_MATCHES {
-            matches.is_capped = true;
+        let (primary, detail, markdown) = timeline_find_content(item);
+        if push_thread_find_ranges(
+            &mut matches,
+            index,
+            ThreadFindSurface::Primary,
+            &primary,
+            query,
+            markdown,
+        ) {
             break;
         }
-        matches.item_indices.push(index);
+        if let Some(detail) = detail
+            && push_thread_find_ranges(
+                &mut matches,
+                index,
+                ThreadFindSurface::Detail,
+                &detail,
+                query,
+                false,
+            )
+        {
+            break;
+        }
+        if timeline_metadata_contains(item, query) {
+            if matches.matches.len() == MAX_THREAD_FIND_MATCHES {
+                matches.is_capped = true;
+                break;
+            }
+            matches.matches.push(ThreadFindMatch {
+                item_index: index,
+                surface: ThreadFindSurface::Metadata,
+                range: 0..0,
+            });
+        }
     }
     matches
 }
@@ -38939,16 +39308,6 @@ fn plugin_logo_placeholder(
 mod tests {
     use std::path::{Path, PathBuf};
 
-    use codex_core::{
-        AppCard, AppState, AppearancePalette, AppearanceVariant, ApprovalContext, ApprovalKind,
-        ApprovalRequest, ComposerAttachment, ComposerAttachmentKind, ComputerApplicationState,
-        GitPullRequestState, IntegratedTerminalShell, KEYBOARD_SHORTCUT_COMMAND_IDS, LoadStatus,
-        MainRoute, McpAuthStatus, PluginCard, ProcessManagerState, PullRequestCiStatus,
-        PullRequestDetail, PullRequestIdentity, PullRequestMutationKind, PullRequestState,
-        PullRequestSummary, ReasoningEffortOption, ServiceTierOption, SkillCard, SkillScope,
-        TaskRunStatus, TaskSummary, TerminalTabState, TimelineItem, TimelineKind,
-    };
-
     use super::{
         ACTIVE_KEYBOARD_SHORTCUTS, APPEARANCE_THEME_SHARE_PREFIX, ArchivedChatDeleteScope,
         ArchivedChatKindFilter, ArchivedChatProjectFilter, ArchivedChatSortKey, AssistantFinding,
@@ -38956,12 +39315,13 @@ mod tests {
         KeyboardShortcutGroup, MAX_CONVERSATION_MARKDOWN_BYTES, MAX_NAVIGATION_HISTORY_ENTRIES,
         MAX_THREAD_FIND_MATCHES, NavigationHistory, NavigationLocation, PaletteCommand,
         PaletteGroup, ReasoningEffortStep, SettingsSection, ShellWidthClass, TaskCopyKind,
-        accelerators_conflict, adjacent_task_id, app_chatgpt_url, app_mention_prompt,
-        appearance_color, appearance_color_value, appearance_theme_share_string,
-        archived_chat_groups, archived_chat_projects, archived_delete_confirmation_copy,
-        background_terminal_summary, bounded_keyboard_shortcut_search_query,
-        bounded_settings_search_query, bounded_thread_find_query, browser_display_url,
-        browser_navigation_url, browser_surface_coordinates, build_plugin_catalog_sections,
+        ThreadFindSurface, accelerators_conflict, adjacent_task_id, app_chatgpt_url,
+        app_mention_prompt, appearance_color, appearance_color_value,
+        appearance_theme_share_string, archived_chat_groups, archived_chat_projects,
+        archived_delete_confirmation_copy, background_terminal_summary,
+        bounded_keyboard_shortcut_search_query, bounded_settings_search_query,
+        bounded_thread_find_query, browser_display_url, browser_navigation_url,
+        browser_surface_coordinates, build_plugin_catalog_sections, case_insensitive_match_ranges,
         command_task_slot, composer_app_commands, composer_at_skill_commands,
         composer_desktop_app_commands, composer_file_query, composer_file_search_max_height,
         composer_plugin_commands, composer_service_tier_command_for_query,
@@ -38984,6 +39344,15 @@ mod tests {
         shell_width_class, sidebar_layout_width, split_diff_rows, status_context_total_label,
         status_rate_limit_label, status_rate_limit_reset_metadata_at, task_slot_id,
         terminal_tab_label, timeline_activity_content, validate_plugin_logo_dimensions,
+    };
+    use codex_core::{
+        AppCard, AppState, AppearancePalette, AppearanceVariant, ApprovalContext, ApprovalKind,
+        ApprovalRequest, ComposerAttachment, ComposerAttachmentKind, ComputerApplicationState,
+        GitPullRequestState, IntegratedTerminalShell, KEYBOARD_SHORTCUT_COMMAND_IDS, LoadStatus,
+        MainRoute, McpAuthStatus, PluginCard, ProcessManagerState, PullRequestCiStatus,
+        PullRequestDetail, PullRequestIdentity, PullRequestMutationKind, PullRequestState,
+        PullRequestSummary, ReasoningEffortOption, ServiceTierOption, SkillCard, SkillScope,
+        TaskRunStatus, TaskSummary, TerminalTabState, TimelineItem, TimelineKind,
     };
 
     fn task(id: &str, cwd: &str) -> TaskSummary {
@@ -40576,18 +40945,47 @@ mod tests {
             item(2, "No match", None),
         ];
 
-        assert_eq!(find_timeline_matches(&items, "ПРИВЕТ").item_indices, [0]);
-        assert_eq!(find_timeline_matches(&items, "SRC/LIB").item_indices, [1]);
+        let primary = find_timeline_matches(&items, "ПРИВЕТ");
+        assert_eq!(primary.matches.len(), 1);
+        assert_eq!(primary.matches[0].item_index, 0);
+        assert_eq!(primary.matches[0].surface, ThreadFindSurface::Primary);
+        let detail = find_timeline_matches(&items, "SRC/LIB");
+        assert_eq!(detail.matches.len(), 1);
+        assert_eq!(detail.matches[0].item_index, 1);
+        assert_eq!(detail.matches[0].surface, ThreadFindSurface::Detail);
         let bounded = bounded_thread_find_query(&"я".repeat(600));
         assert!(bounded.len() <= super::MAX_THREAD_FIND_QUERY_BYTES);
         assert!(bounded.is_char_boundary(bounded.len()));
+
+        let repeated = find_timeline_matches(&[item(3, "needle needle", None)], "needle");
+        assert_eq!(repeated.matches.len(), 2);
+        assert_eq!(repeated.matches[0].item_index, 0);
+        assert_eq!(repeated.matches[1].item_index, 0);
 
         let capped_items = (0..=MAX_THREAD_FIND_MATCHES)
             .map(|id| item(id, "needle", None))
             .collect::<Vec<_>>();
         let matches = find_timeline_matches(&capped_items, "needle");
-        assert_eq!(matches.item_indices.len(), MAX_THREAD_FIND_MATCHES);
+        assert_eq!(matches.matches.len(), MAX_THREAD_FIND_MATCHES);
         assert!(matches.is_capped);
+    }
+
+    #[test]
+    fn thread_find_ranges_map_unicode_folding_back_to_source_bytes() {
+        let matches = case_insensitive_match_ranges("AẞB ẞ İ", "ß", 10);
+        assert_eq!(matches.ranges, [1..4, 6..9]);
+        assert!(!matches.is_capped);
+        assert!(
+            matches
+                .ranges
+                .iter()
+                .all(|range| "AẞB ẞ İ".is_char_boundary(range.start)
+                    && "AẞB ẞ İ".is_char_boundary(range.end))
+        );
+
+        let dotted_i = case_insensitive_match_ranges("İstanbul", "i", 10);
+        assert_eq!(dotted_i.ranges.len(), 1);
+        assert_eq!(dotted_i.ranges[0], 0..2);
     }
 
     #[test]
