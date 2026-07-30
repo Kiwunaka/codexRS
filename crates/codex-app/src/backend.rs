@@ -30,20 +30,21 @@ use codex_core::{
     MAX_BACKGROUND_TERMINALS, MAX_BROWSER_DOWNLOAD_PATH_BYTES, MAX_BROWSER_PERMISSION_ORIGIN_BYTES,
     MAX_BROWSER_SITE_PERMISSIONS, MAX_COMPOSER_ATTACHMENTS, MAX_COMPUTER_ALLOWED_APPS,
     MAX_COMPUTER_APP_ID_BYTES, MAX_FUZZY_FILE_PATH_BYTES, MAX_FUZZY_FILE_QUERY_BYTES,
-    MAX_FUZZY_FILE_RESULTS, MAX_FUZZY_FILE_ROOTS, MAX_GIT_BRANCH_PREFIX_BYTES,
-    MAX_GIT_INSTRUCTIONS_BYTES, MAX_HOOK_FIELD_BYTES, MAX_HOOK_ISSUES, MAX_HOOK_ITEMS,
-    MAX_HOOK_PROJECTS, MAX_KEYBOARD_SHORTCUT_ACCELERATOR_BYTES, MAX_KEYBOARD_SHORTCUTS_PER_COMMAND,
-    MAX_MCP_FORM_FIELDS, MAX_MCP_FORM_IMAGE_DATA_URL_BYTES, MAX_MCP_FORM_OPTIONS,
-    MAX_MCP_FORM_VALUE_BYTES, MAX_MCP_SERVER_FIELD_BYTES, MAX_MCP_SERVER_LIST_ITEMS,
-    MAX_PENDING_APPROVALS, MAX_RETRYABLE_TURN_MESSAGES, MAX_TERMINAL_TABS, MAX_TURN_DIFF_BYTES,
-    MAX_USER_INPUT_OPTIONS, MAX_USER_INPUT_QUESTIONS, MAX_USER_INPUT_VALUE_BYTES,
-    MAX_VISIBLE_THREADS, MAX_WORKTREE_ROOT_BYTES, MainRoute, MarketplaceSourceCard,
-    MarketplaceUpgradeFailure, McpAuthStatus as CoreMcpAuthStatus, McpBrowserOriginElicitation,
-    McpBrowserResourceElicitation, McpElicitation, McpElicitationContent, McpElicitationDecision,
-    McpElicitationValue, McpFormElicitation, McpFormField, McpFormFieldKind,
-    McpFormImagePickerItem, McpFormOption, McpFormStringFormat, McpResourceCard,
-    McpResourceContentCard, McpResourceTemplateCard, McpServerCard, McpServerDraft,
-    McpServerInfoCard, McpServerStartupFailureReason as CoreMcpServerStartupFailureReason,
+    MAX_FUZZY_FILE_RESULTS, MAX_FUZZY_FILE_ROOTS, MAX_GIT_BRANCH_PREFIX_BYTES, MAX_GIT_DIFF_BYTES,
+    MAX_GIT_INSTRUCTIONS_BYTES, MAX_GIT_SHA_BYTES, MAX_HOOK_FIELD_BYTES, MAX_HOOK_ISSUES,
+    MAX_HOOK_ITEMS, MAX_HOOK_PROJECTS, MAX_KEYBOARD_SHORTCUT_ACCELERATOR_BYTES,
+    MAX_KEYBOARD_SHORTCUTS_PER_COMMAND, MAX_MCP_FORM_FIELDS, MAX_MCP_FORM_IMAGE_DATA_URL_BYTES,
+    MAX_MCP_FORM_OPTIONS, MAX_MCP_FORM_VALUE_BYTES, MAX_MCP_SERVER_FIELD_BYTES,
+    MAX_MCP_SERVER_LIST_ITEMS, MAX_PENDING_APPROVALS, MAX_RETRYABLE_TURN_MESSAGES,
+    MAX_TERMINAL_TABS, MAX_TURN_DIFF_BYTES, MAX_USER_INPUT_OPTIONS, MAX_USER_INPUT_QUESTIONS,
+    MAX_USER_INPUT_VALUE_BYTES, MAX_VISIBLE_THREADS, MAX_WORKTREE_ROOT_BYTES, MainRoute,
+    MarketplaceSourceCard, MarketplaceUpgradeFailure, McpAuthStatus as CoreMcpAuthStatus,
+    McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
+    McpElicitationContent, McpElicitationDecision, McpElicitationValue, McpFormElicitation,
+    McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpFormOption, McpFormStringFormat,
+    McpResourceCard, McpResourceContentCard, McpResourceTemplateCard, McpServerCard,
+    McpServerDraft, McpServerInfoCard,
+    McpServerStartupFailureReason as CoreMcpServerStartupFailureReason,
     McpServerStartupState as CoreMcpServerStartupState, McpToolCard, McpTransportKind,
     McpUrlElicitation, ModelOption, NetworkApprovalContext as CoreNetworkApprovalContext,
     NetworkApprovalProtocol as CoreNetworkApprovalProtocol,
@@ -110,7 +111,7 @@ use codex_protocol::{
     FuzzyFileSearchResult as ProtocolFuzzyFileResult, FuzzyFileSearchSessionCompletedNotification,
     FuzzyFileSearchSessionStartParams, FuzzyFileSearchSessionStopParams,
     FuzzyFileSearchSessionUpdateParams, FuzzyFileSearchSessionUpdatedNotification,
-    GetAccountParams, GetAuthStatusParams, HistorySortDirection,
+    GetAccountParams, GetAuthStatusParams, GitDiffToRemoteParams, HistorySortDirection,
     HookEventName as ProtocolHookEventName, HookHandlerType as ProtocolHookHandlerType,
     HookSource as ProtocolHookSource, HookTrustStatus as ProtocolHookTrustStatus, HooksListParams,
     InitializeCapabilities, ListMcpServerStatusParams, LoginAccountParams, LoginAccountResponse,
@@ -4337,6 +4338,13 @@ fn run_effect(
 
     let Some(app_server) = connection.as_ref() else {
         match effect {
+            Effect::LoadBranchDiff { generation, .. } => emit(
+                events,
+                Action::BranchDiffFailed {
+                    generation,
+                    message: "App server is unavailable.".to_owned(),
+                },
+            ),
             Effect::RetryPendingWorktreeFork { .. } => emit(
                 events,
                 Action::PendingWorktreeForkConversationFailed(
@@ -4477,6 +4485,29 @@ fn run_effect(
                 Action::AccountLogoutFailed("Could not log out. Please try again.".to_owned()),
             ),
         },
+        Effect::LoadBranchDiff { generation, cwd } => {
+            match app_server.git_diff_to_remote(GitDiffToRemoteParams { cwd }) {
+                Ok(response) => {
+                    let truncated = response.diff.len() > MAX_GIT_DIFF_BYTES;
+                    emit(
+                        events,
+                        Action::BranchDiffLoaded {
+                            generation,
+                            base_sha: bounded(response.sha, MAX_GIT_SHA_BYTES),
+                            text: bounded(response.diff, MAX_GIT_DIFF_BYTES),
+                            truncated,
+                        },
+                    );
+                }
+                Err(_) => emit(
+                    events,
+                    Action::BranchDiffFailed {
+                        generation,
+                        message: "Could not load changes for this branch.".to_owned(),
+                    },
+                ),
+            }
+        }
         Effect::SubmitFeedback {
             classification,
             reason,
@@ -8761,6 +8792,10 @@ fn map_git_snapshot(snapshot: GitSnapshot) -> GitState {
         selected_scope: codex_core::GitDiffScope::default(),
         selected_path: None,
         unified_diff: String::new(),
+        diff_status: None,
+        diff_base_sha: None,
+        diff_error: None,
+        diff_truncated: false,
         truncated: snapshot.truncated,
         pending_branch_operation: None,
         branch_mutation_error: None,

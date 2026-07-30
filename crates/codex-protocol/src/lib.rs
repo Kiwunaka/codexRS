@@ -328,6 +328,19 @@ pub struct GetAuthStatusParams {
     pub refresh_token: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiffToRemoteParams {
+    pub cwd: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiffToRemoteResponse {
+    pub sha: String,
+    pub diff: String,
+}
+
 pub struct SecretString {
     bytes: Vec<u8>,
 }
@@ -3081,10 +3094,10 @@ mod tests {
         FuzzyFileSearchSessionCompletedNotification, FuzzyFileSearchSessionStartParams,
         FuzzyFileSearchSessionUpdateParams, FuzzyFileSearchSessionUpdatedNotification,
         GetAccountParams, GetAccountRateLimitsResponse, GetAccountResponse, GetAuthStatusParams,
-        GetAuthStatusResponse, HookEventName, HookHandlerType, HookSource, HookTrustStatus,
-        HooksListParams, HooksListResponse, IncomingMessage, InitializeParams,
-        ListMcpServerStatusParams, ListMcpServerStatusResponse, LoginAccountParams,
-        LoginAccountResponse, MarketplaceAddParams, MarketplaceRemoveParams,
+        GetAuthStatusResponse, GitDiffToRemoteParams, GitDiffToRemoteResponse, HookEventName,
+        HookHandlerType, HookSource, HookTrustStatus, HooksListParams, HooksListResponse,
+        IncomingMessage, InitializeParams, ListMcpServerStatusParams, ListMcpServerStatusResponse,
+        LoginAccountParams, LoginAccountResponse, MarketplaceAddParams, MarketplaceRemoveParams,
         MarketplaceUpgradeParams, McpAuthStatus, McpElicitationPrimitiveSchema,
         McpResourceReadParams, McpResourceReadResponse, McpServerElicitationAction,
         McpServerElicitationRequest, McpServerElicitationRequestParams,
@@ -3344,6 +3357,28 @@ mod tests {
                 success: false,
                 error: Some(_),
             }) if login_id == "login-1"
+        ));
+    }
+
+    #[test]
+    fn git_diff_to_remote_types_match_the_pinned_app_server_schema() {
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "gitDiffToRemote",
+                id: 4,
+                params: Some(GitDiffToRemoteParams {
+                    cwd: PathBuf::from(r"C:\work\codexRS"),
+                }),
+            }),
+            b"{\"method\":\"gitDiffToRemote\",\"id\":4,\"params\":{\"cwd\":\"C:\\\\work\\\\codexRS\"}}\n"
+        );
+        assert!(matches!(
+            serde_json::from_value::<GitDiffToRemoteResponse>(json!({
+                "sha": "0123456789abcdef",
+                "diff": "diff --git a/src/lib.rs b/src/lib.rs\n"
+            })),
+            Ok(GitDiffToRemoteResponse { sha, diff })
+                if sha == "0123456789abcdef" && diff.starts_with("diff --git")
         ));
     }
 
