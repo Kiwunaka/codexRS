@@ -2636,6 +2636,8 @@ pub struct PersonalizationState {
     pub status: LoadStatus,
     pub personality: Personality,
     pub memory_available: bool,
+    pub generate_memories: bool,
+    pub use_memories: bool,
     pub memories_enabled: bool,
     pub allow_memory_generation_from_tool_assisted_chats: bool,
     pub pending: bool,
@@ -2648,11 +2650,59 @@ impl Default for PersonalizationState {
             status: LoadStatus::Idle,
             personality: Personality::default(),
             memory_available: false,
+            generate_memories: true,
+            use_memories: true,
             memories_enabled: false,
             allow_memory_generation_from_tool_assisted_chats: false,
             pending: false,
             error: None,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChatMemoryPreferences {
+    pub generate_memories: bool,
+    pub use_memories: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ChatMemoryState {
+    new_chat_preferences: Option<ChatMemoryPreferences>,
+    thread_preferences: HashMap<String, ChatMemoryPreferences>,
+    pending_thread_updates: HashSet<String>,
+}
+
+impl ChatMemoryState {
+    #[must_use]
+    pub fn preferences(
+        &self,
+        task_id: Option<&str>,
+        defaults: ChatMemoryPreferences,
+    ) -> ChatMemoryPreferences {
+        match task_id {
+            Some(task_id) => self
+                .thread_preferences
+                .get(task_id)
+                .copied()
+                .unwrap_or(defaults),
+            None => self.new_chat_preferences.unwrap_or(defaults),
+        }
+    }
+
+    #[must_use]
+    pub fn update_pending(&self, task_id: Option<&str>) -> bool {
+        task_id.is_some_and(|task_id| self.pending_thread_updates.contains(task_id))
+    }
+
+    fn remember_thread_preferences(&mut self, task_id: String, preferences: ChatMemoryPreferences) {
+        if self.thread_preferences.len() >= MAX_VISIBLE_THREADS
+            && !self.thread_preferences.contains_key(&task_id)
+            && let Some(stale_task_id) = self.thread_preferences.keys().next().cloned()
+        {
+            self.thread_preferences.remove(&stale_task_id);
+        }
+        self.thread_preferences.insert(task_id, preferences);
     }
 }
 
@@ -3597,6 +3647,7 @@ pub struct AppState {
     pub runtime: RuntimeState,
     pub account: AccountState,
     pub personalization: PersonalizationState,
+    pub chat_memory: ChatMemoryState,
     pub agent_configuration: AgentConfigurationState,
     pub feedback: FeedbackUploadState,
     pub status_message: Option<String>,
@@ -3655,6 +3706,7 @@ impl Default for AppState {
             runtime: RuntimeState::default(),
             account: AccountState::default(),
             personalization: PersonalizationState::default(),
+            chat_memory: ChatMemoryState::default(),
             agent_configuration: AgentConfigurationState::default(),
             feedback: FeedbackUploadState::default(),
             status_message: None,
@@ -3997,6 +4049,8 @@ pub enum Action {
     PersonalizationLoaded {
         personality: Personality,
         memory_available: bool,
+        generate_memories: bool,
+        use_memories: bool,
         memories_enabled: bool,
         allow_memory_generation_from_tool_assisted_chats: bool,
     },
@@ -4004,6 +4058,23 @@ pub enum Action {
     SelectPersonality(Personality),
     SetMemoriesEnabled(bool),
     SetToolAssistedMemoriesEnabled(bool),
+    SetChatUseMemories(bool),
+    SetChatGenerateMemories(bool),
+    RememberThreadMemoryPreferences {
+        task_id: String,
+        preferences: ChatMemoryPreferences,
+    },
+    ThreadMemoryModeSetFinished {
+        task_id: String,
+    },
+    ThreadMemoryModeSetFailed {
+        task_id: String,
+        previous: ChatMemoryPreferences,
+        message: String,
+    },
+    ResetMemories,
+    MemoriesReset,
+    MemoryResetFailed(String),
     PersonalizationMutationFinished {
         kind: PersonalizationMutationKind,
         overridden: bool,
@@ -4771,6 +4842,12 @@ pub enum Effect {
     SetPersonality(Personality),
     SetMemoriesEnabled(bool),
     SetToolAssistedMemoriesEnabled(bool),
+    SetThreadMemoryMode {
+        task_id: String,
+        enabled: bool,
+        previous: ChatMemoryPreferences,
+    },
+    ResetMemories,
     LoadAgentConfiguration {
         cwd: Option<PathBuf>,
     },
@@ -4818,6 +4895,7 @@ pub enum Effect {
         attachments: Vec<ComposerAttachment>,
         plan_mode: bool,
         goal_objective: Option<String>,
+        memory_preferences: Option<ChatMemoryPreferences>,
     },
     ForkTask {
         task_id: String,
@@ -5895,6 +5973,7 @@ fn prepare_new_chat(state: &mut AppState, cwd: Option<PathBuf>) -> Vec<Effect> {
     state.composer.clear();
     state.composer_attachments.clear();
     state.composer_error = None;
+    state.chat_memory.new_chat_preferences = None;
     state.composer_controls.plan_mode = false;
     state.composer_controls.goal_mode = false;
     state.marketplace.skills_status = Some(LoadStatus::Loading);
@@ -6340,6 +6419,13 @@ fn begin_git_source_diff(state: &mut AppState, scope: GitDiffScope) -> Vec<Effec
             }]
         }
         GitDiffScope::LastTurn | GitDiffScope::Unstaged | GitDiffScope::Staged => Vec::new(),
+    }
+}
+
+fn global_chat_memory_preferences(state: &AppState) -> ChatMemoryPreferences {
+    ChatMemoryPreferences {
+        generate_memories: state.personalization.generate_memories,
+        use_memories: state.personalization.use_memories,
     }
 }
 
@@ -7754,6 +7840,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             let cwd = task.cwd.clone();
             remember_local_project(state, &cwd);
             state.new_chat_cwd = None;
+            state.chat_memory.new_chat_preferences = None;
             state.tasks.retain(|existing| existing.id != task_id);
             state.tasks.insert(0, task);
             state.tasks.truncate(MAX_VISIBLE_THREADS);
@@ -8728,6 +8815,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         Action::PersonalizationLoaded {
             personality,
             memory_available,
+            generate_memories,
+            use_memories,
             memories_enabled,
             allow_memory_generation_from_tool_assisted_chats,
         } => {
@@ -8735,6 +8824,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 status: LoadStatus::Ready,
                 personality,
                 memory_available,
+                generate_memories,
+                use_memories,
                 memories_enabled,
                 allow_memory_generation_from_tool_assisted_chats,
                 pending: false,
@@ -8768,6 +8859,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             {
                 return Vec::new();
             }
+            state.personalization.generate_memories = enabled;
+            state.personalization.use_memories = enabled;
             state.personalization.memories_enabled = enabled;
             state.personalization.pending = true;
             state.personalization.error = None;
@@ -8791,6 +8884,107 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.personalization.pending = true;
             state.personalization.error = None;
             vec![Effect::SetToolAssistedMemoriesEnabled(enabled)]
+        }
+        Action::SetChatUseMemories(enabled) => {
+            if !state.personalization.memory_available || state.selected_task_id.is_some() {
+                return Vec::new();
+            }
+            let defaults = global_chat_memory_preferences(state);
+            let mut preferences = state.chat_memory.preferences(None, defaults);
+            if preferences.use_memories == enabled {
+                return Vec::new();
+            }
+            preferences.use_memories = enabled;
+            state.chat_memory.new_chat_preferences = Some(preferences);
+            Vec::new()
+        }
+        Action::SetChatGenerateMemories(enabled) => {
+            if !state.personalization.memory_available {
+                return Vec::new();
+            }
+            let defaults = global_chat_memory_preferences(state);
+            let Some(task_id) = state.selected_task_id.clone() else {
+                let mut preferences = state.chat_memory.preferences(None, defaults);
+                if preferences.generate_memories == enabled {
+                    return Vec::new();
+                }
+                preferences.generate_memories = enabled;
+                state.chat_memory.new_chat_preferences = Some(preferences);
+                return Vec::new();
+            };
+            if state.connection != ConnectionStatus::Online
+                || state.chat_memory.pending_thread_updates.contains(&task_id)
+            {
+                return Vec::new();
+            }
+            let previous = state
+                .chat_memory
+                .preferences(Some(task_id.as_str()), defaults);
+            if previous.generate_memories == enabled {
+                return Vec::new();
+            }
+            let mut preferences = previous;
+            preferences.generate_memories = enabled;
+            state
+                .chat_memory
+                .remember_thread_preferences(task_id.clone(), preferences);
+            state
+                .chat_memory
+                .pending_thread_updates
+                .insert(task_id.clone());
+            vec![Effect::SetThreadMemoryMode {
+                task_id,
+                enabled,
+                previous,
+            }]
+        }
+        Action::RememberThreadMemoryPreferences {
+            task_id,
+            preferences,
+        } => {
+            state
+                .chat_memory
+                .remember_thread_preferences(task_id, preferences);
+            Vec::new()
+        }
+        Action::ThreadMemoryModeSetFinished { task_id } => {
+            state.chat_memory.pending_thread_updates.remove(&task_id);
+            Vec::new()
+        }
+        Action::ThreadMemoryModeSetFailed {
+            task_id,
+            previous,
+            message,
+        } => {
+            state.chat_memory.pending_thread_updates.remove(&task_id);
+            state
+                .chat_memory
+                .thread_preferences
+                .insert(task_id, previous);
+            state.status_message = Some(format!("Unable to update chat memories: {message}"));
+            Vec::new()
+        }
+        Action::ResetMemories => {
+            if state.personalization.pending
+                || !state.personalization.memory_available
+                || state.connection != ConnectionStatus::Online
+            {
+                return Vec::new();
+            }
+            state.personalization.pending = true;
+            state.personalization.error = None;
+            vec![Effect::ResetMemories]
+        }
+        Action::MemoriesReset => {
+            state.personalization.pending = false;
+            state.personalization.error = None;
+            state.status_message = Some("Memories reset".to_owned());
+            Vec::new()
+        }
+        Action::MemoryResetFailed(message) => {
+            state.personalization.pending = false;
+            state.status_message = Some(format!("Unable to reset memories: {message}"));
+            Vec::new()
         }
         Action::PersonalizationMutationFinished { kind, overridden } => {
             state.personalization.pending = false;
@@ -9588,6 +9782,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     attachments: Vec::new(),
                     plan_mode: false,
                     goal_objective: Some(text),
+                    memory_preferences: state.chat_memory.new_chat_preferences,
                 }];
             }
             if text.is_empty() && state.composer_attachments.is_empty() {
@@ -9648,6 +9843,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     attachments,
                     plan_mode,
                     goal_objective: None,
+                    memory_preferences: state.chat_memory.new_chat_preferences,
                 }]
             }
         }
@@ -15149,21 +15345,21 @@ mod tests {
         BrowserDownloadPreferences, BrowserDownloadState, BrowserDownloadStatus, BrowserKeyInput,
         BrowserMouseButton, BrowserOriginElicitationDecision, BrowserPermissionResource,
         BrowserPermissionValue, BrowserPermissionsState, BrowserResourceElicitationDecision,
-        BrowserSitePermission, BrowserTabState, CommandApprovalContext, ComposerAttachment,
-        ComposerAttachmentKind, ComputerApplicationState, ComputerUseState, ConnectionStatus,
-        DiffMarkerStyle, Effect, FeedbackClassification, FuzzyFileMatchType, FuzzyFileResult,
-        GitCommitNextStep, GitCommitPhase, GitDiffScope, GitPreferences, GitPullRequestNextStep,
-        GitPullRequestPhase, GitPullRequestProvider, GitPullRequestState, GitReviewCommitState,
-        GitReviewMode, GitState, GitWorktreeState, HookCard, HookEventName, HookHandlerType,
-        HookProjectEntry, HookSource, HookTrustStatus, InspectorPane, IntegratedTerminalShell,
-        KeyboardShortcutPreferences, KeyboardShortcutUpdateTarget, LoadStatus, LocalProjectSummary,
-        MAX_BROWSER_DOWNLOADS, MAX_COMPOSER_BYTES, MAX_GIT_DIFF_BYTES, MAX_GIT_INSTRUCTIONS_BYTES,
-        MAX_GIT_SHA_BYTES, MAX_PLUGIN_DETAIL_ITEMS, MAX_TURN_DIFF_BYTES, MainRoute,
-        MarketplaceManageTab, MarketplaceSectionFilter, MarketplaceSourceCard, MarketplaceTab,
-        MarketplaceUpgradeFailure, McpAuthStatus, McpBrowserOriginElicitation,
-        McpBrowserResourceElicitation, McpElicitation, McpElicitationContent,
-        McpElicitationDecision, McpElicitationValue, McpFormElicitation, McpFormField,
-        McpFormFieldKind, McpFormImagePickerItem, McpFormOption, McpFormStringFormat,
+        BrowserSitePermission, BrowserTabState, ChatMemoryPreferences, CommandApprovalContext,
+        ComposerAttachment, ComposerAttachmentKind, ComputerApplicationState, ComputerUseState,
+        ConnectionStatus, DiffMarkerStyle, Effect, FeedbackClassification, FuzzyFileMatchType,
+        FuzzyFileResult, GitCommitNextStep, GitCommitPhase, GitDiffScope, GitPreferences,
+        GitPullRequestNextStep, GitPullRequestPhase, GitPullRequestProvider, GitPullRequestState,
+        GitReviewCommitState, GitReviewMode, GitState, GitWorktreeState, HookCard, HookEventName,
+        HookHandlerType, HookProjectEntry, HookSource, HookTrustStatus, InspectorPane,
+        IntegratedTerminalShell, KeyboardShortcutPreferences, KeyboardShortcutUpdateTarget,
+        LoadStatus, LocalProjectSummary, MAX_BROWSER_DOWNLOADS, MAX_COMPOSER_BYTES,
+        MAX_GIT_DIFF_BYTES, MAX_GIT_INSTRUCTIONS_BYTES, MAX_GIT_SHA_BYTES, MAX_PLUGIN_DETAIL_ITEMS,
+        MAX_TURN_DIFF_BYTES, MainRoute, MarketplaceManageTab, MarketplaceSectionFilter,
+        MarketplaceSourceCard, MarketplaceTab, MarketplaceUpgradeFailure, McpAuthStatus,
+        McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
+        McpElicitationContent, McpElicitationDecision, McpElicitationValue, McpFormElicitation,
+        McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpFormOption, McpFormStringFormat,
         McpResourceCard, McpResourceContentCard, McpServerCard, McpServerDraft,
         McpServerStartupFailureReason, McpServerStartupState, McpTransportKind, McpUrlElicitation,
         ModelOption, OutputArtifact, OutputArtifactKind, PendingWorktreeForkPhase,
@@ -15905,6 +16101,8 @@ mod tests {
                 Action::PersonalizationLoaded {
                     personality: Personality::Friendly,
                     memory_available: true,
+                    generate_memories: true,
+                    use_memories: true,
                     memories_enabled: true,
                     allow_memory_generation_from_tool_assisted_chats: true,
                 }
@@ -15936,6 +16134,8 @@ mod tests {
             Action::PersonalizationLoaded {
                 personality: Personality::Pragmatic,
                 memory_available: true,
+                generate_memories: true,
+                use_memories: true,
                 memories_enabled: true,
                 allow_memory_generation_from_tool_assisted_chats: true,
             },
@@ -15956,6 +16156,8 @@ mod tests {
             Action::PersonalizationLoaded {
                 personality: Personality::Pragmatic,
                 memory_available: true,
+                generate_memories: false,
+                use_memories: true,
                 memories_enabled: false,
                 allow_memory_generation_from_tool_assisted_chats: true,
             },
@@ -15967,6 +16169,121 @@ mod tests {
             reduce(&mut state, Action::SetToolAssistedMemoriesEnabled(false)),
             [Effect::SetToolAssistedMemoriesEnabled(false)]
         );
+    }
+
+    #[test]
+    fn chat_memory_preferences_are_local_for_new_chats_and_server_backed_after_start() {
+        let mut state = AppState {
+            connection: ConnectionStatus::Online,
+            ..AppState::default()
+        };
+        reduce(
+            &mut state,
+            Action::PersonalizationLoaded {
+                personality: Personality::Friendly,
+                memory_available: true,
+                generate_memories: true,
+                use_memories: false,
+                memories_enabled: false,
+                allow_memory_generation_from_tool_assisted_chats: true,
+            },
+        );
+        let defaults = ChatMemoryPreferences {
+            generate_memories: true,
+            use_memories: false,
+        };
+        assert_eq!(state.chat_memory.preferences(None, defaults), defaults);
+        assert!(reduce(&mut state, Action::SetChatUseMemories(true)).is_empty());
+
+        reduce(
+            &mut state,
+            Action::ComposerChanged("start with memory".to_owned()),
+        );
+        assert!(matches!(
+            reduce(&mut state, Action::SubmitComposer).as_slice(),
+            [Effect::CreateTask {
+                memory_preferences: Some(ChatMemoryPreferences {
+                    generate_memories: true,
+                    use_memories: true,
+                }),
+                ..
+            }]
+        ));
+
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(
+            &mut state,
+            Action::RememberThreadMemoryPreferences {
+                task_id: "t1".to_owned(),
+                preferences: ChatMemoryPreferences {
+                    generate_memories: true,
+                    use_memories: true,
+                },
+            },
+        );
+        assert!(reduce(&mut state, Action::SetChatUseMemories(false)).is_empty());
+        assert_eq!(
+            reduce(&mut state, Action::SetChatGenerateMemories(false)),
+            [Effect::SetThreadMemoryMode {
+                task_id: "t1".to_owned(),
+                enabled: false,
+                previous: ChatMemoryPreferences {
+                    generate_memories: true,
+                    use_memories: true,
+                },
+            }]
+        );
+        assert!(state.chat_memory.update_pending(Some("t1")));
+        reduce(
+            &mut state,
+            Action::ThreadMemoryModeSetFailed {
+                task_id: "t1".to_owned(),
+                previous: ChatMemoryPreferences {
+                    generate_memories: true,
+                    use_memories: true,
+                },
+                message: "rejected".to_owned(),
+            },
+        );
+        assert_eq!(
+            state.chat_memory.preferences(Some("t1"), defaults),
+            ChatMemoryPreferences {
+                generate_memories: true,
+                use_memories: true,
+            }
+        );
+        assert_eq!(
+            reduce(&mut state, Action::SetChatGenerateMemories(false)),
+            [Effect::SetThreadMemoryMode {
+                task_id: "t1".to_owned(),
+                enabled: false,
+                previous: ChatMemoryPreferences {
+                    generate_memories: true,
+                    use_memories: true,
+                },
+            }]
+        );
+        reduce(
+            &mut state,
+            Action::ThreadMemoryModeSetFinished {
+                task_id: "t1".to_owned(),
+            },
+        );
+        assert!(!state.chat_memory.update_pending(Some("t1")));
+        assert_eq!(
+            state.chat_memory.preferences(Some("t1"), defaults),
+            ChatMemoryPreferences {
+                generate_memories: false,
+                use_memories: true,
+            }
+        );
+
+        assert_eq!(
+            reduce(&mut state, Action::ResetMemories),
+            [Effect::ResetMemories]
+        );
+        reduce(&mut state, Action::MemoriesReset);
+        assert_eq!(state.status_message.as_deref(), Some("Memories reset"));
     }
 
     #[test]
@@ -16746,6 +17063,7 @@ mod tests {
                 ],
                 plan_mode: true,
                 goal_objective: None,
+                memory_preferences: None,
             }]
         );
         assert!(state.composer.is_empty());
@@ -17222,6 +17540,7 @@ mod tests {
                 attachments: Vec::new(),
                 plan_mode: false,
                 goal_objective: Some("Reach native parity".to_owned()),
+                memory_preferences: None,
             }]
         );
         assert!(!state.composer_controls.goal_mode);

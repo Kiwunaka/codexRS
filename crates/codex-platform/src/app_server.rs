@@ -26,18 +26,19 @@ use codex_protocol::{
     MAX_PENDING_REQUESTS, MarketplaceAddParams, MarketplaceAddResponse, MarketplaceRemoveParams,
     MarketplaceRemoveResponse, MarketplaceUpgradeParams, MarketplaceUpgradeResponse,
     McpResourceReadParams, McpResourceReadResponse, McpServerOauthLoginParams,
-    McpServerOauthLoginResponse, ModelListParams, ModelListResponse, PermissionProfileListParams,
-    PermissionProfileListResponse, PluginInstallParams, PluginInstallResponse, PluginListParams,
-    PluginListResponse, PluginReadParams, PluginReadResponse, PluginUninstallParams, ProtocolError,
-    SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams, SkillsListResponse,
-    ThreadArchiveParams, ThreadBackgroundTerminalsCleanParams,
-    ThreadBackgroundTerminalsCleanResponse, ThreadBackgroundTerminalsListParams,
-    ThreadBackgroundTerminalsListResponse, ThreadBackgroundTerminalsTerminateParams,
-    ThreadBackgroundTerminalsTerminateResponse, ThreadCompactStartParams,
-    ThreadCompactStartResponse, ThreadDeleteParams, ThreadForkParams, ThreadForkResponse,
-    ThreadGoalClearParams, ThreadGoalClearResponse, ThreadGoalGetParams, ThreadGoalGetResponse,
-    ThreadGoalSetParams, ThreadGoalSetResponse, ThreadItemsListParams, ThreadItemsListResponse,
-    ThreadListParams, ThreadListResponse, ThreadLoadedListParams, ThreadLoadedListResponse,
+    McpServerOauthLoginResponse, MemoryResetResponse, ModelListParams, ModelListResponse,
+    PermissionProfileListParams, PermissionProfileListResponse, PluginInstallParams,
+    PluginInstallResponse, PluginListParams, PluginListResponse, PluginReadParams,
+    PluginReadResponse, PluginUninstallParams, ProtocolError, SkillsConfigWriteParams,
+    SkillsConfigWriteResponse, SkillsListParams, SkillsListResponse, ThreadArchiveParams,
+    ThreadBackgroundTerminalsCleanParams, ThreadBackgroundTerminalsCleanResponse,
+    ThreadBackgroundTerminalsListParams, ThreadBackgroundTerminalsListResponse,
+    ThreadBackgroundTerminalsTerminateParams, ThreadBackgroundTerminalsTerminateResponse,
+    ThreadCompactStartParams, ThreadCompactStartResponse, ThreadDeleteParams, ThreadForkParams,
+    ThreadForkResponse, ThreadGoalClearParams, ThreadGoalClearResponse, ThreadGoalGetParams,
+    ThreadGoalGetResponse, ThreadGoalSetParams, ThreadGoalSetResponse, ThreadItemsListParams,
+    ThreadItemsListResponse, ThreadListParams, ThreadListResponse, ThreadLoadedListParams,
+    ThreadLoadedListResponse, ThreadMemoryModeSetParams, ThreadMemoryModeSetResponse,
     ThreadReadParams, ThreadReadResponse, ThreadResumeParams, ThreadResumeResponse,
     ThreadRollbackParams, ThreadRollbackResponse, ThreadSearchParams, ThreadSearchResponse,
     ThreadSetNameParams, ThreadSettingsUpdateParams, ThreadSettingsUpdateResponse,
@@ -1059,6 +1060,19 @@ impl AppServerConnection {
     ) -> Result<ThreadSettingsUpdateResponse, AppServerError> {
         self.require_initialized()?;
         self.request("thread/settings/update", params)
+    }
+
+    pub fn set_thread_memory_mode(
+        &self,
+        params: ThreadMemoryModeSetParams,
+    ) -> Result<ThreadMemoryModeSetResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("thread/memoryMode/set", params)
+    }
+
+    pub fn reset_memories(&self) -> Result<MemoryResetResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request_without_params("memory/reset")
     }
 
     pub fn start_turn(&self, params: TurnStartParams) -> Result<TurnStartResponse, AppServerError> {

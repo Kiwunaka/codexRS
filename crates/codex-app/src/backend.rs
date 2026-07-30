@@ -143,7 +143,8 @@ use codex_protocol::{
     ThreadForkParams, ThreadGoalClearParams, ThreadGoalClearedNotification, ThreadGoalGetParams,
     ThreadGoalSetParams, ThreadGoalStatus as ProtocolThreadGoalStatus,
     ThreadGoalUpdatedNotification, ThreadItemsListParams, ThreadListParams, ThreadLoadedListParams,
-    ThreadReadParams, ThreadResumeInitialTurnsPageParams, ThreadResumeParams, ThreadRollbackParams,
+    ThreadMemoryMode, ThreadMemoryModeSetParams, ThreadReadParams,
+    ThreadResumeInitialTurnsPageParams, ThreadResumeParams, ThreadRollbackParams,
     ThreadSearchParams, ThreadSetNameParams, ThreadSettingsUpdateParams, ThreadShellCommandParams,
     ThreadStartParams, ThreadTokenUsageUpdatedNotification, ThreadTurnsListParams,
     ThreadUnarchiveParams, ToolRequestUserInputAnswer, ToolRequestUserInputParams,
@@ -1021,6 +1022,8 @@ struct StartTurnRequest {
 struct PersonalizationSnapshot {
     personality: Personality,
     memory_available: bool,
+    generate_memories: bool,
+    use_memories: bool,
     memories_enabled: bool,
     allow_memory_generation_from_tool_assisted_chats: bool,
 }
@@ -1050,6 +1053,8 @@ fn personalization_snapshot(config: &ConfigReadResponse) -> PersonalizationSnaps
     PersonalizationSnapshot {
         personality,
         memory_available: config.config.features.memories.unwrap_or(false),
+        generate_memories,
+        use_memories,
         memories_enabled: generate_memories && use_memories,
         allow_memory_generation_from_tool_assisted_chats: !disable_on_external_context,
     }
@@ -4834,6 +4839,8 @@ fn run_effect(
                         Action::PersonalizationLoaded {
                             personality: snapshot.personality,
                             memory_available: snapshot.memory_available,
+                            generate_memories: snapshot.generate_memories,
+                            use_memories: snapshot.use_memories,
                             memories_enabled: snapshot.memories_enabled,
                             allow_memory_generation_from_tool_assisted_chats: snapshot
                                 .allow_memory_generation_from_tool_assisted_chats,
@@ -4951,6 +4958,35 @@ fn run_effect(
                 ),
             }
         }
+        Effect::SetThreadMemoryMode {
+            task_id,
+            enabled,
+            previous,
+        } => {
+            let mode = if enabled {
+                ThreadMemoryMode::Enabled
+            } else {
+                ThreadMemoryMode::Disabled
+            };
+            match app_server.set_thread_memory_mode(ThreadMemoryModeSetParams {
+                thread_id: task_id.clone(),
+                mode,
+            }) {
+                Ok(_) => emit(events, Action::ThreadMemoryModeSetFinished { task_id }),
+                Err(error) => emit(
+                    events,
+                    Action::ThreadMemoryModeSetFailed {
+                        task_id,
+                        previous,
+                        message: error.to_string(),
+                    },
+                ),
+            }
+        }
+        Effect::ResetMemories => match app_server.reset_memories() {
+            Ok(_) => emit(events, Action::MemoriesReset),
+            Err(error) => emit(events, Action::MemoryResetFailed(error.to_string())),
+        },
         Effect::LoadModels => {
             match app_server.list_models(ModelListParams {
                 cursor: None,
@@ -5282,6 +5318,7 @@ fn run_effect(
             attachments,
             plan_mode,
             goal_objective,
+            memory_preferences,
         } => {
             let runtime_workspace_roots = cwd.clone().map(|path| vec![path]);
             match app_server.start_thread(ThreadStartParams {
@@ -5293,6 +5330,12 @@ fn run_effect(
                 approval_policy: approval_policy.clone(),
                 approvals_reviewer: approvals_reviewer.map(protocol_approvals_reviewer),
                 dynamic_tools: Some(computer_use_dynamic_tools()),
+                config: memory_preferences.map(|preferences| {
+                    json!({
+                        "memories.generate_memories": preferences.generate_memories,
+                        "memories.use_memories": preferences.use_memories,
+                    })
+                }),
                 personality: Some(Some(personality.as_str().to_owned())),
                 ..ThreadStartParams::default()
             }) {
@@ -5301,6 +5344,15 @@ fn run_effect(
                     let task_id = task.id.clone();
                     computer_capable_threads.insert(task_id.clone());
                     emit(events, Action::TaskCreated(task));
+                    if let Some(preferences) = memory_preferences {
+                        emit(
+                            events,
+                            Action::RememberThreadMemoryPreferences {
+                                task_id: task_id.clone(),
+                                preferences,
+                            },
+                        );
+                    }
                     emit(
                         events,
                         Action::ComputerUseAvailable {
@@ -17088,6 +17140,8 @@ mod tests {
         let snapshot = personalization_snapshot(&config);
         assert_eq!(snapshot.personality, Personality::Pragmatic);
         assert!(snapshot.memory_available);
+        assert!(snapshot.generate_memories);
+        assert!(snapshot.use_memories);
         assert!(snapshot.memories_enabled);
         assert!(!snapshot.allow_memory_generation_from_tool_assisted_chats);
 
@@ -17110,6 +17164,8 @@ mod tests {
         let snapshot = personalization_snapshot(&current);
         assert_eq!(snapshot.personality, Personality::Friendly);
         assert!(!snapshot.memory_available);
+        assert!(!snapshot.generate_memories);
+        assert!(snapshot.use_memories);
         assert!(!snapshot.memories_enabled);
         assert!(snapshot.allow_memory_generation_from_tool_assisted_chats);
     }
