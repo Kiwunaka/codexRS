@@ -81,8 +81,8 @@ pub use github::{
     GitHubPullRequestActivityKind, GitHubPullRequestCheck, GitHubPullRequestDetail,
     GitHubPullRequestDiff, GitHubPullRequestIdentity, GitHubPullRequestLifecycle,
     GitHubPullRequestMergeMethod, GitHubPullRequestRelationship, GitHubPullRequestReviewEvent,
-    GitHubPullRequestSearchFilters, GitHubPullRequestSearchPage, GitHubPullRequestState,
-    GitHubPullRequestStatus, GitHubPullRequestSummary, GitHubUser,
+    GitHubPullRequestReviewState, GitHubPullRequestSearchFilters, GitHubPullRequestSearchPage,
+    GitHubPullRequestState, GitHubPullRequestStatus, GitHubPullRequestSummary, GitHubUser,
     cli_availability as github_cli_availability, create_pull_request as github_create_pull_request,
     merge_pull_request as github_merge_pull_request,
     post_pull_request_comment as github_post_pull_request_comment,
@@ -90,7 +90,10 @@ pub use github::{
     pull_request_diff as github_pull_request_diff,
     pull_request_status as github_pull_request_status,
     search_pull_requests as github_search_pull_requests,
+    set_pull_request_review_state as github_set_pull_request_review_state,
     submit_pull_request_review as github_submit_pull_request_review,
+    update_pull_request_body as github_update_pull_request_body,
+    update_pull_request_title as github_update_pull_request_title,
 };
 pub use process::ProcessError;
 pub use terminal::{

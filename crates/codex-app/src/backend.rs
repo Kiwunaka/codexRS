@@ -79,10 +79,10 @@ use codex_platform::{
     GitHubCliAvailability, GitHubCreatePullRequest, GitHubError, GitHubPullRequestActivity,
     GitHubPullRequestActivityKind, GitHubPullRequestCheck, GitHubPullRequestDetail,
     GitHubPullRequestIdentity, GitHubPullRequestLifecycle, GitHubPullRequestMergeMethod,
-    GitHubPullRequestRelationship, GitHubPullRequestReviewEvent, GitHubPullRequestSearchFilters,
-    GitHubPullRequestState, GitHubPullRequestSummary, GitSnapshot, RuntimePolicy, TerminalConfig,
-    TerminalEvent, TerminalSession, available_terminal_shells, browser_permission_for_url,
-    capture_computer_window, click_computer_window, codexrs_data_dir,
+    GitHubPullRequestRelationship, GitHubPullRequestReviewEvent, GitHubPullRequestReviewState,
+    GitHubPullRequestSearchFilters, GitHubPullRequestState, GitHubPullRequestSummary, GitSnapshot,
+    RuntimePolicy, TerminalConfig, TerminalEvent, TerminalSession, available_terminal_shells,
+    browser_permission_for_url, capture_computer_window, click_computer_window, codexrs_data_dir,
     commit_diff as git_commit_diff, computer_use_target_is_forbidden,
     create_branch as git_create_branch,
     create_managed_worktree_cancellable as git_create_managed_worktree,
@@ -91,12 +91,13 @@ use codex_platform::{
     git_push, git_snapshot, git_stage, git_stage_all, git_unstage, git_unstage_all,
     github_create_pull_request, github_merge_pull_request, github_post_pull_request_comment,
     github_pull_request_detail, github_pull_request_diff, github_pull_request_status,
-    github_search_pull_requests, github_submit_pull_request_review, inspect_artifact,
-    inspect_computer_window, inspect_workspace_file, is_supported_artifact_path,
-    list_computer_windows, normalize_browser_origin, open_workspace_path, press_computer_key,
-    resolve_codex_binary, reveal_artifact, scroll_computer_window,
-    switch_branch as git_switch_branch, type_into_computer_window,
-    uncommitted_diff as git_uncommitted_diff,
+    github_search_pull_requests, github_set_pull_request_review_state,
+    github_submit_pull_request_review, github_update_pull_request_body,
+    github_update_pull_request_title, inspect_artifact, inspect_computer_window,
+    inspect_workspace_file, is_supported_artifact_path, list_computer_windows,
+    normalize_browser_origin, open_workspace_path, press_computer_key, resolve_codex_binary,
+    reveal_artifact, scroll_computer_window, switch_branch as git_switch_branch,
+    type_into_computer_window, uncommitted_diff as git_uncommitted_diff,
 };
 use codex_protocol::{
     Account as ProtocolAccount, AccountLoginCompletedNotification, AppInfo,
@@ -3681,6 +3682,33 @@ fn run_effect(
                             GitHubPullRequestReviewEvent::RequestChanges
                         }
                     },
+                    body,
+                ),
+                PullRequestMutation::SetReviewState { state } => {
+                    github_set_pull_request_review_state(
+                        cwd,
+                        &platform_identity,
+                        expected_head_revision,
+                        match state {
+                            codex_core::PullRequestReviewState::Draft => {
+                                GitHubPullRequestReviewState::Draft
+                            }
+                            codex_core::PullRequestReviewState::Ready => {
+                                GitHubPullRequestReviewState::Ready
+                            }
+                        },
+                    )
+                }
+                PullRequestMutation::EditTitle { title } => github_update_pull_request_title(
+                    cwd,
+                    &platform_identity,
+                    expected_head_revision,
+                    title,
+                ),
+                PullRequestMutation::EditDescription { body } => github_update_pull_request_body(
+                    cwd,
+                    &platform_identity,
+                    expected_head_revision,
                     body,
                 ),
                 PullRequestMutation::Merge { method } => github_merge_pull_request(

@@ -2505,6 +2505,12 @@ pub enum PullRequestReviewEvent {
     RequestChanges,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PullRequestReviewState {
+    Draft,
+    Ready,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PullRequestMergeMethod {
     #[default]
@@ -2760,6 +2766,10 @@ pub enum PullRequestMutationKind {
     Approve,
     ReviewComment,
     RequestChanges,
+    MarkDraft,
+    MarkReady,
+    EditTitle,
+    EditDescription,
     Merge,
     Squash,
 }
@@ -2771,6 +2781,15 @@ pub enum PullRequestMutation {
     },
     Review {
         event: PullRequestReviewEvent,
+        body: String,
+    },
+    SetReviewState {
+        state: PullRequestReviewState,
+    },
+    EditTitle {
+        title: String,
+    },
+    EditDescription {
         body: String,
     },
     Merge {
@@ -2794,6 +2813,14 @@ impl PullRequestMutation {
                 event: PullRequestReviewEvent::RequestChanges,
                 ..
             } => PullRequestMutationKind::RequestChanges,
+            Self::SetReviewState {
+                state: PullRequestReviewState::Draft,
+            } => PullRequestMutationKind::MarkDraft,
+            Self::SetReviewState {
+                state: PullRequestReviewState::Ready,
+            } => PullRequestMutationKind::MarkReady,
+            Self::EditTitle { .. } => PullRequestMutationKind::EditTitle,
+            Self::EditDescription { .. } => PullRequestMutationKind::EditDescription,
             Self::Merge {
                 method: PullRequestMergeMethod::Merge,
             } => PullRequestMutationKind::Merge,
@@ -5943,13 +5970,16 @@ fn begin_pull_request_mutation(state: &mut AppState, mutation: PullRequestMutati
     if detail.summary.identity != identity {
         return Vec::new();
     }
-    let body = match &mutation {
+    let comment_body = match &mutation {
         PullRequestMutation::Comment { body } | PullRequestMutation::Review { body, .. } => {
             Some(body.trim())
         }
-        PullRequestMutation::Merge { .. } => None,
+        PullRequestMutation::SetReviewState { .. }
+        | PullRequestMutation::EditTitle { .. }
+        | PullRequestMutation::EditDescription { .. }
+        | PullRequestMutation::Merge { .. } => None,
     };
-    let invalid_body = body.is_some_and(|body| {
+    let invalid_body = comment_body.is_some_and(|body| {
         body.chars().count() > MAX_GIT_PULL_REQUEST_BODY_CHARS || body.contains('\0')
     });
     let body_required = matches!(
@@ -5959,7 +5989,7 @@ fn begin_pull_request_mutation(state: &mut AppState, mutation: PullRequestMutati
                 event: PullRequestReviewEvent::Comment | PullRequestReviewEvent::RequestChanges,
                 ..
             }
-    ) && body.is_none_or(str::is_empty);
+    ) && comment_body.is_none_or(str::is_empty);
     if invalid_body || body_required {
         state.pull_requests.mutation_error =
             Some("A valid pull request comment is required.".to_owned());
@@ -5968,6 +5998,41 @@ fn begin_pull_request_mutation(state: &mut AppState, mutation: PullRequestMutati
     if matches!(mutation, PullRequestMutation::Review { .. }) && detail.summary.is_author {
         state.pull_requests.mutation_error =
             Some("You cannot review your own pull request.".to_owned());
+        return Vec::new();
+    }
+    if matches!(
+        &mutation,
+        PullRequestMutation::SetReviewState { .. }
+            | PullRequestMutation::EditTitle { .. }
+            | PullRequestMutation::EditDescription { .. }
+    ) && (!detail.summary.is_author || detail.summary.state != PullRequestState::Open)
+    {
+        state.pull_requests.mutation_error =
+            Some("Only the author can update an open pull request.".to_owned());
+        return Vec::new();
+    }
+    if let PullRequestMutation::SetReviewState { state: next } = &mutation {
+        let next_is_draft = *next == PullRequestReviewState::Draft;
+        if detail.summary.is_draft == next_is_draft {
+            return Vec::new();
+        }
+    }
+    if let PullRequestMutation::EditTitle { title } = &mutation {
+        let title = title.trim();
+        if title.is_empty()
+            || title.chars().count() > MAX_GIT_PULL_REQUEST_TITLE_CHARS
+            || title.chars().any(char::is_control)
+        {
+            state.pull_requests.mutation_error =
+                Some("A valid pull request title is required.".to_owned());
+            return Vec::new();
+        }
+    }
+    if let PullRequestMutation::EditDescription { body } = &mutation
+        && (body.chars().count() > MAX_GIT_PULL_REQUEST_BODY_CHARS || body.contains('\0'))
+    {
+        state.pull_requests.mutation_error =
+            Some("Pull request description is invalid.".to_owned());
         return Vec::new();
     }
     if matches!(mutation, PullRequestMutation::Merge { .. }) {
@@ -12909,6 +12974,14 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             state.pull_requests.detail_status = LoadStatus::Ready;
             state.pull_requests.detail_error = None;
+            if let Some(item) = state
+                .pull_requests
+                .items
+                .iter_mut()
+                .find(|item| item.identity == detail.summary.identity)
+            {
+                *item = detail.summary.clone();
+            }
             state.pull_requests.detail = Some(detail);
             Vec::new()
         }
@@ -13000,6 +13073,18 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     | PullRequestMutationKind::ReviewComment
                     | PullRequestMutationKind::RequestChanges,
                 ) => "Pull request review submitted.".to_owned(),
+                Some(PullRequestMutationKind::MarkDraft) => {
+                    "Pull request marked as draft.".to_owned()
+                }
+                Some(PullRequestMutationKind::MarkReady) => {
+                    "Pull request is ready for review.".to_owned()
+                }
+                Some(PullRequestMutationKind::EditTitle) => {
+                    "Pull request title updated.".to_owned()
+                }
+                Some(PullRequestMutationKind::EditDescription) => {
+                    "Pull request description updated.".to_owned()
+                }
                 Some(PullRequestMutationKind::Merge | PullRequestMutationKind::Squash) => {
                     "Pull request merged.".to_owned()
                 }
@@ -14812,11 +14897,11 @@ mod tests {
         PluginScheduledTaskCard, PluginSkillDetail, PullRequestCiStatus, PullRequestDetail,
         PullRequestDetailTab, PullRequestIdentity, PullRequestLifecycle, PullRequestMergeMethod,
         PullRequestMutation, PullRequestMutationKind, PullRequestRelationship,
-        PullRequestReviewEvent, PullRequestState, PullRequestSummary, ReasoningEffortOption,
-        RetryableTurnSubmission, RetryableUserMessage, ServiceTierOption, SkillCard, SkillScope,
-        TaskRunStatus, TaskSearchResult, TaskSummary, TerminalDockLocation, ThreadGoal,
-        ThreadGoalStatus, TimelineItem, TimelineKind, UsageLimitWindow, UserInputAnswer,
-        UserInputAnswers, UserInputOption, UserInputQuestion, UserInputRequest,
+        PullRequestReviewEvent, PullRequestReviewState, PullRequestState, PullRequestSummary,
+        ReasoningEffortOption, RetryableTurnSubmission, RetryableUserMessage, ServiceTierOption,
+        SkillCard, SkillScope, TaskRunStatus, TaskSearchResult, TaskSummary, TerminalDockLocation,
+        ThreadGoal, ThreadGoalStatus, TimelineItem, TimelineKind, UsageLimitWindow,
+        UserInputAnswer, UserInputAnswers, UserInputOption, UserInputQuestion, UserInputRequest,
         appearance_code_theme_supports_variant, computer_app_id_matches, permission_mode_options,
         reduce, stable_reference, validate_mcp_form_content,
     };
@@ -18186,8 +18271,11 @@ mod tests {
             }]
         );
 
+        let mut refreshed_summary = summary;
+        refreshed_summary.title = "Refreshed pull request".to_owned();
+        refreshed_summary.is_draft = true;
         let detail = PullRequestDetail {
-            summary,
+            summary: refreshed_summary,
             body: "Summary body".to_owned(),
             head_revision: "abc123".to_owned(),
             review_decision: Some("REVIEW_REQUIRED".to_owned()),
@@ -18198,6 +18286,7 @@ mod tests {
             checks_partial: false,
             activity_partial: false,
         };
+        let expected_summary = detail.summary.clone();
         assert!(
             reduce(
                 &mut state,
@@ -18221,6 +18310,7 @@ mod tests {
         );
         assert_eq!(state.pull_requests.detail, Some(detail));
         assert_eq!(state.pull_requests.detail_status, LoadStatus::Ready);
+        assert_eq!(state.pull_requests.items[0], expected_summary);
         assert_eq!(
             reduce(
                 &mut state,
@@ -18322,6 +18412,65 @@ mod tests {
         );
         assert_eq!(state.pull_requests.pending_mutation, None);
         assert_eq!(state.pull_requests.detail_status, LoadStatus::Loading);
+    }
+
+    #[test]
+    fn pull_request_author_updates_use_the_loaded_head() {
+        for (mutation, kind) in [
+            (
+                PullRequestMutation::SetReviewState {
+                    state: PullRequestReviewState::Ready,
+                },
+                PullRequestMutationKind::MarkReady,
+            ),
+            (
+                PullRequestMutation::EditTitle {
+                    title: "A better title".to_owned(),
+                },
+                PullRequestMutationKind::EditTitle,
+            ),
+            (
+                PullRequestMutation::EditDescription {
+                    body: String::new(),
+                },
+                PullRequestMutationKind::EditDescription,
+            ),
+        ] {
+            let mut summary = pull_request(42);
+            summary.is_author = true;
+            summary.is_draft = true;
+            let identity = summary.identity.clone();
+            let mut state = AppState::default();
+            state.pull_requests.selected = Some(identity.clone());
+            state.pull_requests.detail_status = LoadStatus::Ready;
+            state.pull_requests.detail = Some(PullRequestDetail {
+                summary,
+                body: "Original body".to_owned(),
+                head_revision: "abc123".to_owned(),
+                review_decision: None,
+                mergeable: Some("MERGEABLE".to_owned()),
+                merge_state_status: Some("CLEAN".to_owned()),
+                checks: Vec::new(),
+                activity: Vec::new(),
+                checks_partial: false,
+                activity_partial: false,
+            });
+
+            assert_eq!(
+                reduce(
+                    &mut state,
+                    Action::SubmitPullRequestMutation(mutation.clone())
+                ),
+                [Effect::MutatePullRequest {
+                    generation: 1,
+                    cwd: PathBuf::from("."),
+                    identity,
+                    expected_head_revision: "abc123".to_owned(),
+                    mutation,
+                }]
+            );
+            assert_eq!(state.pull_requests.pending_mutation, Some(kind));
+        }
     }
 
     #[test]
