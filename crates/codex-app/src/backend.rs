@@ -20,14 +20,15 @@ use codex_core::{
     BrowserResourceElicitationDecision, BrowserSitePermission, BrowserTabState,
     CommandApprovalContext, ComposerAttachment, ComposerAttachmentKind, ComputerApplicationState,
     ComputerWindowState, DiffMarkerStyle, Effect, FileChangeApprovalContext, FuzzyFileMatchType,
-    FuzzyFileResult, GitBranchState, GitCommitNextStep, GitFileKind as CoreGitFileKind,
-    GitFileState, GitPreferences, GitPullRequestNextStep, GitPullRequestProvider,
-    GitPullRequestState, GitReviewMode, GitState, GitWorktreeState, HookCard,
-    HookEventName as CoreHookEventName, HookHandlerType as CoreHookHandlerType, HookIssue,
-    HookProjectEntry, HookSource as CoreHookSource, HookTrustStatus as CoreHookTrustStatus,
-    InspectorPane, IntegratedTerminalShell, KEYBOARD_SHORTCUT_COMMAND_IDS,
-    KeyboardShortcutPreferences, MAX_APPEARANCE_FONT_FAMILY_BYTES, MAX_ATTACHMENT_LABEL_BYTES,
-    MAX_BACKGROUND_TERMINALS, MAX_BROWSER_DOWNLOAD_PATH_BYTES, MAX_BROWSER_PERMISSION_ORIGIN_BYTES,
+    FuzzyFileResult, GitBranchState, GitCommitNextStep, GitDiffScope,
+    GitFileKind as CoreGitFileKind, GitFileState, GitPreferences, GitPullRequestNextStep,
+    GitPullRequestProvider, GitPullRequestState, GitReviewCommitState, GitReviewMode, GitState,
+    GitWorktreeState, HookCard, HookEventName as CoreHookEventName,
+    HookHandlerType as CoreHookHandlerType, HookIssue, HookProjectEntry,
+    HookSource as CoreHookSource, HookTrustStatus as CoreHookTrustStatus, InspectorPane,
+    IntegratedTerminalShell, KEYBOARD_SHORTCUT_COMMAND_IDS, KeyboardShortcutPreferences,
+    MAX_APPEARANCE_FONT_FAMILY_BYTES, MAX_ATTACHMENT_LABEL_BYTES, MAX_BACKGROUND_TERMINALS,
+    MAX_BROWSER_DOWNLOAD_PATH_BYTES, MAX_BROWSER_PERMISSION_ORIGIN_BYTES,
     MAX_BROWSER_SITE_PERMISSIONS, MAX_COMPOSER_ATTACHMENTS, MAX_COMPUTER_ALLOWED_APPS,
     MAX_COMPUTER_APP_ID_BYTES, MAX_FUZZY_FILE_PATH_BYTES, MAX_FUZZY_FILE_QUERY_BYTES,
     MAX_FUZZY_FILE_RESULTS, MAX_FUZZY_FILE_ROOTS, MAX_GIT_BRANCH_PREFIX_BYTES, MAX_GIT_DIFF_BYTES,
@@ -82,7 +83,8 @@ use codex_platform::{
     GitHubPullRequestState, GitHubPullRequestSummary, GitSnapshot, RuntimePolicy, TerminalConfig,
     TerminalEvent, TerminalSession, available_terminal_shells, browser_permission_for_url,
     capture_computer_window, click_computer_window, codexrs_data_dir,
-    computer_use_target_is_forbidden, create_branch as git_create_branch,
+    commit_diff as git_commit_diff, computer_use_target_is_forbidden,
+    create_branch as git_create_branch,
     create_managed_worktree_cancellable as git_create_managed_worktree,
     create_worktree as git_create_worktree, default_browser_download_dir, drag_computer_window,
     git_commit, git_commit_message_diff, git_diff, git_pull_request_context, git_push,
@@ -94,6 +96,7 @@ use codex_platform::{
     list_computer_windows, normalize_browser_origin, open_workspace_path, press_computer_key,
     resolve_codex_binary, reveal_artifact, scroll_computer_window,
     switch_branch as git_switch_branch, type_into_computer_window,
+    uncommitted_diff as git_uncommitted_diff,
 };
 use codex_protocol::{
     Account as ProtocolAccount, AccountLoginCompletedNotification, AppInfo,
@@ -3745,6 +3748,54 @@ fn run_effect(
             }
             return;
         }
+        Effect::LoadUncommittedDiff { generation, root } => {
+            match git_uncommitted_diff(root) {
+                Ok(diff) => emit(
+                    events,
+                    Action::GitSourceDiffLoaded {
+                        generation: *generation,
+                        scope: GitDiffScope::Uncommitted,
+                        text: diff.text,
+                        truncated: diff.truncated,
+                    },
+                ),
+                Err(_) => emit(
+                    events,
+                    Action::GitSourceDiffFailed {
+                        generation: *generation,
+                        scope: GitDiffScope::Uncommitted,
+                        message: "Could not load uncommitted changes.".to_owned(),
+                    },
+                ),
+            }
+            return;
+        }
+        Effect::LoadCommitDiff {
+            generation,
+            root,
+            sha,
+        } => {
+            match git_commit_diff(root, sha) {
+                Ok(diff) => emit(
+                    events,
+                    Action::GitSourceDiffLoaded {
+                        generation: *generation,
+                        scope: GitDiffScope::Committed,
+                        text: diff.text,
+                        truncated: diff.truncated,
+                    },
+                ),
+                Err(_) => emit(
+                    events,
+                    Action::GitSourceDiffFailed {
+                        generation: *generation,
+                        scope: GitDiffScope::Committed,
+                        message: "Could not load changes for this commit.".to_owned(),
+                    },
+                ),
+            }
+            return;
+        }
         Effect::StagePath { root, path } => {
             match git_stage(root, path) {
                 Ok(()) => emit(events, Action::RefreshGit),
@@ -6880,6 +6931,8 @@ fn run_effect(
         | Effect::LoadPullRequestDiff { .. }
         | Effect::MutatePullRequest { .. }
         | Effect::LoadDiff { .. }
+        | Effect::LoadUncommittedDiff { .. }
+        | Effect::LoadCommitDiff { .. }
         | Effect::StagePath { .. }
         | Effect::StageAll { .. }
         | Effect::UnstagePath { .. }
@@ -8788,6 +8841,17 @@ fn map_git_snapshot(snapshot: GitSnapshot) -> GitState {
                 locked: worktree.locked,
             })
             .collect(),
+        commits: snapshot
+            .commits
+            .into_iter()
+            .map(|commit| GitReviewCommitState {
+                sha: commit.sha,
+                subject: commit.subject,
+                message: commit.message,
+                committed_at: commit.committed_at,
+            })
+            .collect(),
+        selected_commit_sha: None,
         diff_generation: 0,
         selected_scope: codex_core::GitDiffScope::default(),
         selected_path: None,

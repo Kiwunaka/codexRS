@@ -2307,6 +2307,8 @@ pub struct GitState {
     pub files: Vec<GitFileState>,
     pub branches: Vec<GitBranchState>,
     pub worktrees: Vec<GitWorktreeState>,
+    pub commits: Vec<GitReviewCommitState>,
+    pub selected_commit_sha: Option<String>,
     pub diff_generation: u64,
     pub selected_scope: GitDiffScope,
     pub selected_path: Option<PathBuf>,
@@ -2878,9 +2880,11 @@ impl Default for PullRequestInboxState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GitDiffScope {
     LastTurn,
+    Uncommitted,
     #[default]
     Unstaged,
     Staged,
+    Committed,
     Branch,
 }
 
@@ -2923,6 +2927,14 @@ pub struct GitWorktreeState {
     pub bare: bool,
     pub detached: bool,
     pub locked: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitReviewCommitState {
+    pub sha: String,
+    pub subject: String,
+    pub message: String,
+    pub committed_at: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4562,6 +4574,7 @@ pub enum Action {
     RefreshGit,
     GitSnapshotLoaded(GitState),
     SelectGitDiffScope(GitDiffScope),
+    SelectGitReviewCommit(String),
     SelectDiffPath {
         path: PathBuf,
         scope: GitDiffScope,
@@ -4643,6 +4656,17 @@ pub enum Action {
     },
     BranchDiffFailed {
         generation: u64,
+        message: String,
+    },
+    GitSourceDiffLoaded {
+        generation: u64,
+        scope: GitDiffScope,
+        text: String,
+        truncated: bool,
+    },
+    GitSourceDiffFailed {
+        generation: u64,
+        scope: GitDiffScope,
         message: String,
     },
     SpawnTerminal,
@@ -5185,6 +5209,15 @@ pub enum Effect {
     LoadBranchDiff {
         generation: u64,
         cwd: PathBuf,
+    },
+    LoadUncommittedDiff {
+        generation: u64,
+        root: PathBuf,
+    },
+    LoadCommitDiff {
+        generation: u64,
+        root: PathBuf,
+        sha: String,
     },
     StagePath {
         root: PathBuf,
@@ -6072,6 +6105,56 @@ fn editable_agent_config_scope(
         return None;
     }
     Some((scope.file_path.clone(), scope.expected_version.clone()))
+}
+
+fn begin_git_source_diff(state: &mut AppState, scope: GitDiffScope) -> Vec<Effect> {
+    let commit_sha = if scope == GitDiffScope::Committed {
+        let Some(sha) = state
+            .git
+            .selected_commit_sha
+            .clone()
+            .filter(|sha| state.git.commits.iter().any(|commit| commit.sha == *sha))
+        else {
+            return Vec::new();
+        };
+        Some(sha)
+    } else {
+        None
+    };
+    let Some(root) = state.git.repository_root.clone() else {
+        state.status_message = Some("No Git repository is selected.".to_owned());
+        return Vec::new();
+    };
+
+    state.git.selected_scope = scope;
+    state.git.selected_path = None;
+    state.git.unified_diff.clear();
+    state.git.diff_generation = state.git.diff_generation.saturating_add(1);
+    state.git.diff_status = Some(LoadStatus::Loading);
+    state.git.diff_base_sha = None;
+    state.git.diff_error = None;
+    state.git.diff_truncated = false;
+    match scope {
+        GitDiffScope::Branch => vec![Effect::LoadBranchDiff {
+            generation: state.git.diff_generation,
+            cwd: root,
+        }],
+        GitDiffScope::Uncommitted => vec![Effect::LoadUncommittedDiff {
+            generation: state.git.diff_generation,
+            root,
+        }],
+        GitDiffScope::Committed => {
+            let Some(sha) = commit_sha else {
+                return Vec::new();
+            };
+            vec![Effect::LoadCommitDiff {
+                generation: state.git.diff_generation,
+                root,
+                sha,
+            }]
+        }
+        GitDiffScope::LastTurn | GitDiffScope::Unstaged | GitDiffScope::Staged => Vec::new(),
+    }
 }
 
 pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
@@ -12980,7 +13063,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }),
         Action::GitSnapshotLoaded(git) => {
             let previous_scope = state.git.selected_scope;
-            let next_diff_generation = state.git.diff_generation.saturating_add(1);
+            let previous_commit_sha = state.git.selected_commit_sha.clone();
+            let previous_diff_generation = state.git.diff_generation;
+            let next_diff_generation = previous_diff_generation.saturating_add(1);
             let pull_request_lookup =
                 git.repository_root
                     .clone()
@@ -12990,6 +13075,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                             && git.default_branch.is_some()
                     });
             state.git = git;
+            state.git.selected_commit_sha = previous_commit_sha
+                .filter(|sha| state.git.commits.iter().any(|commit| commit.sha == *sha));
             let mut effects = Vec::new();
             if previous_scope == GitDiffScope::LastTurn
                 || state.git_preferences.review_mode == GitReviewMode::LastTurnOnly
@@ -12997,23 +13084,29 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.git.selected_scope = GitDiffScope::LastTurn;
                 state.git.selected_path = None;
                 state.git.unified_diff.clear();
-            } else if previous_scope == GitDiffScope::Branch {
-                state.git.selected_scope = GitDiffScope::Branch;
-                state.git.selected_path = None;
-                state.git.unified_diff.clear();
-                state.git.diff_generation = next_diff_generation;
-                state.git.diff_status = Some(LoadStatus::Loading);
-                state.git.diff_base_sha = None;
-                state.git.diff_error = None;
-                state.git.diff_truncated = false;
-                if let Some(cwd) = state.git.repository_root.clone() {
-                    effects.push(Effect::LoadBranchDiff {
-                        generation: next_diff_generation,
-                        cwd,
-                    });
-                } else {
-                    state.git.diff_status = Some(LoadStatus::Failed);
-                    state.git.diff_error = Some("No Git repository is selected.".to_owned());
+            } else {
+                match previous_scope {
+                    GitDiffScope::Branch | GitDiffScope::Uncommitted => {
+                        state.git.diff_generation = previous_diff_generation;
+                        effects.extend(begin_git_source_diff(state, previous_scope));
+                    }
+                    GitDiffScope::Committed => {
+                        state.git.diff_generation = previous_diff_generation;
+                        let scope = if state.git.selected_commit_sha.is_some() {
+                            GitDiffScope::Committed
+                        } else {
+                            GitDiffScope::Branch
+                        };
+                        effects.extend(begin_git_source_diff(state, scope));
+                    }
+                    GitDiffScope::Unstaged | GitDiffScope::Staged => {
+                        state.git.selected_scope = previous_scope;
+                        state.git.selected_path = None;
+                        state.git.unified_diff.clear();
+                        state.git.diff_generation = next_diff_generation;
+                        state.git.diff_status = None;
+                    }
+                    GitDiffScope::LastTurn => {}
                 }
             }
             if let Some((root, branch)) = pull_request_lookup {
@@ -13028,15 +13121,19 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             {
                 return Vec::new();
             }
-            let retry_branch = scope == GitDiffScope::Branch
-                && state.git.selected_scope == scope
+            let retry_source = matches!(
+                scope,
+                GitDiffScope::Branch | GitDiffScope::Uncommitted | GitDiffScope::Committed
+            ) && state.git.selected_scope == scope
                 && state.git.diff_status == Some(LoadStatus::Failed);
-            if state.git.selected_scope == scope && !retry_branch {
+            if state.git.selected_scope == scope && !retry_source {
                 return Vec::new();
             }
-            if scope == GitDiffScope::Branch && state.git.repository_root.is_none() {
-                state.status_message = Some("No Git repository is selected.".to_owned());
-                return Vec::new();
+            if matches!(
+                scope,
+                GitDiffScope::Branch | GitDiffScope::Uncommitted | GitDiffScope::Committed
+            ) {
+                return begin_git_source_diff(state, scope);
             }
             state.git.selected_scope = scope;
             state.git.selected_path = None;
@@ -13046,24 +13143,38 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.git.diff_base_sha = None;
             state.git.diff_error = None;
             state.git.diff_truncated = false;
-            if scope == GitDiffScope::Branch {
-                state.git.diff_status = Some(LoadStatus::Loading);
-                return state
-                    .git
-                    .repository_root
-                    .clone()
-                    .map(|cwd| {
-                        vec![Effect::LoadBranchDiff {
-                            generation: state.git.diff_generation,
-                            cwd,
-                        }]
-                    })
-                    .unwrap_or_default();
-            }
             Vec::new()
         }
+        Action::SelectGitReviewCommit(sha) => {
+            if state.git_preferences.review_mode == GitReviewMode::LastTurnOnly
+                || !state.git.commits.iter().any(|commit| commit.sha == sha)
+            {
+                return Vec::new();
+            }
+            if state.git.repository_root.is_none() {
+                state.status_message = Some("No Git repository is selected.".to_owned());
+                return Vec::new();
+            }
+            let retry = state.git.selected_scope == GitDiffScope::Committed
+                && state.git.selected_commit_sha.as_deref() == Some(sha.as_str())
+                && state.git.diff_status == Some(LoadStatus::Failed);
+            if state.git.selected_scope == GitDiffScope::Committed
+                && state.git.selected_commit_sha.as_deref() == Some(sha.as_str())
+                && !retry
+            {
+                return Vec::new();
+            }
+            state.git.selected_commit_sha = Some(sha.clone());
+            begin_git_source_diff(state, GitDiffScope::Committed)
+        }
         Action::SelectDiffPath { path, scope } => {
-            if matches!(scope, GitDiffScope::LastTurn | GitDiffScope::Branch) {
+            if matches!(
+                scope,
+                GitDiffScope::LastTurn
+                    | GitDiffScope::Uncommitted
+                    | GitDiffScope::Committed
+                    | GitDiffScope::Branch
+            ) {
                 return Vec::new();
             }
             let Some(root) = state.git.repository_root.clone() else {
@@ -13540,6 +13651,42 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         } => {
             if generation == state.git.diff_generation
                 && state.git.selected_scope == GitDiffScope::Branch
+            {
+                state.git.unified_diff.clear();
+                state.git.diff_status = Some(LoadStatus::Failed);
+                state.git.diff_base_sha = None;
+                state.git.diff_error = Some(bounded_string(message, 4 * 1024));
+                state.git.diff_truncated = false;
+            }
+            Vec::new()
+        }
+        Action::GitSourceDiffLoaded {
+            generation,
+            scope,
+            text,
+            truncated,
+        } => {
+            if generation == state.git.diff_generation
+                && state.git.selected_scope == scope
+                && matches!(scope, GitDiffScope::Uncommitted | GitDiffScope::Committed)
+            {
+                let was_truncated = text.len() > MAX_GIT_DIFF_BYTES;
+                state.git.unified_diff = bounded_string(text, MAX_GIT_DIFF_BYTES);
+                state.git.diff_status = Some(LoadStatus::Ready);
+                state.git.diff_base_sha = None;
+                state.git.diff_error = None;
+                state.git.diff_truncated = truncated || was_truncated;
+            }
+            Vec::new()
+        }
+        Action::GitSourceDiffFailed {
+            generation,
+            scope,
+            message,
+        } => {
+            if generation == state.git.diff_generation
+                && state.git.selected_scope == scope
+                && matches!(scope, GitDiffScope::Uncommitted | GitDiffScope::Committed)
             {
                 state.git.unified_diff.clear();
                 state.git.diff_status = Some(LoadStatus::Failed);
@@ -14602,16 +14749,17 @@ mod tests {
         ComposerAttachmentKind, ComputerApplicationState, ComputerUseState, ConnectionStatus,
         DiffMarkerStyle, Effect, FeedbackClassification, FuzzyFileMatchType, FuzzyFileResult,
         GitCommitNextStep, GitCommitPhase, GitDiffScope, GitPreferences, GitPullRequestNextStep,
-        GitPullRequestPhase, GitPullRequestProvider, GitPullRequestState, GitReviewMode, GitState,
-        GitWorktreeState, HookCard, HookEventName, HookHandlerType, HookProjectEntry, HookSource,
-        HookTrustStatus, InspectorPane, IntegratedTerminalShell, KeyboardShortcutPreferences,
-        KeyboardShortcutUpdateTarget, LoadStatus, MAX_BROWSER_DOWNLOADS, MAX_COMPOSER_BYTES,
-        MAX_GIT_DIFF_BYTES, MAX_GIT_INSTRUCTIONS_BYTES, MAX_GIT_SHA_BYTES, MAX_PLUGIN_DETAIL_ITEMS,
-        MAX_TURN_DIFF_BYTES, MainRoute, MarketplaceManageTab, MarketplaceSectionFilter,
-        MarketplaceSourceCard, MarketplaceTab, MarketplaceUpgradeFailure, McpAuthStatus,
-        McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
-        McpElicitationContent, McpElicitationDecision, McpElicitationValue, McpFormElicitation,
-        McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpFormOption, McpFormStringFormat,
+        GitPullRequestPhase, GitPullRequestProvider, GitPullRequestState, GitReviewCommitState,
+        GitReviewMode, GitState, GitWorktreeState, HookCard, HookEventName, HookHandlerType,
+        HookProjectEntry, HookSource, HookTrustStatus, InspectorPane, IntegratedTerminalShell,
+        KeyboardShortcutPreferences, KeyboardShortcutUpdateTarget, LoadStatus,
+        MAX_BROWSER_DOWNLOADS, MAX_COMPOSER_BYTES, MAX_GIT_DIFF_BYTES, MAX_GIT_INSTRUCTIONS_BYTES,
+        MAX_GIT_SHA_BYTES, MAX_PLUGIN_DETAIL_ITEMS, MAX_TURN_DIFF_BYTES, MainRoute,
+        MarketplaceManageTab, MarketplaceSectionFilter, MarketplaceSourceCard, MarketplaceTab,
+        MarketplaceUpgradeFailure, McpAuthStatus, McpBrowserOriginElicitation,
+        McpBrowserResourceElicitation, McpElicitation, McpElicitationContent,
+        McpElicitationDecision, McpElicitationValue, McpFormElicitation, McpFormField,
+        McpFormFieldKind, McpFormImagePickerItem, McpFormOption, McpFormStringFormat,
         McpResourceCard, McpResourceContentCard, McpServerCard, McpServerDraft,
         McpServerStartupFailureReason, McpServerStartupState, McpTransportKind, McpUrlElicitation,
         ModelOption, OutputArtifact, OutputArtifactKind, PendingWorktreeForkPhase,
@@ -18867,7 +19015,7 @@ mod tests {
     }
 
     #[test]
-    fn branch_review_uses_the_latest_bounded_remote_diff() {
+    fn review_sources_use_latest_bounded_diffs_and_fall_back_from_removed_commits() {
         let root = PathBuf::from("C:\\repo");
         let mut state = AppState::default();
         state.git.repository_root = Some(root.clone());
@@ -18923,6 +19071,61 @@ mod tests {
         assert_eq!(state.git.selected_scope, GitDiffScope::Branch);
         assert_eq!(state.git.diff_status, Some(LoadStatus::Loading));
         assert!(state.git.unified_diff.is_empty());
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SelectGitDiffScope(GitDiffScope::Uncommitted)
+            ),
+            [Effect::LoadUncommittedDiff {
+                generation: 3,
+                root: PathBuf::from("C:\\repo"),
+            }]
+        );
+        reduce(
+            &mut state,
+            Action::GitSourceDiffLoaded {
+                generation: 3,
+                scope: GitDiffScope::Uncommitted,
+                text: "working tree patch".to_owned(),
+                truncated: false,
+            },
+        );
+        assert_eq!(state.git.unified_diff, "working tree patch");
+
+        let commit_sha = "b".repeat(40);
+        state.git.commits = vec![GitReviewCommitState {
+            sha: commit_sha.clone(),
+            subject: "Native review source".to_owned(),
+            message: "Native review source".to_owned(),
+            committed_at: 1,
+        }];
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SelectGitReviewCommit(commit_sha.clone())
+            ),
+            [Effect::LoadCommitDiff {
+                generation: 4,
+                root: PathBuf::from("C:\\repo"),
+                sha: commit_sha,
+            }]
+        );
+        assert_eq!(state.git.selected_scope, GitDiffScope::Committed);
+
+        let refreshed = GitState {
+            repository_root: Some(PathBuf::from("C:\\repo")),
+            ..GitState::default()
+        };
+        assert_eq!(
+            reduce(&mut state, Action::GitSnapshotLoaded(refreshed)),
+            [Effect::LoadBranchDiff {
+                generation: 5,
+                cwd: PathBuf::from("C:\\repo"),
+            }]
+        );
+        assert_eq!(state.git.selected_scope, GitDiffScope::Branch);
+        assert!(state.git.selected_commit_sha.is_none());
     }
 
     #[test]

@@ -26,33 +26,33 @@ use codex_core::{
     ComposerAttachmentKind, ComputerApplicationState, ConnectionStatus, DiffMarkerStyle, Effect,
     FeedbackClassification, FuzzyFileMatchType, FuzzyFileResult, GitCommitNextStep, GitCommitPhase,
     GitDiffScope, GitFileKind, GitPreferences, GitPullRequestPhase, GitPullRequestProvider,
-    GitReviewMode, GitWorktreeState, HookCard, HookEventName, HookHandlerType, HookIssue,
-    HookProjectEntry, HookSource, HookTrustStatus, InspectorPane, IntegratedTerminalShell,
-    KeyboardShortcutPreferences, KeyboardShortcutUpdateTarget, LoadStatus, MAX_COMPOSER_OPTIONS,
-    MAX_FEEDBACK_DETAILS_BYTES, MAX_FUZZY_FILE_QUERY_BYTES, MAX_GIT_COMMIT_MESSAGE_CHARS,
-    MAX_GIT_PULL_REQUEST_BODY_CHARS, MAX_GIT_PULL_REQUEST_TITLE_CHARS,
-    MAX_KEYBOARD_SHORTCUT_ACCELERATOR_BYTES, MAX_KEYBOARD_SHORTCUTS_PER_COMMAND,
-    MAX_MCP_FORM_IMAGE_DATA_URL_BYTES, MAX_MCP_FORM_VALUE_BYTES, MAX_TASK_SEARCH_RESULTS,
-    MAX_TIMELINE_ITEMS, MAX_USER_INPUT_VALUE_BYTES, MAX_WORKTREE_ROOT_BYTES, MainRoute,
-    MarketplaceManageTab, MarketplaceSectionFilter, MarketplaceTab, McpAuthStatus,
-    McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
-    McpElicitationContent, McpElicitationDecision, McpElicitationValue, McpFormElicitation,
-    McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpResourceCard,
-    McpResourceContentCard, McpResourceTemplateCard, McpServerCard, McpServerDraft,
-    McpServerStartupFailureReason, McpServerStartupState, McpToolCard, McpTransportKind,
-    NetworkApprovalProtocol, OutputArtifact, OutputArtifactKind, PendingWorktreeForkPhase,
-    PermissionRequestDetail, Personality, PluginCard, PluginDetailItem, PluginDetailView,
-    PluginDirectoryTab, PluginSkillDetail, PrimaryWindowPlacement, ProcessManagerState,
-    PullRequestActivity, PullRequestActivityKind, PullRequestCheck, PullRequestCheckStatus,
-    PullRequestCiStatus, PullRequestDetail, PullRequestDetailTab, PullRequestLifecycle,
-    PullRequestMergeMethod, PullRequestMutation, PullRequestMutationKind, PullRequestRelationship,
-    PullRequestReviewEvent, PullRequestState, PullRequestSummary, ReasoningEffortOption,
-    ReducedMotionPreference, STANDARD_SERVICE_TIER_ID, ServiceTierOption, SkillCard, SkillScope,
-    TaskRunStatus, TaskSearchResult, TaskSummary, TerminalDockLocation, TerminalTabState,
-    ThreadGoalStatus, TimelineCitation, TimelineItem, TimelineKind, UsageLimitWindow,
-    UserInputAnswer, UserInputAnswers, UserInputRequest, appearance_code_theme_supports_variant,
-    composer_plugin_display_name, composer_plugin_is_mentionable, is_appearance_code_theme_id,
-    reduce, validate_mcp_form_content,
+    GitReviewCommitState, GitReviewMode, GitWorktreeState, HookCard, HookEventName,
+    HookHandlerType, HookIssue, HookProjectEntry, HookSource, HookTrustStatus, InspectorPane,
+    IntegratedTerminalShell, KeyboardShortcutPreferences, KeyboardShortcutUpdateTarget, LoadStatus,
+    MAX_COMPOSER_OPTIONS, MAX_FEEDBACK_DETAILS_BYTES, MAX_FUZZY_FILE_QUERY_BYTES,
+    MAX_GIT_COMMIT_MESSAGE_CHARS, MAX_GIT_PULL_REQUEST_BODY_CHARS,
+    MAX_GIT_PULL_REQUEST_TITLE_CHARS, MAX_KEYBOARD_SHORTCUT_ACCELERATOR_BYTES,
+    MAX_KEYBOARD_SHORTCUTS_PER_COMMAND, MAX_MCP_FORM_IMAGE_DATA_URL_BYTES,
+    MAX_MCP_FORM_VALUE_BYTES, MAX_TASK_SEARCH_RESULTS, MAX_TIMELINE_ITEMS,
+    MAX_USER_INPUT_VALUE_BYTES, MAX_WORKTREE_ROOT_BYTES, MainRoute, MarketplaceManageTab,
+    MarketplaceSectionFilter, MarketplaceTab, McpAuthStatus, McpBrowserOriginElicitation,
+    McpBrowserResourceElicitation, McpElicitation, McpElicitationContent, McpElicitationDecision,
+    McpElicitationValue, McpFormElicitation, McpFormField, McpFormFieldKind,
+    McpFormImagePickerItem, McpResourceCard, McpResourceContentCard, McpResourceTemplateCard,
+    McpServerCard, McpServerDraft, McpServerStartupFailureReason, McpServerStartupState,
+    McpToolCard, McpTransportKind, NetworkApprovalProtocol, OutputArtifact, OutputArtifactKind,
+    PendingWorktreeForkPhase, PermissionRequestDetail, Personality, PluginCard, PluginDetailItem,
+    PluginDetailView, PluginDirectoryTab, PluginSkillDetail, PrimaryWindowPlacement,
+    ProcessManagerState, PullRequestActivity, PullRequestActivityKind, PullRequestCheck,
+    PullRequestCheckStatus, PullRequestCiStatus, PullRequestDetail, PullRequestDetailTab,
+    PullRequestLifecycle, PullRequestMergeMethod, PullRequestMutation, PullRequestMutationKind,
+    PullRequestRelationship, PullRequestReviewEvent, PullRequestState, PullRequestSummary,
+    ReasoningEffortOption, ReducedMotionPreference, STANDARD_SERVICE_TIER_ID, ServiceTierOption,
+    SkillCard, SkillScope, TaskRunStatus, TaskSearchResult, TaskSummary, TerminalDockLocation,
+    TerminalTabState, ThreadGoalStatus, TimelineCitation, TimelineItem, TimelineKind,
+    UsageLimitWindow, UserInputAnswer, UserInputAnswers, UserInputRequest,
+    appearance_code_theme_supports_variant, composer_plugin_display_name,
+    composer_plugin_is_mentionable, is_appearance_code_theme_id, reduce, validate_mcp_form_content,
 };
 use codex_platform::{desktop_work_areas, normalize_browser_origin, read_artifact_image};
 use gpui::{
@@ -2214,6 +2214,14 @@ struct TaskActionMenuTarget {
     title: String,
     cwd: PathBuf,
     is_pinned: bool,
+}
+
+struct GitReviewSourceMenuState {
+    selected_scope: GitDiffScope,
+    review_disabled: bool,
+    repository_available: bool,
+    commits: Vec<GitReviewCommitState>,
+    selected_commit_sha: Option<String>,
 }
 
 #[cfg(target_os = "macos")]
@@ -9252,6 +9260,163 @@ impl WorkspaceView {
                 .on_click(move |_, window, cx| {
                     let _ = view.update(cx, |this, cx| {
                         this.open_create_branch_modal(window, cx);
+                    });
+                }),
+        )
+    }
+
+    fn git_review_source_menu(
+        mut menu: PopupMenu,
+        view: WeakEntity<Self>,
+        state: GitReviewSourceMenuState,
+        window: &mut Window,
+        cx: &mut Context<PopupMenu>,
+    ) -> PopupMenu {
+        let GitReviewSourceMenuState {
+            selected_scope,
+            review_disabled,
+            repository_available,
+            commits,
+            selected_commit_sha,
+        } = state;
+        let last_turn_view = view.clone();
+        menu = menu
+            .item(
+                PopupMenuItem::new("Last Turn")
+                    .checked(selected_scope == GitDiffScope::LastTurn)
+                    .on_click(move |_, _, cx| {
+                        let _ = last_turn_view.update(cx, |this, cx| {
+                            this.dispatch(Action::SelectGitDiffScope(GitDiffScope::LastTurn), cx);
+                        });
+                    }),
+            )
+            .separator();
+        if review_disabled {
+            return menu;
+        }
+
+        let uncommitted_view = view.clone();
+        let unstaged_view = view.clone();
+        let staged_view = view.clone();
+        menu = menu
+            .item(
+                PopupMenuItem::element(move |_, cx| {
+                    v_flex()
+                        .w_full()
+                        .min_w_0()
+                        .gap_0p5()
+                        .child(div().text_sm().child("Uncommitted"))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("Show all staged and unstaged changes"),
+                        )
+                })
+                .checked(selected_scope == GitDiffScope::Uncommitted)
+                .disabled(!repository_available)
+                .on_click(move |_, _, cx| {
+                    let _ = uncommitted_view.update(cx, |this, cx| {
+                        this.dispatch(Action::SelectGitDiffScope(GitDiffScope::Uncommitted), cx);
+                    });
+                }),
+            )
+            .item(
+                PopupMenuItem::new("Unstaged")
+                    .checked(selected_scope == GitDiffScope::Unstaged)
+                    .disabled(!repository_available)
+                    .on_click(move |_, _, cx| {
+                        let _ = unstaged_view.update(cx, |this, cx| {
+                            this.dispatch(Action::SelectGitDiffScope(GitDiffScope::Unstaged), cx);
+                        });
+                    }),
+            )
+            .item(
+                PopupMenuItem::new("Staged")
+                    .checked(selected_scope == GitDiffScope::Staged)
+                    .disabled(!repository_available)
+                    .on_click(move |_, _, cx| {
+                        let _ = staged_view.update(cx, |this, cx| {
+                            this.dispatch(Action::SelectGitDiffScope(GitDiffScope::Staged), cx);
+                        });
+                    }),
+            )
+            .separator();
+
+        let committed_selected = selected_scope == GitDiffScope::Committed;
+        let commit_view = view.clone();
+        menu = menu.submenu_with_icon(
+            committed_selected.then(|| Icon::new(IconName::Check)),
+            "Committed",
+            window,
+            cx,
+            move |mut menu, _, _| {
+                if commits.is_empty() {
+                    return menu.item(PopupMenuItem::label("No commits on branch"));
+                }
+                for commit in &commits {
+                    let row_view = commit_view.clone();
+                    let sha = commit.sha.clone();
+                    let row_id = SharedString::from(format!("git-review-commit-{sha}"));
+                    let checked = selected_commit_sha.as_deref() == Some(sha.as_str());
+                    let subject = commit.subject.clone();
+                    let tooltip = if commit.message.trim().is_empty() {
+                        subject.clone()
+                    } else {
+                        commit.message.clone()
+                    };
+                    let relative = relative_time(commit.committed_at);
+                    let timestamp = if relative.is_empty() || relative == "now" {
+                        relative
+                    } else {
+                        format!("{relative} ago")
+                    };
+                    menu = menu.item(
+                        PopupMenuItem::element(move |_, cx| {
+                            h_flex()
+                                .id(row_id.clone())
+                                .w_full()
+                                .min_w(px(280.0))
+                                .max_w(px(440.0))
+                                .gap_3()
+                                .items_center()
+                                .justify_between()
+                                .tooltip({
+                                    let tooltip = tooltip.clone();
+                                    move |window, cx| {
+                                        Tooltip::new(tooltip.clone()).build(window, cx)
+                                    }
+                                })
+                                .child(div().min_w_0().truncate().text_sm().child(subject.clone()))
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(timestamp.clone()),
+                                )
+                        })
+                        .checked(checked)
+                        .on_click(move |_, _, cx| {
+                            let sha = sha.clone();
+                            let _ = row_view.update(cx, |this, cx| {
+                                this.dispatch(Action::SelectGitReviewCommit(sha), cx);
+                            });
+                        }),
+                    );
+                }
+                menu.max_h(px(320.0)).scrollable(true)
+            },
+        );
+
+        let branch_view = view;
+        menu.item(
+            PopupMenuItem::new("Branch")
+                .checked(selected_scope == GitDiffScope::Branch)
+                .disabled(!repository_available)
+                .on_click(move |_, _, cx| {
+                    let _ = branch_view.update(cx, |this, cx| {
+                        this.dispatch(Action::SelectGitDiffScope(GitDiffScope::Branch), cx);
                     });
                 }),
         )
@@ -20365,20 +20530,18 @@ impl WorkspaceView {
             .as_ref()
             .map_or("", |turn_diff| turn_diff.unified_diff.as_str());
         let last_turn_available = !last_turn_text.trim().is_empty();
-        let unstaged_count = self
+        let selected_commit = self
             .state
             .git
-            .files
-            .iter()
-            .filter(|file| file.unstaged)
-            .count();
-        let staged_count = self
-            .state
-            .git
-            .files
-            .iter()
-            .filter(|file| file.staged)
-            .count();
+            .selected_commit_sha
+            .as_deref()
+            .and_then(|sha| {
+                self.state
+                    .git
+                    .commits
+                    .iter()
+                    .find(|commit| commit.sha == sha)
+            });
         let file_indices = Rc::new(
             self.state
                 .git
@@ -20387,7 +20550,10 @@ impl WorkspaceView {
                 .enumerate()
                 .filter_map(|(index, file)| {
                     let included = match scope {
-                        GitDiffScope::LastTurn | GitDiffScope::Branch => false,
+                        GitDiffScope::LastTurn
+                        | GitDiffScope::Uncommitted
+                        | GitDiffScope::Committed
+                        | GitDiffScope::Branch => false,
                         GitDiffScope::Unstaged => file.unstaged,
                         GitDiffScope::Staged => file.staged,
                     };
@@ -20406,7 +20572,10 @@ impl WorkspaceView {
                 self.state.git.files.iter().find(|file| {
                     file.path == *selected
                         && match scope {
-                            GitDiffScope::LastTurn | GitDiffScope::Branch => false,
+                            GitDiffScope::LastTurn
+                            | GitDiffScope::Uncommitted
+                            | GitDiffScope::Committed
+                            | GitDiffScope::Branch => false,
                             GitDiffScope::Unstaged => file.unstaged,
                             GitDiffScope::Staged => file.staged,
                         }
@@ -20419,48 +20588,116 @@ impl WorkspaceView {
             .map(|file| display_path(&file.path))
             .unwrap_or_else(|| match scope {
                 GitDiffScope::LastTurn => "Last Turn".to_owned(),
+                GitDiffScope::Uncommitted => "Uncommitted".to_owned(),
                 GitDiffScope::Unstaged => "Select an unstaged file".to_owned(),
                 GitDiffScope::Staged => "Select a staged file".to_owned(),
+                GitDiffScope::Committed => selected_commit
+                    .map(|commit| commit.subject.clone())
+                    .unwrap_or_else(|| "Committed".to_owned()),
                 GitDiffScope::Branch => "Branch".to_owned(),
             });
         let diff_text = match scope {
             GitDiffScope::LastTurn => last_turn_text,
-            GitDiffScope::Unstaged | GitDiffScope::Staged | GitDiffScope::Branch => {
-                self.state.git.unified_diff.as_str()
-            }
+            GitDiffScope::Uncommitted
+            | GitDiffScope::Unstaged
+            | GitDiffScope::Staged
+            | GitDiffScope::Committed
+            | GitDiffScope::Branch => self.state.git.unified_diff.as_str(),
         };
         let diff_lines = Rc::new(parse_unified_diff(diff_text, MAX_RENDERED_DIFF_LINES));
         let diff_line_count = diff_lines.len();
         let diff_lines_for_list = Rc::clone(&diff_lines);
-        let branch_summary = match self.state.git.diff_status.unwrap_or(LoadStatus::Idle) {
-            LoadStatus::Idle | LoadStatus::Loading => "Loading branch changes…".to_owned(),
-            LoadStatus::Failed => self
-                .state
-                .git
-                .diff_error
-                .clone()
-                .unwrap_or_else(|| "Could not load changes for this branch.".to_owned()),
-            LoadStatus::Ready if diff_text.trim().is_empty() => {
-                "No changes since the closest remote commit.".to_owned()
-            }
-            LoadStatus::Ready => {
-                let base = self
-                    .state
-                    .git
-                    .diff_base_sha
-                    .as_deref()
-                    .map(|sha| sha.chars().take(12).collect::<String>())
-                    .filter(|sha| !sha.is_empty())
-                    .unwrap_or_else(|| "the closest remote commit".to_owned());
-                if self.state.git.diff_truncated {
-                    format!(
-                        "Changes since {base}. The diff was truncated at the bounded client limit."
-                    )
-                } else {
-                    format!("Changes since {base}.")
+        let source_summary = match scope {
+            GitDiffScope::Uncommitted => {
+                match self.state.git.diff_status.unwrap_or(LoadStatus::Idle) {
+                    LoadStatus::Idle | LoadStatus::Loading => {
+                        "Loading uncommitted changes…".to_owned()
+                    }
+                    LoadStatus::Failed => self
+                        .state
+                        .git
+                        .diff_error
+                        .clone()
+                        .unwrap_or_else(|| "Could not load uncommitted changes.".to_owned()),
+                    LoadStatus::Ready if diff_text.trim().is_empty() => {
+                        "No uncommitted changes.".to_owned()
+                    }
+                    LoadStatus::Ready if self.state.git.diff_truncated => {
+                        "All staged and unstaged changes. The diff was truncated at the bounded \
+                         client limit."
+                            .to_owned()
+                    }
+                    LoadStatus::Ready => "All staged and unstaged changes.".to_owned(),
                 }
             }
+            GitDiffScope::Committed => {
+                let subject = selected_commit
+                    .map(|commit| commit.subject.as_str())
+                    .filter(|subject| !subject.is_empty())
+                    .unwrap_or("the selected commit");
+                match self.state.git.diff_status.unwrap_or(LoadStatus::Idle) {
+                    LoadStatus::Idle | LoadStatus::Loading => {
+                        "Loading committed changes…".to_owned()
+                    }
+                    LoadStatus::Failed => self
+                        .state
+                        .git
+                        .diff_error
+                        .clone()
+                        .unwrap_or_else(|| "Could not load changes for this commit.".to_owned()),
+                    LoadStatus::Ready if diff_text.trim().is_empty() => {
+                        format!("No text changes in {subject}.")
+                    }
+                    LoadStatus::Ready if self.state.git.diff_truncated => format!(
+                        "Changes in {subject}. The diff was truncated at the bounded client limit."
+                    ),
+                    LoadStatus::Ready => format!("Changes in {subject}."),
+                }
+            }
+            GitDiffScope::Branch => match self.state.git.diff_status.unwrap_or(LoadStatus::Idle) {
+                LoadStatus::Idle | LoadStatus::Loading => "Loading branch changes…".to_owned(),
+                LoadStatus::Failed => self
+                    .state
+                    .git
+                    .diff_error
+                    .clone()
+                    .unwrap_or_else(|| "Could not load changes for this branch.".to_owned()),
+                LoadStatus::Ready if diff_text.trim().is_empty() => {
+                    "No changes since the closest remote commit.".to_owned()
+                }
+                LoadStatus::Ready => {
+                    let base = self
+                        .state
+                        .git
+                        .diff_base_sha
+                        .as_deref()
+                        .map(|sha| sha.chars().take(12).collect::<String>())
+                        .filter(|sha| !sha.is_empty())
+                        .unwrap_or_else(|| "the closest remote commit".to_owned());
+                    if self.state.git.diff_truncated {
+                        format!(
+                            "Changes since {base}. The diff was truncated at the bounded \
+                                 client limit."
+                        )
+                    } else {
+                        format!("Changes since {base}.")
+                    }
+                }
+            },
+            GitDiffScope::LastTurn | GitDiffScope::Unstaged | GitDiffScope::Staged => String::new(),
         };
+        let source_label = match scope {
+            GitDiffScope::LastTurn => "Last Turn",
+            GitDiffScope::Uncommitted => "Uncommitted",
+            GitDiffScope::Unstaged => "Unstaged",
+            GitDiffScope::Staged => "Staged",
+            GitDiffScope::Committed => "Committed",
+            GitDiffScope::Branch => "Branch",
+        };
+        let source_menu_view = cx.entity().downgrade();
+        let source_menu_commits = self.state.git.commits.clone();
+        let source_menu_commit_sha = self.state.git.selected_commit_sha.clone();
+        let repository_available = self.state.git.repository_root.is_some();
         let pull_request_button = (!review_disabled)
             .then(|| self.render_pull_request_button("changes-pull-request", true, cx))
             .flatten();
@@ -20477,62 +20714,24 @@ impl WorkspaceView {
                     .items_center()
                     .justify_between()
                     .child(
-                        h_flex()
-                            .gap_1()
-                            .items_center()
-                            .child(
-                                Button::new("changes-last-turn")
-                                    .label("Last Turn")
-                                    .small()
-                                    .ghost()
-                                    .selected(scope == GitDiffScope::LastTurn)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.dispatch(
-                                            Action::SelectGitDiffScope(GitDiffScope::LastTurn),
-                                            cx,
-                                        );
-                                    })),
-                            )
-                            .when(!review_disabled, |tabs| {
-                                tabs.child(
-                                    Button::new("changes-unstaged")
-                                        .label(format!("Unstaged · {unstaged_count}"))
-                                        .small()
-                                        .ghost()
-                                        .selected(scope == GitDiffScope::Unstaged)
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.dispatch(
-                                                Action::SelectGitDiffScope(GitDiffScope::Unstaged),
-                                                cx,
-                                            );
-                                        })),
-                                )
-                                .child(
-                                    Button::new("changes-staged")
-                                        .label(format!("Staged · {staged_count}"))
-                                        .small()
-                                        .ghost()
-                                        .selected(scope == GitDiffScope::Staged)
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.dispatch(
-                                                Action::SelectGitDiffScope(GitDiffScope::Staged),
-                                                cx,
-                                            );
-                                        })),
-                                )
-                                .child(
-                                    Button::new("changes-branch")
-                                        .label("Branch")
-                                        .small()
-                                        .ghost()
-                                        .selected(scope == GitDiffScope::Branch)
-                                        .disabled(self.state.git.repository_root.is_none())
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.dispatch(
-                                                Action::SelectGitDiffScope(GitDiffScope::Branch),
-                                                cx,
-                                            );
-                                        })),
+                        Button::new("changes-source")
+                            .label(source_label)
+                            .dropdown_caret(true)
+                            .small()
+                            .ghost()
+                            .dropdown_menu(move |menu, window, cx| {
+                                Self::git_review_source_menu(
+                                    menu,
+                                    source_menu_view.clone(),
+                                    GitReviewSourceMenuState {
+                                        selected_scope: scope,
+                                        review_disabled,
+                                        repository_available,
+                                        commits: source_menu_commits.clone(),
+                                        selected_commit_sha: source_menu_commit_sha.clone(),
+                                    },
+                                    window,
+                                    cx,
                                 )
                             }),
                     )
@@ -20572,7 +20771,10 @@ impl WorkspaceView {
                                     actions.child(
                                         Button::new("changes-scope-all")
                                             .label(match scope {
-                                                GitDiffScope::LastTurn | GitDiffScope::Branch => "",
+                                                GitDiffScope::LastTurn
+                                                | GitDiffScope::Uncommitted
+                                                | GitDiffScope::Committed
+                                                | GitDiffScope::Branch => "",
                                                 GitDiffScope::Unstaged => "Stage all",
                                                 GitDiffScope::Staged => "Unstage all",
                                             })
@@ -20583,6 +20785,8 @@ impl WorkspaceView {
                                                 this.dispatch(
                                                     match scope {
                                                         GitDiffScope::LastTurn
+                                                        | GitDiffScope::Uncommitted
+                                                        | GitDiffScope::Committed
                                                         | GitDiffScope::Branch => return,
                                                         GitDiffScope::Unstaged => Action::StageAll,
                                                         GitDiffScope::Staged => Action::UnstageAll,
@@ -20626,7 +20830,10 @@ impl WorkspaceView {
                         "The latest diffs are no longer available.".to_owned()
                     })
                     .into_any_element()
-            } else if scope == GitDiffScope::Branch {
+            } else if matches!(
+                scope,
+                GitDiffScope::Uncommitted | GitDiffScope::Committed | GitDiffScope::Branch
+            ) {
                 div()
                     .mx_4()
                     .min_h(px(58.0))
@@ -20640,7 +20847,7 @@ impl WorkspaceView {
                     .border_color(cx.theme().border)
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(branch_summary)
+                    .child(source_summary)
                     .into_any_element()
             } else if file_count == 0 {
                 div()
@@ -20660,8 +20867,10 @@ impl WorkspaceView {
                     } else {
                         match scope {
                             GitDiffScope::LastTurn => "The latest diffs are no longer available.",
+                            GitDiffScope::Uncommitted => "No uncommitted changes.",
                             GitDiffScope::Unstaged => "No unstaged changes.",
                             GitDiffScope::Staged => "No staged changes.",
+                            GitDiffScope::Committed => "No committed changes.",
                             GitDiffScope::Branch => "No branch changes.",
                         }
                     })
@@ -20670,8 +20879,10 @@ impl WorkspaceView {
                 uniform_list(
                     match scope {
                         GitDiffScope::LastTurn => "git-files-last-turn",
+                        GitDiffScope::Uncommitted => "git-files-uncommitted",
                         GitDiffScope::Unstaged => "git-files-unstaged",
                         GitDiffScope::Staged => "git-files-staged",
+                        GitDiffScope::Committed => "git-files-committed",
                         GitDiffScope::Branch => "git-files-branch",
                     },
                     file_count,
@@ -20711,7 +20922,10 @@ impl WorkspaceView {
                             header.child(
                                 Button::new("stage-selected")
                                     .label(match scope {
-                                        GitDiffScope::LastTurn | GitDiffScope::Branch => "",
+                                        GitDiffScope::LastTurn
+                                        | GitDiffScope::Uncommitted
+                                        | GitDiffScope::Committed
+                                        | GitDiffScope::Branch => "",
                                         GitDiffScope::Unstaged => "Stage",
                                         GitDiffScope::Staged => "Unstage",
                                     })
@@ -20722,6 +20936,8 @@ impl WorkspaceView {
                                             this.dispatch(
                                                 match scope {
                                                     GitDiffScope::LastTurn
+                                                    | GitDiffScope::Uncommitted
+                                                    | GitDiffScope::Committed
                                                     | GitDiffScope::Branch => return,
                                                     GitDiffScope::Unstaged => {
                                                         Action::StagePath(path)
@@ -20762,11 +20978,37 @@ impl WorkspaceView {
                                     GitDiffScope::LastTurn => {
                                         "The latest diffs are no longer available."
                                     }
+                                    GitDiffScope::Uncommitted => {
+                                        match self.state.git.diff_status.unwrap_or(LoadStatus::Idle)
+                                        {
+                                            LoadStatus::Idle | LoadStatus::Loading => {
+                                                "Loading uncommitted changes…"
+                                            }
+                                            LoadStatus::Failed => {
+                                                "Uncommitted changes could not be loaded."
+                                            }
+                                            LoadStatus::Ready => "No uncommitted changes.",
+                                        }
+                                    }
                                     GitDiffScope::Unstaged => {
                                         "Select an unstaged file to inspect its diff."
                                     }
                                     GitDiffScope::Staged => {
                                         "Select a staged file to inspect its diff."
+                                    }
+                                    GitDiffScope::Committed => {
+                                        match self.state.git.diff_status.unwrap_or(LoadStatus::Idle)
+                                        {
+                                            LoadStatus::Idle | LoadStatus::Loading => {
+                                                "Loading committed changes…"
+                                            }
+                                            LoadStatus::Failed => {
+                                                "Committed changes could not be loaded."
+                                            }
+                                            LoadStatus::Ready => {
+                                                "No text changes in the selected commit."
+                                            }
+                                        }
                                     }
                                     GitDiffScope::Branch => {
                                         match self.state.git.diff_status.unwrap_or(LoadStatus::Idle)
@@ -20789,8 +21031,10 @@ impl WorkspaceView {
                         uniform_list(
                             match scope {
                                 GitDiffScope::LastTurn => "changes-diff-last-turn",
+                                GitDiffScope::Uncommitted => "changes-diff-uncommitted",
                                 GitDiffScope::Unstaged => "changes-diff-unstaged",
                                 GitDiffScope::Staged => "changes-diff-staged",
+                                GitDiffScope::Committed => "changes-diff-committed",
                                 GitDiffScope::Branch => "changes-diff-branch",
                             },
                             diff_line_count,
@@ -20857,7 +21101,10 @@ impl WorkspaceView {
             (false, false) => "",
         };
         let (additions, deletions) = match scope {
-            GitDiffScope::LastTurn | GitDiffScope::Branch => (0, 0),
+            GitDiffScope::LastTurn
+            | GitDiffScope::Uncommitted
+            | GitDiffScope::Committed
+            | GitDiffScope::Branch => (0, 0),
             GitDiffScope::Unstaged => (file.unstaged_additions, file.unstaged_deletions),
             GitDiffScope::Staged => (file.staged_additions, file.staged_deletions),
         };
@@ -20867,8 +21114,10 @@ impl WorkspaceView {
                 "git-file-{}-{index}",
                 match scope {
                     GitDiffScope::LastTurn => "last-turn",
+                    GitDiffScope::Uncommitted => "uncommitted",
                     GitDiffScope::Unstaged => "unstaged",
                     GitDiffScope::Staged => "staged",
+                    GitDiffScope::Committed => "committed",
                     GitDiffScope::Branch => "branch",
                 }
             )))
