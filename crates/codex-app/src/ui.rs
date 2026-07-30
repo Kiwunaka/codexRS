@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet, VecDeque, hash_map::DefaultHasher};
 use std::future::Future;
@@ -66,8 +67,8 @@ use gpui::{
     uniform_list,
 };
 use gpui_component::{
-    ActiveTheme, Disableable, Icon, IconName, InteractiveElementExt, Root, Selectable, Side,
-    Sizable,
+    ActiveTheme, Disableable, Icon, IconName, IndexPath, InteractiveElementExt, Root, Selectable,
+    Side, Sizable,
     button::{Button, ButtonCustomVariant, ButtonRounded, ButtonVariants},
     checkbox::Checkbox,
     color_picker::{ColorPicker, ColorPickerEvent, ColorPickerState},
@@ -80,7 +81,7 @@ use gpui_component::{
     menu::{ContextMenuExt, DropdownMenu, PopupMenu, PopupMenuItem},
     radio::Radio,
     scroll::ScrollableElement,
-    select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
+    select::{SearchableVec, Select, SelectDelegate, SelectEvent, SelectItem, SelectState},
     slider::{Slider, SliderEvent, SliderState, SliderValue},
     switch::Switch,
     text::TextView,
@@ -1524,6 +1525,130 @@ impl SelectItem for PickerItem {
     fn value(&self) -> &Self::Value {
         &self.id
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReviewBasePickerItem {
+    value: String,
+    custom: bool,
+}
+
+impl ReviewBasePickerItem {
+    fn branch(value: String) -> Self {
+        Self {
+            value,
+            custom: false,
+        }
+    }
+
+    fn custom(value: String) -> Self {
+        Self {
+            value,
+            custom: true,
+        }
+    }
+}
+
+impl SelectItem for ReviewBasePickerItem {
+    type Value = String;
+
+    fn title(&self) -> SharedString {
+        if self.custom {
+            format!("Use {}", self.value).into()
+        } else {
+            self.value.clone().into()
+        }
+    }
+
+    fn display_title(&self) -> Option<AnyElement> {
+        Some(self.value.clone().into_any_element())
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.value
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ReviewBasePickerDelegate {
+    items: Vec<ReviewBasePickerItem>,
+    matched_items: Vec<ReviewBasePickerItem>,
+    query: Rc<RefCell<String>>,
+}
+
+impl ReviewBasePickerDelegate {
+    fn new(items: Vec<ReviewBasePickerItem>, query: Rc<RefCell<String>>) -> Self {
+        let matched_items = Self::filtered_items(&items, query.borrow().as_str());
+        Self {
+            items,
+            matched_items,
+            query,
+        }
+    }
+
+    fn filtered_items(items: &[ReviewBasePickerItem], query: &str) -> Vec<ReviewBasePickerItem> {
+        let query = query.trim();
+        let mut matched_items = items
+            .iter()
+            .filter(|item| item.matches(query))
+            .cloned()
+            .collect::<Vec<_>>();
+        if valid_review_base(query) && !items.iter().any(|item| item.value == query) {
+            matched_items.push(ReviewBasePickerItem::custom(query.to_owned()));
+        }
+        matched_items
+    }
+}
+
+impl SelectDelegate for ReviewBasePickerDelegate {
+    type Item = ReviewBasePickerItem;
+
+    fn section(&self, section: usize) -> Option<AnyElement> {
+        (section == 0).then(|| "Branches".into_any_element())
+    }
+
+    fn items_count(&self, section: usize) -> usize {
+        if section == 0 {
+            self.matched_items.len()
+        } else {
+            0
+        }
+    }
+
+    fn item(&self, index: IndexPath) -> Option<&Self::Item> {
+        (index.section == 0)
+            .then(|| self.matched_items.get(index.row))
+            .flatten()
+    }
+
+    fn position<V>(&self, value: &V) -> Option<IndexPath>
+    where
+        Self::Item: SelectItem<Value = V>,
+        V: PartialEq,
+    {
+        self.matched_items
+            .iter()
+            .position(|item| item.value() == value)
+            .map(|row| IndexPath::default().row(row))
+    }
+
+    fn perform_search(
+        &mut self,
+        query: &str,
+        _: &mut Window,
+        _: &mut Context<SelectState<Self>>,
+    ) -> Task<()> {
+        *self.query.borrow_mut() = query.to_owned();
+        self.matched_items = Self::filtered_items(&self.items, query);
+        Task::ready(())
+    }
+}
+
+fn valid_review_base(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= codex_core::MAX_GIT_BRANCH_BYTES
+        && !value.starts_with('-')
+        && !value.chars().any(char::is_control)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4339,10 +4464,13 @@ struct WorkspaceView {
     effort_picker: Entity<SelectState<SearchableVec<PickerItem>>>,
     service_tier_picker: Entity<SelectState<SearchableVec<PickerItem>>>,
     permission_picker: Entity<SelectState<SearchableVec<PickerItem>>>,
+    review_base_picker: Entity<SelectState<ReviewBasePickerDelegate>>,
+    review_base_query: Rc<RefCell<String>>,
     synced_model_items: Vec<PickerItem>,
     synced_effort_items: Vec<PickerItem>,
     synced_service_tier_items: Vec<PickerItem>,
     synced_permission_items: Vec<PickerItem>,
+    synced_review_base_items: Vec<ReviewBasePickerItem>,
     composer_file_search_selected: usize,
     composer_file_search_dismissed_query: Option<String>,
     composer_mcp_status_open: bool,
@@ -4634,6 +4762,17 @@ impl WorkspaceView {
                 window,
                 cx,
             )
+        });
+        let review_base_query = Rc::new(RefCell::new(String::new()));
+        let picker_query = Rc::clone(&review_base_query);
+        let review_base_picker = cx.new(|cx| {
+            SelectState::new(
+                ReviewBasePickerDelegate::new(Vec::new(), picker_query),
+                None,
+                window,
+                cx,
+            )
+            .searchable(true)
         });
 
         let mut subscriptions = vec![
@@ -5067,6 +5206,15 @@ impl WorkspaceView {
                     }
                 },
             ),
+            cx.subscribe_in(
+                &review_base_picker,
+                window,
+                |this, _, event: &SelectEvent<ReviewBasePickerDelegate>, _, cx| {
+                    if let SelectEvent::Confirm(Some(base)) = event {
+                        this.dispatch(Action::SelectGitReviewBase(base.clone()), cx);
+                    }
+                },
+            ),
         ];
         subscriptions.push(
             cx.on_blur(&keyboard_shortcut_capture_focus, window, |this, _, cx| {
@@ -5272,10 +5420,13 @@ impl WorkspaceView {
             effort_picker,
             service_tier_picker,
             permission_picker,
+            review_base_picker,
+            review_base_query,
             synced_model_items: Vec::new(),
             synced_effort_items: Vec::new(),
             synced_service_tier_items: Vec::new(),
             synced_permission_items: Vec::new(),
+            synced_review_base_items: Vec::new(),
             composer_file_search_selected: 0,
             composer_file_search_dismissed_query: None,
             composer_mcp_status_open: false,
@@ -10404,6 +10555,56 @@ impl WorkspaceView {
             });
             self.synced_permission_items = permission_items;
         }
+    }
+
+    fn sync_review_base_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mut seen = HashSet::new();
+        let mut values = Vec::with_capacity(self.state.git.review_branches.len() + 2);
+        if let Some(selected) = self.state.git.selected_review_base.as_ref()
+            && seen.insert(selected.clone())
+        {
+            values.push(selected.clone());
+        }
+        if let Some(default) = self.state.git.review_default_base.as_ref()
+            && seen.insert(default.clone())
+        {
+            values.push(default.clone());
+        }
+        for branch in &self.state.git.review_branches {
+            if self.state.git.branch.as_ref() != Some(branch) && seen.insert(branch.clone()) {
+                values.push(branch.clone());
+            }
+        }
+        let items = values
+            .into_iter()
+            .map(ReviewBasePickerItem::branch)
+            .collect::<Vec<_>>();
+        if items == self.synced_review_base_items {
+            return;
+        }
+
+        let selected = self
+            .state
+            .git
+            .selected_review_base
+            .as_ref()
+            .or(self.state.git.review_default_base.as_ref())
+            .cloned();
+        let picker_items = items.clone();
+        let picker_query = Rc::clone(&self.review_base_query);
+        self.review_base_picker.update(cx, |picker, cx| {
+            picker.set_items(
+                ReviewBasePickerDelegate::new(picker_items, picker_query),
+                window,
+                cx,
+            );
+            if let Some(selected) = selected.as_ref() {
+                picker.set_selected_value(selected, window, cx);
+            } else {
+                picker.set_selected_index(None, window, cx);
+            }
+        });
+        self.synced_review_base_items = items;
     }
 
     fn render_sidebar_toggle(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -20607,6 +20808,13 @@ impl WorkspaceView {
         let diff_lines = Rc::new(parse_unified_diff(diff_text, MAX_RENDERED_DIFF_LINES));
         let diff_line_count = diff_lines.len();
         let diff_lines_for_list = Rc::clone(&diff_lines);
+        let effective_review_base = self
+            .state
+            .git
+            .selected_review_base
+            .as_ref()
+            .or(self.state.git.review_default_base.as_ref())
+            .cloned();
         let source_summary = match scope {
             GitDiffScope::Uncommitted => {
                 match self.state.git.diff_status.unwrap_or(LoadStatus::Idle) {
@@ -20655,25 +20863,30 @@ impl WorkspaceView {
                 }
             }
             GitDiffScope::Branch => match self.state.git.diff_status.unwrap_or(LoadStatus::Idle) {
-                LoadStatus::Idle | LoadStatus::Loading => "Loading branch changes…".to_owned(),
+                LoadStatus::Idle | LoadStatus::Loading => effective_review_base
+                    .as_ref()
+                    .map(|base| format!("Loading changes from {base}…"))
+                    .unwrap_or_else(|| "Loading branch changes…".to_owned()),
                 LoadStatus::Failed => self
                     .state
                     .git
                     .diff_error
                     .clone()
                     .unwrap_or_else(|| "Could not load changes for this branch.".to_owned()),
-                LoadStatus::Ready if diff_text.trim().is_empty() => {
-                    "No changes since the closest remote commit.".to_owned()
-                }
+                LoadStatus::Ready if diff_text.trim().is_empty() => effective_review_base
+                    .as_ref()
+                    .map(|base| format!("No changes compared with {base}."))
+                    .unwrap_or_else(|| "No changes since the closest remote commit.".to_owned()),
                 LoadStatus::Ready => {
-                    let base = self
-                        .state
-                        .git
-                        .diff_base_sha
-                        .as_deref()
-                        .map(|sha| sha.chars().take(12).collect::<String>())
-                        .filter(|sha| !sha.is_empty())
-                        .unwrap_or_else(|| "the closest remote commit".to_owned());
+                    let base = effective_review_base.clone().unwrap_or_else(|| {
+                        self.state
+                            .git
+                            .diff_base_sha
+                            .as_deref()
+                            .map(|sha| sha.chars().take(12).collect::<String>())
+                            .filter(|sha| !sha.is_empty())
+                            .unwrap_or_else(|| "the closest remote commit".to_owned())
+                    });
                     if self.state.git.diff_truncated {
                         format!(
                             "Changes since {base}. The diff was truncated at the bounded \
@@ -20698,6 +20911,13 @@ impl WorkspaceView {
         let source_menu_commits = self.state.git.commits.clone();
         let source_menu_commit_sha = self.state.git.selected_commit_sha.clone();
         let repository_available = self.state.git.repository_root.is_some();
+        let current_branch = self
+            .state
+            .git
+            .branch
+            .clone()
+            .unwrap_or_else(|| "HEAD".to_owned());
+        let show_review_base_picker = scope == GitDiffScope::Branch && repository_available;
         let pull_request_button = (!review_disabled)
             .then(|| self.render_pull_request_button("changes-pull-request", true, cx))
             .flatten();
@@ -20799,6 +21019,57 @@ impl WorkspaceView {
                             ),
                     ),
             )
+            .when(show_review_base_picker, |panel| {
+                panel.child(
+                    h_flex()
+                        .px_4()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_sm()
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .child(current_branch),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("→"),
+                        )
+                        .child(
+                            div()
+                                .id("review-base-picker")
+                                .flex_1()
+                                .min_w(px(120.0))
+                                .max_w(px(220.0))
+                                .when_some(effective_review_base.clone(), |picker, tooltip| {
+                                    picker.tooltip(move |window, cx| {
+                                        Tooltip::new(tooltip.clone()).build(window, cx)
+                                    })
+                                })
+                                .child(
+                                    Select::new(&self.review_base_picker)
+                                        .small()
+                                        .w_full()
+                                        .menu_width(px(288.0))
+                                        .placeholder("Select branch")
+                                        .search_placeholder("Search branches")
+                                        .empty(
+                                            div()
+                                                .py_4()
+                                                .text_sm()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child("No branches found"),
+                                        )
+                                        .appearance(false),
+                                ),
+                        ),
+                )
+            })
             .child(if scope == GitDiffScope::LastTurn {
                 div()
                     .mx_4()
@@ -34611,6 +34882,7 @@ impl Render for WorkspaceView {
             .terminal_right_width
             .clamp(TERMINAL_RIGHT_MIN_WIDTH, right_maximum);
         self.sync_composer_pickers(window, cx);
+        self.sync_review_base_picker(window, cx);
         self.sync_user_input_controls(window, cx);
         self.sync_mcp_form_controls(window, cx);
         let visible_user_input_request_id = self
