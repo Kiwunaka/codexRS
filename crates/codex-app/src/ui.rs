@@ -13972,6 +13972,9 @@ impl WorkspaceView {
                 .child(div().h(px(1.0)).flex_1().bg(cx.theme().border))
                 .into_any_element();
         }
+        if item.kind == TimelineKind::Warning {
+            return self.render_timeline_warning(index, item, cx);
+        }
         if is_compact_timeline_activity(item.kind) {
             return self.render_timeline_activity(task_id, index, item, cx);
         }
@@ -14644,6 +14647,7 @@ impl WorkspaceView {
             TimelineKind::BackgroundProcess => IconName::SquareTerminal,
             TimelineKind::Reasoning => IconName::Asterisk,
             TimelineKind::Notice => IconName::Info,
+            TimelineKind::Warning => IconName::TriangleAlert,
             TimelineKind::User
             | TimelineKind::Agent
             | TimelineKind::Plan
@@ -14784,6 +14788,71 @@ impl WorkspaceView {
             .when_some(expanded_content, |activity, content| {
                 activity.child(content)
             })
+            .into_any_element()
+    }
+
+    fn render_timeline_warning(
+        &self,
+        index: usize,
+        item: TimelineItem,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let source = item
+            .sources
+            .into_iter()
+            .find(|source| is_supported_external_url(&source.url));
+
+        v_flex()
+            .id(SharedString::from(format!("timeline-warning-{index}")))
+            .w_full()
+            .px_6()
+            .py_2()
+            .child(
+                v_flex()
+                    .w_full()
+                    .max_w(px(820.0))
+                    .p_3()
+                    .gap_2()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(cx.theme().warning.opacity(0.45))
+                    .bg(cx.theme().warning.opacity(0.08))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .items_center()
+                            .text_color(cx.theme().warning)
+                            .child(Icon::new(IconName::TriangleAlert).small())
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child("Extra safety checks are on"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .pl_6()
+                            .text_sm()
+                            .line_height(px(20.0))
+                            .child(item.text),
+                    )
+                    .when_some(source, |warning, source| {
+                        let url = source.url;
+                        warning.child(
+                            h_flex().pl_6().child(
+                                Button::new(SharedString::from(format!(
+                                    "timeline-warning-source-{index}"
+                                )))
+                                .label(source.title)
+                                .icon(IconName::ExternalLink)
+                                .small()
+                                .ghost()
+                                .on_click(move |_, _, cx| cx.open_url(&url)),
+                            ),
+                        )
+                    }),
+            )
             .into_any_element()
     }
 
@@ -34835,7 +34904,8 @@ fn conversation_markdown_item(item: &TimelineItem) -> Option<String> {
         | TimelineKind::Image
         | TimelineKind::BackgroundProcess
         | TimelineKind::ContextCompaction
-        | TimelineKind::Notice => {
+        | TimelineKind::Notice
+        | TimelineKind::Warning => {
             let (summary, detail) = timeline_activity_content(item);
             let summary = summary.trim();
             if summary.is_empty() {
@@ -35208,6 +35278,7 @@ fn timeline_activity_content(item: &TimelineItem) -> (String, Option<String>) {
         TimelineKind::Image => "Generating image...",
         TimelineKind::BackgroundProcess => "Started background terminal",
         TimelineKind::Notice => "System activity",
+        TimelineKind::Warning => "Warning",
         TimelineKind::User
         | TimelineKind::Agent
         | TimelineKind::Plan
@@ -35787,6 +35858,11 @@ fn timeline_style(kind: TimelineKind, cx: &App) -> (&'static str, gpui::Hsla, gp
             "SYSTEM",
             cx.theme().muted_foreground,
             cx.theme().muted.opacity(0.35),
+        ),
+        TimelineKind::Warning => (
+            "WARNING",
+            cx.theme().warning,
+            cx.theme().warning.opacity(0.08),
         ),
     }
 }

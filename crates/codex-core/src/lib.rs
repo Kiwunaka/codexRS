@@ -994,6 +994,7 @@ pub enum TimelineKind {
     BackgroundProcess,
     ContextCompaction,
     Notice,
+    Warning,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
