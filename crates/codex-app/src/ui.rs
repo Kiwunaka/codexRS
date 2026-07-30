@@ -87,7 +87,7 @@ use gpui_component::{
     select::{SearchableVec, Select, SelectDelegate, SelectEvent, SelectItem, SelectState},
     slider::{Slider, SliderEvent, SliderState, SliderValue},
     switch::Switch,
-    text::TextView,
+    text::{SourceHighlight, TextView},
     theme::{Theme, ThemeMode},
     tooltip::Tooltip,
     v_flex,
@@ -15066,12 +15066,27 @@ impl WorkspaceView {
             let findings = extract_code_comment_findings(&text);
             let code_action_prefix = format!("agent-code-{task_id}-{}", item.id);
             let body = if let Some(markdown) = sanitize_assistant_markdown(&text) {
+                let source_highlights = thread_find_query
+                    .as_deref()
+                    .map(|query| {
+                        markdown_thread_find_highlights(
+                            &markdown,
+                            query,
+                            active_find_match
+                                .as_ref()
+                                .filter(|active| active.surface == ThreadFindSurface::Primary)
+                                .map(|active| &active.range),
+                            cx,
+                        )
+                    })
+                    .unwrap_or_default();
                 TextView::markdown(
                     SharedString::from(format!("agent-markdown-{task_id}-{}", item.id)),
                     markdown,
                     window,
                     cx,
                 )
+                .source_highlights(source_highlights)
                 .selectable(true)
                 .code_block_actions(move |code_block, _, _| {
                     let code = code_block.code().to_string();
@@ -39117,6 +39132,32 @@ fn assistant_markdown_match_ranges(
     result
 }
 
+fn markdown_thread_find_highlights(
+    value: &str,
+    query: &str,
+    active_range: Option<&Range<usize>>,
+    cx: &App,
+) -> Vec<SourceHighlight> {
+    assistant_markdown_match_ranges(value, query, MAX_THREAD_FIND_MATCHES)
+        .ranges
+        .into_iter()
+        .map(|range| {
+            let active = active_range.is_some_and(|active| *active == range);
+            SourceHighlight::new(
+                range,
+                HighlightStyle {
+                    background_color: Some(if active {
+                        cx.theme().warning
+                    } else {
+                        cx.theme().warning.opacity(0.35)
+                    }),
+                    ..Default::default()
+                },
+            )
+        })
+        .collect()
+}
+
 fn styled_thread_find_text(
     value: String,
     query: Option<&str>,
@@ -40961,6 +41002,21 @@ mod tests {
         assert_eq!(repeated.matches.len(), 2);
         assert_eq!(repeated.matches[0].item_index, 0);
         assert_eq!(repeated.matches[1].item_index, 0);
+
+        let markdown = "First **Needle** and [needle](https://example.com) plus `needle`.";
+        let markdown_matches = find_timeline_matches(&[item(4, markdown, None)], "needle");
+        assert_eq!(
+            markdown_matches
+                .matches
+                .iter()
+                .map(|matched| matched.range.clone())
+                .collect::<Vec<_>>(),
+            markdown
+                .match_indices("Needle")
+                .chain(markdown.match_indices("needle"))
+                .map(|(start, value)| start..start + value.len())
+                .collect::<Vec<_>>()
+        );
 
         let capped_items = (0..=MAX_THREAD_FIND_MATCHES)
             .map(|id| item(id, "needle", None))

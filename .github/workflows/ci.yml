@@ -73,6 +73,12 @@ jobs:
       - name: Format
         run: cargo fmt --all --check
 
+      - name: Patched Markdown renderer
+        run: |
+          rustfmt --edition 2024 --check third_party/gpui-component/src/text/text_view.rs third_party/gpui-component/src/text/node.rs third_party/gpui-component/src/text/format/markdown.rs
+          cargo clippy --manifest-path third_party/gpui-component/Cargo.toml --target-dir target --lib -- -D warnings
+          cargo test --manifest-path third_party/gpui-component/Cargo.toml --target-dir target source_highlights_preserve_nested_markdown_marks
+
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
