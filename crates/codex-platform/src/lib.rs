@@ -37,6 +37,7 @@ pub use artifacts::{
     ArtifactError, ArtifactFileKind, ArtifactFilePreview, MAX_ARTIFACT_PATH_BYTES,
     MAX_ARTIFACT_PREVIEW_BYTES, MAX_ARTIFACT_TEXT_BYTES, inspect_artifact, inspect_workspace_file,
     is_supported_artifact_path, open_workspace_path, read_artifact_image, reveal_artifact,
+    save_artifact_copy,
 };
 pub use browser::{
     BROWSER_EVENT_CAPACITY, BrowserCommandError, BrowserConfig, BrowserDownload,

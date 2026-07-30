@@ -13,6 +13,8 @@ All notable changes to codexRS are documented here. The project follows
 - Task paging, timeline streaming, forks, approvals, and plugin operations.
 - Stable-shaped generated-image placeholders and bounded, clickable timeline
   previews backed by the existing native Outputs viewer.
+- Generated-image downloads through the native Save As dialog with the stable
+  date-based filename and workspace-confined streaming copy.
 - Native Git status, staging, branch switching, worktree creation, and
   virtualized unified diffs.
 - Native PTY/ConPTY terminal and supervised process trees.

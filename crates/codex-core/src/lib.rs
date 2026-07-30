@@ -3719,6 +3719,10 @@ pub enum Action {
         requested_path: PathBuf,
         message: String,
     },
+    DownloadOutput {
+        path: PathBuf,
+        destination: PathBuf,
+    },
     RevealOutput(PathBuf),
     RevealWorkspaceFile(PathBuf),
     ToggleReviewTab,
@@ -4874,6 +4878,11 @@ pub enum Effect {
     RevealOutput {
         root: PathBuf,
         path: PathBuf,
+    },
+    DownloadOutput {
+        root: PathBuf,
+        path: PathBuf,
+        destination: PathBuf,
     },
     OpenWorkspacePath {
         root: PathBuf,
@@ -6773,6 +6782,33 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.artifacts.error = Some(message);
             }
             Vec::new()
+        }
+        Action::DownloadOutput { path, destination } => {
+            let Some(task_id) = state.selected_task_id.as_deref() else {
+                return Vec::new();
+            };
+            let Some(root) = state
+                .tasks
+                .iter()
+                .find(|task| task.id == task_id)
+                .map(|task| task.cwd.clone())
+            else {
+                return Vec::new();
+            };
+            let known_generated_image = state.timelines.get(task_id).is_some_and(|timeline| {
+                timeline.output_artifacts().iter().any(|artifact| {
+                    artifact.path == path && artifact.kind == OutputArtifactKind::GeneratedImage
+                })
+            });
+            if !known_generated_image || !destination.is_absolute() {
+                state.status_message = Some("Could not download image".to_owned());
+                return Vec::new();
+            }
+            vec![Effect::DownloadOutput {
+                root,
+                path,
+                destination,
+            }]
         }
         Action::RevealOutput(path) => {
             let Some(task_id) = state.selected_task_id.as_deref() else {
@@ -17424,6 +17460,41 @@ mod tests {
         );
         assert_eq!(state.inspector, InspectorPane::Outputs);
         assert_eq!(state.artifacts.status, LoadStatus::Loading);
+
+        let generated_image = PathBuf::from("reports/generated.png");
+        let destination = if cfg!(windows) {
+            PathBuf::from(r"C:\Downloads\Codex Image.png")
+        } else {
+            PathBuf::from("/tmp/Codex Image.png")
+        };
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::DownloadOutput {
+                    path: generated_image.clone(),
+                    destination: destination.clone(),
+                },
+            ),
+            [Effect::DownloadOutput {
+                root: PathBuf::from("C:\\repo"),
+                path: generated_image,
+                destination,
+            }]
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::DownloadOutput {
+                    path: PathBuf::from("reports/b.csv"),
+                    destination: PathBuf::from("relative"),
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.status_message.as_deref(),
+            Some("Could not download image")
+        );
 
         reduce(
             &mut state,

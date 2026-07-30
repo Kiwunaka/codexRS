@@ -56,7 +56,9 @@ use codex_core::{
     appearance_code_theme_supports_variant, composer_plugin_display_name,
     composer_plugin_is_mentionable, is_appearance_code_theme_id, reduce, validate_mcp_form_content,
 };
-use codex_platform::{desktop_work_areas, normalize_browser_origin, read_artifact_image};
+use codex_platform::{
+    default_browser_download_dir, desktop_work_areas, normalize_browser_origin, read_artifact_image,
+};
 use gpui::{
     AnyElement, AnyWindowHandle, App, Application, Asset, Bounds, ClipboardItem, Context,
     DragMoveEvent, Entity, FocusHandle, Focusable, Global, Hsla, Image, ImageCacheError,
@@ -4434,6 +4436,7 @@ struct WorkspaceView {
     browser_surface_state: Option<(Option<String>, bool)>,
     browser_download_save_requests: VecDeque<BrowserDownloadSaveRequest>,
     browser_download_save_prompt_active: bool,
+    output_download_prompt_active: bool,
     browser_focus: FocusHandle,
     thread_find_input: Entity<InputState>,
     settings_search: Entity<InputState>,
@@ -5415,6 +5418,7 @@ impl WorkspaceView {
             browser_surface_state: None,
             browser_download_save_requests: VecDeque::new(),
             browser_download_save_prompt_active: false,
+            output_download_prompt_active: false,
             browser_focus,
             thread_find_input,
             settings_search,
@@ -7593,6 +7597,58 @@ impl WorkspaceView {
                         }
                     }
                     this.prompt_for_next_browser_download_path(cx);
+                });
+            });
+        })
+        .detach();
+    }
+
+    fn prompt_for_generated_image_download(
+        &mut self,
+        path: PathBuf,
+        preview_path: PathBuf,
+        extension: String,
+        cx: &mut Context<Self>,
+    ) {
+        if self.output_download_prompt_active {
+            return;
+        }
+        let directory = default_browser_download_dir()
+            .filter(|directory| directory.is_dir())
+            .or_else(|| {
+                preview_path
+                    .parent()
+                    .filter(|parent| parent.is_dir())
+                    .map(Path::to_path_buf)
+            });
+        let Some(directory) = directory else {
+            self.dispatch(Action::SetStatus("Could not download image".to_owned()), cx);
+            return;
+        };
+        self.output_download_prompt_active = true;
+        let filename = generated_image_download_filename(&extension);
+        let receiver = cx.prompt_for_new_path(&directory, Some(filename.as_str()));
+        cx.spawn(async move |view, cx| {
+            let selection = receiver.await;
+            let _ = cx.update(|cx| {
+                let Some(view) = view.upgrade() else {
+                    return;
+                };
+                view.update(cx, |this, cx| {
+                    this.output_download_prompt_active = false;
+                    match selection {
+                        Ok(Ok(Some(destination))) => {
+                            this.dispatch(Action::DownloadOutput { path, destination }, cx);
+                        }
+                        Ok(Err(_)) => {
+                            this.dispatch(
+                                Action::SetStatus("Could not download image".to_owned()),
+                                cx,
+                            );
+                        }
+                        Ok(Ok(None)) | Err(_) => {}
+                    }
+                    cx.notify();
                 });
             });
         })
@@ -21111,6 +21167,29 @@ impl WorkspaceView {
         };
         let workspace_file = self.state.inspector == InspectorPane::Files;
         let reveal_path = self.state.artifacts.selected_path.clone();
+        let download = reveal_path.as_ref().and_then(|path| {
+            (!workspace_file && preview.kind == ArtifactPreviewKind::Image)
+                .then(|| {
+                    self.state
+                        .selected_task_id
+                        .as_ref()
+                        .and_then(|task_id| self.state.timelines.get(task_id))
+                        .is_some_and(|timeline| {
+                            timeline.output_artifacts().iter().any(|artifact| {
+                                artifact.path == *path
+                                    && artifact.kind == OutputArtifactKind::GeneratedImage
+                            })
+                        })
+                })
+                .filter(|generated| *generated)
+                .map(|_| {
+                    (
+                        path.clone(),
+                        preview.path.clone(),
+                        preview.extension.clone(),
+                    )
+                })
+        });
         let metadata = format!(
             "{} · {}",
             preview.extension.to_ascii_uppercase(),
@@ -21249,28 +21328,52 @@ impl WorkspaceView {
                             ),
                     )
                     .child(
-                        Button::new(if workspace_file {
-                            "reveal-workspace-file"
-                        } else {
-                            "reveal-output"
-                        })
-                        .label("Reveal")
-                        .icon(IconName::FolderOpen)
-                        .xsmall()
-                        .ghost()
-                        .disabled(reveal_path.is_none())
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some(path) = reveal_path.clone() {
-                                this.dispatch(
-                                    if workspace_file {
-                                        Action::RevealWorkspaceFile(path)
-                                    } else {
-                                        Action::RevealOutput(path)
+                        h_flex()
+                            .gap_1()
+                            .when_some(download, |actions, (path, preview_path, extension)| {
+                                actions.child(
+                                    Button::new("download-generated-image")
+                                        .label("Download")
+                                        .icon(IconName::ArrowDown)
+                                        .xsmall()
+                                        .ghost()
+                                        .disabled(self.output_download_prompt_active)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.prompt_for_generated_image_download(
+                                                path.clone(),
+                                                preview_path.clone(),
+                                                extension.clone(),
+                                                cx,
+                                            );
+                                        })),
+                                )
+                            })
+                            .child(
+                                Button::new(if workspace_file {
+                                    "reveal-workspace-file"
+                                } else {
+                                    "reveal-output"
+                                })
+                                .label("Reveal")
+                                .icon(IconName::FolderOpen)
+                                .xsmall()
+                                .ghost()
+                                .disabled(reveal_path.is_none())
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        if let Some(path) = reveal_path.clone() {
+                                            this.dispatch(
+                                                if workspace_file {
+                                                    Action::RevealWorkspaceFile(path)
+                                                } else {
+                                                    Action::RevealOutput(path)
+                                                },
+                                                cx,
+                                            );
+                                        }
                                     },
-                                    cx,
-                                );
-                            }
-                        })),
+                                )),
+                            ),
                     ),
             )
             .child(body)
@@ -36022,6 +36125,31 @@ fn format_file_size(size_bytes: u64) -> String {
     } else {
         format!("{size_bytes} B")
     }
+}
+
+fn generated_image_download_filename(extension: &str) -> String {
+    let extension = extension.trim().trim_start_matches('.');
+    let extension = if extension.is_empty() {
+        "png"
+    } else {
+        extension
+    };
+    format!(
+        "Codex Image {}.{extension}",
+        Local::now().format("%b %-d, %Y, %I:%M:%S %p")
+    )
+    .chars()
+    .map(|character| {
+        if matches!(
+            character,
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+        ) {
+            '_'
+        } else {
+            character
+        }
+    })
+    .collect()
 }
 
 fn relative_time(updated_at: i64) -> String {

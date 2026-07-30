@@ -25,7 +25,7 @@ behavioral and UX parity. The detailed contract lives in the
 - [x] App-server plugin marketplace.
 - [x] Separate single-writer codexRS SQLite state.
 - [x] Windows smoke path and Windows/Linux CI matrix.
-- [ ] Publish unsigned Windows and Linux release archives with checksums.
+- [x] Publish unsigned Windows and Linux release archives with checksums.
 - [x] Complete the first public Ubuntu CI run.
 
 ## Release-candidate hardening

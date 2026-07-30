@@ -96,8 +96,9 @@ use codex_platform::{
     github_update_pull_request_title, inspect_artifact, inspect_computer_window,
     inspect_workspace_file, is_supported_artifact_path, list_computer_windows,
     normalize_browser_origin, open_workspace_path, press_computer_key, resolve_codex_binary,
-    reveal_artifact, scroll_computer_window, switch_branch as git_switch_branch,
-    type_into_computer_window, uncommitted_diff as git_uncommitted_diff,
+    reveal_artifact, save_artifact_copy, scroll_computer_window,
+    switch_branch as git_switch_branch, type_into_computer_window,
+    uncommitted_diff as git_uncommitted_diff,
 };
 use codex_protocol::{
     Account as ProtocolAccount, AccountLoginCompletedNotification, AppInfo,
@@ -5725,6 +5726,18 @@ fn run_effect(
                 Err(error) => format!("Unable to reveal output: {error}"),
             };
             emit(events, Action::SetStatus(message));
+        }
+        Effect::DownloadOutput {
+            root,
+            path,
+            destination,
+        } => {
+            if save_artifact_copy(&root, &path, &destination).is_err() {
+                emit(
+                    events,
+                    Action::SetStatus("Could not download image".to_owned()),
+                );
+            }
         }
         Effect::OpenWorkspacePath { root, path } => {
             let message = match open_workspace_path(&root, &path) {
