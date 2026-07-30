@@ -24,14 +24,15 @@ use codex_core::{
     BrowserApprovalMode, BrowserDownloadState, BrowserDownloadStatus, BrowserKeyInput,
     BrowserMouseButton, BrowserOriginElicitationDecision, BrowserPermissionResource,
     BrowserPermissionValue, BrowserResourceElicitationDecision, BrowserSitePermission,
-    ComposerAttachmentKind, ComputerApplicationState, ConnectionStatus, DiffMarkerStyle, Effect,
-    FeedbackClassification, FuzzyFileMatchType, FuzzyFileResult, GitCommitNextStep, GitCommitPhase,
-    GitDiffScope, GitFileKind, GitPreferences, GitPullRequestPhase, GitPullRequestProvider,
-    GitReviewCommitState, GitReviewMode, GitWorktreeState, HookCard, HookEventName,
-    HookHandlerType, HookIssue, HookProjectEntry, HookSource, HookTrustStatus, InspectorPane,
-    IntegratedTerminalShell, KeyboardShortcutPreferences, KeyboardShortcutUpdateTarget, LoadStatus,
-    LocalProjectSummary, MAX_COMPOSER_OPTIONS, MAX_FEEDBACK_DETAILS_BYTES,
-    MAX_FUZZY_FILE_QUERY_BYTES, MAX_GIT_COMMIT_MESSAGE_CHARS, MAX_GIT_PULL_REQUEST_BODY_CHARS,
+    ChatMemoryPreferences, ComposerAttachmentKind, ComputerApplicationState, ConnectionStatus,
+    DiffMarkerStyle, Effect, FeedbackClassification, FuzzyFileMatchType, FuzzyFileResult,
+    GitCommitNextStep, GitCommitPhase, GitDiffScope, GitFileKind, GitPreferences,
+    GitPullRequestPhase, GitPullRequestProvider, GitReviewCommitState, GitReviewMode,
+    GitWorktreeState, HookCard, HookEventName, HookHandlerType, HookIssue, HookProjectEntry,
+    HookSource, HookTrustStatus, InspectorPane, IntegratedTerminalShell,
+    KeyboardShortcutPreferences, KeyboardShortcutUpdateTarget, LoadStatus, LocalProjectSummary,
+    MAX_COMPOSER_OPTIONS, MAX_FEEDBACK_DETAILS_BYTES, MAX_FUZZY_FILE_QUERY_BYTES,
+    MAX_GIT_COMMIT_MESSAGE_CHARS, MAX_GIT_PULL_REQUEST_BODY_CHARS,
     MAX_GIT_PULL_REQUEST_TITLE_CHARS, MAX_KEYBOARD_SHORTCUT_ACCELERATOR_BYTES,
     MAX_KEYBOARD_SHORTCUTS_PER_COMMAND, MAX_LOCAL_PROJECT_NAME_BYTES,
     MAX_MCP_FORM_IMAGE_DATA_URL_BYTES, MAX_MCP_FORM_VALUE_BYTES, MAX_TASK_SEARCH_RESULTS,
@@ -1893,6 +1894,8 @@ enum WorkspaceModal {
     PendingWorktreeFork,
     EditGoal,
     Feedback,
+    ChatMemories,
+    ResetMemories,
     KeyboardShortcuts,
     ResetKeyboardShortcuts,
     ProcessManager,
@@ -6278,6 +6281,7 @@ impl WorkspaceView {
                 self.state.selected_task_id.is_some(),
                 self.init_slash_command_available(),
                 self.has_local_workspace(),
+                self.state.personalization.memory_available,
             )
             .map_or(value, str::to_owned)
         });
@@ -6358,6 +6362,9 @@ impl WorkspaceView {
             self.open_project_slash_picker(window, cx);
             return true;
         }
+        if command == "/memories" && !self.state.personalization.memory_available {
+            return false;
+        }
         if command == "/status" {
             self.open_composer_status(window, cx);
             return true;
@@ -6374,7 +6381,7 @@ impl WorkspaceView {
         }
         if !matches!(
             command,
-            "/feedback" | "/goal" | "/init" | "/model" | "/plan" | "/reasoning"
+            "/feedback" | "/goal" | "/init" | "/memories" | "/model" | "/plan" | "/reasoning"
         ) {
             return false;
         }
@@ -6386,6 +6393,10 @@ impl WorkspaceView {
             "/feedback" => self.open_feedback_modal(window, cx),
             "/goal" => self.edit_goal(window, cx),
             "/init" => self.submit_init_prompt(window, cx),
+            "/memories" => {
+                self.workspace_modal = Some(WorkspaceModal::ChatMemories);
+                cx.notify();
+            }
             "/model" => self.open_model_picker(window, cx),
             "/plan" => self.toggle_composer_plan_mode(window, cx),
             "/reasoning" => self.open_reasoning_picker(window, cx),
@@ -20381,6 +20392,14 @@ impl WorkspaceView {
             .is_some();
         let interrupt_pending = active_timeline.is_some_and(|timeline| timeline.interrupt_pending);
         let has_selected_task = self.state.selected_task_id.is_some();
+        let memory_defaults = ChatMemoryPreferences {
+            generate_memories: self.state.personalization.generate_memories,
+            use_memories: self.state.personalization.use_memories,
+        };
+        let memory_preferences = self
+            .state
+            .chat_memory
+            .preferences(self.state.selected_task_id.as_deref(), memory_defaults);
         let plan_mode = self.state.composer_controls.plan_mode;
         let goal_mode = self.state.composer_controls.goal_mode;
         let model_description = self
@@ -20442,6 +20461,9 @@ impl WorkspaceView {
             && !composer_text.is_empty()
             && "/init".starts_with(composer_text);
         let show_mcp_command = !composer_text.is_empty() && "/mcp".starts_with(composer_text);
+        let show_memories_command = self.state.personalization.memory_available
+            && !composer_text.is_empty()
+            && "/memories".starts_with(composer_text);
         let show_model_command = has_selected_task
             && model_description.is_some()
             && !composer_text.is_empty()
@@ -20478,6 +20500,7 @@ impl WorkspaceView {
             || show_goal_command
             || show_init_command
             || show_mcp_command
+            || show_memories_command
             || show_model_command
             || show_new_command
             || show_plan_command
@@ -20562,7 +20585,7 @@ impl WorkspaceView {
             })
             .collect::<Vec<_>>();
         let mut slash_commands =
-            Vec::with_capacity(14 + service_tier_commands.len() + skill_commands.len());
+            Vec::with_capacity(15 + service_tier_commands.len() + skill_commands.len());
         if show_chat_command {
             slash_commands.push(self.render_composer_slash_command(
                 "chat-slash-command",
@@ -20647,6 +20670,40 @@ impl WorkspaceView {
                     cx,
                 ));
             }
+        }
+        if show_memories_command {
+            let description = if has_selected_task {
+                format!(
+                    "Generate {}",
+                    if memory_preferences.generate_memories {
+                        "on"
+                    } else {
+                        "off"
+                    }
+                )
+            } else {
+                format!(
+                    "Use {}, generate {}",
+                    if memory_preferences.use_memories {
+                        "on"
+                    } else {
+                        "off"
+                    },
+                    if memory_preferences.generate_memories {
+                        "on"
+                    } else {
+                        "off"
+                    }
+                )
+            };
+            slash_commands.push(self.render_composer_slash_command(
+                "memories-slash-command",
+                "/memories",
+                "Memories",
+                description,
+                IconName::BookOpen,
+                cx,
+            ));
         }
         if show_model_command {
             slash_commands.push(self.render_composer_slash_command(
@@ -31636,6 +31693,16 @@ impl WorkspaceView {
                     this.dispatch(Action::SetToolAssistedMemoriesEnabled(*enabled), cx);
                 }))
                 .into_any_element();
+            let reset_control = Button::new("personalization-reset-memories")
+                .label("Reset")
+                .small()
+                .danger()
+                .disabled(controls_disabled)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.workspace_modal = Some(WorkspaceModal::ResetMemories);
+                    cx.notify();
+                }))
+                .into_any_element();
             v_flex()
                 .w_full()
                 .max_w(px(760.0))
@@ -31675,6 +31742,12 @@ impl WorkspaceView {
                     "Allow memory generation from tool-assisted chats",
                     "Generate memories from chats that used MCP tools or web search".into(),
                     tool_assisted_control,
+                    cx,
+                ))
+                .child(self.render_browser_settings_row(
+                    "Reset memories",
+                    "Delete all ChatGPT memories".into(),
+                    reset_control,
                     cx,
                 ))
                 .into_any_element()
@@ -34735,6 +34808,104 @@ impl WorkspaceView {
             .into_any_element()
     }
 
+    fn render_chat_memories_modal(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let task_id = self.state.selected_task_id.as_deref();
+        let existing_chat = task_id.is_some();
+        let defaults = ChatMemoryPreferences {
+            generate_memories: self.state.personalization.generate_memories,
+            use_memories: self.state.personalization.use_memories,
+        };
+        let preferences = self.state.chat_memory.preferences(task_id, defaults);
+        let ready = self.state.personalization.status == LoadStatus::Ready;
+        let update_pending = self.state.chat_memory.update_pending(task_id);
+        let use_control = Switch::new("chat-use-memories")
+            .small()
+            .checked(preferences.use_memories)
+            .disabled(existing_chat || !ready)
+            .on_click(cx.listener(|this, enabled, _, cx| {
+                this.dispatch(Action::SetChatUseMemories(*enabled), cx);
+            }))
+            .into_any_element();
+        let generate_control = Switch::new("chat-generate-memories")
+            .small()
+            .checked(preferences.generate_memories)
+            .disabled(
+                !ready
+                    || (existing_chat
+                        && (update_pending || self.state.connection != ConnectionStatus::Online)),
+            )
+            .on_click(cx.listener(|this, enabled, _, cx| {
+                this.dispatch(Action::SetChatGenerateMemories(*enabled), cx);
+            }))
+            .into_any_element();
+        let subtitle = if existing_chat {
+            "These switches apply to the current chat"
+        } else {
+            "These switches apply to the chat started from this composer"
+        };
+        let use_description = if existing_chat {
+            "Cannot be changed after conversation has started"
+        } else {
+            "Let ChatGPT bring existing memories into this chat's context"
+        };
+
+        v_flex()
+            .w(px(modal_surface_width(self.shell_viewport_width, 520.0)))
+            .p_5()
+            .gap_4()
+            .rounded(px(16.0))
+            .bg(cx.theme().popover)
+            .shadow_xl()
+            .occlude()
+            .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("Chat memories"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(subtitle),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .overflow_hidden()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .child(self.render_browser_settings_row(
+                        "Use memories",
+                        use_description.into(),
+                        use_control,
+                        cx,
+                    ))
+                    .child(self.render_browser_settings_row(
+                        "Generate memories",
+                        "Allow ChatGPT to use this chat when creating new memories later".into(),
+                        generate_control,
+                        cx,
+                    )),
+            )
+            .child(
+                h_flex().justify_end().child(
+                    Button::new("done-chat-memories")
+                        .label("Done")
+                        .primary()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.close_workspace_modal(cx);
+                        })),
+                ),
+            )
+            .into_any_element()
+    }
+
     fn render_workspace_modal(
         &mut self,
         modal: WorkspaceModal,
@@ -34753,6 +34924,61 @@ impl WorkspaceView {
             WorkspaceModal::KeyboardShortcuts => {
                 let panel = self.render_keyboard_shortcuts_modal(cx);
                 self.render_workspace_modal_overlay(panel, true, cx)
+            }
+            WorkspaceModal::ChatMemories => {
+                let panel = self.render_chat_memories_modal(cx);
+                self.render_workspace_modal_overlay(panel, true, cx)
+            }
+            WorkspaceModal::ResetMemories => {
+                let pending = self.state.personalization.pending;
+                let panel = v_flex()
+                    .w(px(modal_surface_width(self.shell_viewport_width, 460.0)))
+                    .p_5()
+                    .gap_4()
+                    .rounded(px(16.0))
+                    .bg(cx.theme().popover)
+                    .shadow_xl()
+                    .occlude()
+                    .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("Reset all memories?"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("This deletes all ChatGPT memories"),
+                    )
+                    .child(
+                        h_flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                Button::new("cancel-reset-memories")
+                                    .label("Cancel")
+                                    .ghost()
+                                    .disabled(pending)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.close_workspace_modal(cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("confirm-reset-memories")
+                                    .label("Reset")
+                                    .danger()
+                                    .loading(pending)
+                                    .disabled(pending)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.workspace_modal = None;
+                                        this.dispatch(Action::ResetMemories, cx);
+                                    })),
+                            ),
+                    )
+                    .into_any_element();
+                self.render_workspace_modal_overlay(panel, !pending, cx)
             }
             WorkspaceModal::ResetKeyboardShortcuts => {
                 let pending = self.keyboard_shortcut_reset_all_pending;
@@ -34943,6 +35169,8 @@ impl WorkspaceView {
             && !feedback_pending;
         let panel = match modal {
             WorkspaceModal::PendingWorktreeFork
+            | WorkspaceModal::ChatMemories
+            | WorkspaceModal::ResetMemories
             | WorkspaceModal::KeyboardShortcuts
             | WorkspaceModal::ResetKeyboardShortcuts
             | WorkspaceModal::ProcessManager
@@ -37781,11 +38009,12 @@ fn composer_slash_command_for_prefix(
     has_selected_task: bool,
     init_available: bool,
     chat_available: bool,
+    memories_available: bool,
 ) -> Option<&'static str> {
     if prefix.is_empty() {
         return None;
     }
-    const COMMANDS: [&str; 14] = [
+    const COMMANDS: [&str; 15] = [
         "/chat",
         "/compact",
         "/feedback",
@@ -37793,6 +38022,7 @@ fn composer_slash_command_for_prefix(
         "/goal",
         "/init",
         "/mcp",
+        "/memories",
         "/model",
         "/new",
         "/plan",
@@ -37806,6 +38036,8 @@ fn composer_slash_command_for_prefix(
         .filter(|command| {
             if *command == "/chat" {
                 chat_available
+            } else if *command == "/memories" {
+                memories_available
             } else if matches!(*command, "/mcp" | "/project" | "/status") {
                 true
             } else if *command == "/init" {
@@ -39850,135 +40082,143 @@ mod tests {
     #[test]
     fn slash_command_prefixes_follow_the_visible_menu_order() {
         assert_eq!(
-            composer_slash_command_for_prefix("/", true, true, true),
+            composer_slash_command_for_prefix("/", true, true, true, true),
             Some("/chat")
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/c", true, true, true),
+            composer_slash_command_for_prefix("/c", true, true, true, true),
             None
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/ch", true, true, true),
+            composer_slash_command_for_prefix("/ch", true, true, true, true),
             Some("/chat")
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/co", true, true, true),
+            composer_slash_command_for_prefix("/co", true, true, true, true),
             Some("/compact")
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/f", true, true, true),
+            composer_slash_command_for_prefix("/f", true, true, true, true),
             None
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/fe", true, true, true),
+            composer_slash_command_for_prefix("/fe", true, true, true, true),
             Some("/feedback")
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/fo", true, true, true),
+            composer_slash_command_for_prefix("/fo", true, true, true, true),
             Some("/fork")
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/g", true, true, true),
+            composer_slash_command_for_prefix("/g", true, true, true, true),
             Some("/goal")
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/i", true, true, true),
+            composer_slash_command_for_prefix("/i", true, true, true, true),
             Some("/init")
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/m", true, true, true),
+            composer_slash_command_for_prefix("/m", true, true, true, true),
             None
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/mc", true, true, true),
+            composer_slash_command_for_prefix("/mc", true, true, true, true),
             Some("/mcp")
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/mo", true, true, true),
+            composer_slash_command_for_prefix("/me", true, true, true, true),
+            Some("/memories")
+        );
+        assert_eq!(
+            composer_slash_command_for_prefix("/mo", true, true, true, true),
             Some("/model")
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/n", true, true, true),
+            composer_slash_command_for_prefix("/n", true, true, true, true),
             Some("/new")
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/p", true, true, true),
+            composer_slash_command_for_prefix("/p", true, true, true, true),
             None
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/pl", true, true, true),
+            composer_slash_command_for_prefix("/pl", true, true, true, true),
             Some("/plan")
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/pr", true, true, true),
+            composer_slash_command_for_prefix("/pr", true, true, true, true),
             Some("/project")
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/r", true, true, true),
+            composer_slash_command_for_prefix("/r", true, true, true, true),
             Some("/reasoning")
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/s", true, true, true),
+            composer_slash_command_for_prefix("/s", true, true, true, true),
             None
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/sh", true, true, true),
+            composer_slash_command_for_prefix("/sh", true, true, true, true),
             Some("/shell")
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/st", true, true, true),
+            composer_slash_command_for_prefix("/st", true, true, true, true),
             Some("/status")
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/x", true, true, true),
+            composer_slash_command_for_prefix("/x", true, true, true, true),
             None
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/i", true, false, true),
+            composer_slash_command_for_prefix("/i", true, false, true, true),
             None
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/sh", false, true, true),
+            composer_slash_command_for_prefix("/sh", false, true, true, true),
             None
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/", false, true, false),
+            composer_slash_command_for_prefix("/", false, true, false, true),
             Some("/init")
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/i", false, true, false),
+            composer_slash_command_for_prefix("/i", false, true, false, true),
             Some("/init")
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/mc", false, true, false),
+            composer_slash_command_for_prefix("/mc", false, true, false, true),
             Some("/mcp")
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/s", false, true, false),
+            composer_slash_command_for_prefix("/s", false, true, false, true),
             Some("/status")
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/p", false, true, false),
+            composer_slash_command_for_prefix("/p", false, true, false, true),
             Some("/project")
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/n", false, true, false),
+            composer_slash_command_for_prefix("/n", false, true, false, true),
             None
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/", false, false, false),
+            composer_slash_command_for_prefix("/", false, false, false, false),
             Some("/mcp")
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/n", false, false, false),
+            composer_slash_command_for_prefix("/n", false, false, false, false),
             None
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/ch", false, true, true),
+            composer_slash_command_for_prefix("/me", false, false, false, false),
+            None
+        );
+        assert_eq!(
+            composer_slash_command_for_prefix("/ch", false, true, true, true),
             Some("/chat")
         );
         assert_eq!(
-            composer_slash_command_for_prefix("/ch", false, true, false),
+            composer_slash_command_for_prefix("/ch", false, true, false, true),
             None
         );
     }

@@ -1619,6 +1619,26 @@ pub struct ThreadSettingsUpdateParams {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ThreadSettingsUpdateResponse {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThreadMemoryMode {
+    Enabled,
+    Disabled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadMemoryModeSetParams {
+    pub thread_id: String,
+    pub mode: ThreadMemoryMode,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ThreadMemoryModeSetResponse {}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MemoryResetResponse {}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnStartParams {
@@ -3113,20 +3133,22 @@ mod tests {
         McpServerElicitationRequest, McpServerElicitationRequestParams,
         McpServerElicitationRequestResponse, McpServerOauthLoginParams,
         McpServerStartupFailureReason, McpServerStartupState, McpServerStatusDetail,
-        McpServerStatusUpdatedNotification, ModelListParams, ModelListResponse,
-        ModelSafetyBufferingUpdatedNotification, ModelVerification, ModelVerificationNotification,
-        NetworkPolicyAmendment, NetworkPolicyAmendmentDecision, NetworkPolicyRuleAction,
-        PermissionGrantScope, PermissionProfile, PermissionProfileListParams,
-        PermissionProfileListResponse, PermissionsRequestApprovalParams,
-        PermissionsRequestApprovalResponse, PlanType, PluginListMarketplaceKind, PluginReadParams,
-        PluginReadResponse, PluginScheduledTaskSchedule, PluginScheduledTaskSummary, ProtocolError,
-        SkillScope, SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams,
-        SkillsListResponse, ThreadArchiveParams, ThreadBackgroundTerminalsCleanResponse,
+        McpServerStatusUpdatedNotification, MemoryResetResponse, ModelListParams,
+        ModelListResponse, ModelSafetyBufferingUpdatedNotification, ModelVerification,
+        ModelVerificationNotification, NetworkPolicyAmendment, NetworkPolicyAmendmentDecision,
+        NetworkPolicyRuleAction, PermissionGrantScope, PermissionProfile,
+        PermissionProfileListParams, PermissionProfileListResponse,
+        PermissionsRequestApprovalParams, PermissionsRequestApprovalResponse, PlanType,
+        PluginListMarketplaceKind, PluginReadParams, PluginReadResponse,
+        PluginScheduledTaskSchedule, PluginScheduledTaskSummary, ProtocolError, SkillScope,
+        SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams, SkillsListResponse,
+        ThreadArchiveParams, ThreadBackgroundTerminalsCleanResponse,
         ThreadBackgroundTerminalsListParams, ThreadBackgroundTerminalsListResponse,
         ThreadBackgroundTerminalsTerminateParams, ThreadBackgroundTerminalsTerminateResponse,
         ThreadCompactStartParams, ThreadCompactStartResponse, ThreadDeleteParams, ThreadForkParams,
         ThreadGoal, ThreadGoalGetResponse, ThreadGoalSetParams, ThreadGoalStatus, ThreadListParams,
-        ThreadLoadedListParams, ThreadLoadedListResponse, ThreadResumeResponse,
+        ThreadLoadedListParams, ThreadLoadedListResponse, ThreadMemoryMode,
+        ThreadMemoryModeSetParams, ThreadMemoryModeSetResponse, ThreadResumeResponse,
         ThreadRollbackParams, ThreadRollbackResponse, ThreadSearchParams, ThreadSetNameParams,
         ThreadSettingsUpdateParams, ThreadShellCommandParams, ThreadShellCommandResponse,
         ThreadStartParams, ThreadTokenUsageUpdatedNotification, ThreadUnarchiveParams,
@@ -3551,6 +3573,23 @@ mod tests {
             b"{\"method\":\"thread/compact/start\",\"id\":11,\"params\":{\"threadId\":\"thread-1\"}}\n"
         );
         assert!(serde_json::from_value::<ThreadCompactStartResponse>(json!({})).is_ok());
+    }
+
+    #[test]
+    fn memory_controls_match_the_stable_contract() {
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "thread/memoryMode/set",
+                id: 12,
+                params: Some(ThreadMemoryModeSetParams {
+                    thread_id: "thread-1".to_owned(),
+                    mode: ThreadMemoryMode::Disabled,
+                }),
+            }),
+            b"{\"method\":\"thread/memoryMode/set\",\"id\":12,\"params\":{\"threadId\":\"thread-1\",\"mode\":\"disabled\"}}\n"
+        );
+        assert!(serde_json::from_value::<ThreadMemoryModeSetResponse>(json!({})).is_ok());
+        assert!(serde_json::from_value::<MemoryResetResponse>(json!({})).is_ok());
     }
 
     #[test]
