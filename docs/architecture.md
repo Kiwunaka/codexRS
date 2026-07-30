@@ -75,8 +75,9 @@ All Git commands run off the UI thread and are serialized by the backend.
 Filesystem notifications are coalesced and restarted through a 300 ms debounce
 window, preventing repeated `git.exe` storms.
 
-Metadata, diffs, stderr, branch names, file counts, and worktree counts have
-explicit limits. Mutations use argument separators and validated native paths:
+Metadata, diffs, stderr, branch names, file counts, worktree counts, and review
+commit lists have explicit limits. Mutations use argument separators and
+validated native paths:
 
 - branch switching accepts only names that pass `git check-ref-format`;
 - worktree paths must be absolute siblings outside the selected repository;
