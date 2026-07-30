@@ -19,9 +19,9 @@ use codex_protocol::{
     ConfigWriteResponse, DEFAULT_COMMAND_CHANNEL_CAPACITY, DEFAULT_EVENT_CHANNEL_CAPACITY,
     DEFAULT_MAX_FRAME_BYTES, DEFAULT_MESSAGE_CHANNEL_CAPACITY, FeedbackUploadParams,
     FeedbackUploadResponse, GetAccountParams, GetAccountRateLimitsResponse, GetAccountResponse,
-    GetAuthStatusParams, GetAuthStatusResponse, HooksListParams, HooksListResponse,
-    IncomingMessage, InitializeCapabilities, InitializeParams, InitializeResponse,
-    ListMcpServerStatusParams, ListMcpServerStatusResponse, LoginAccountParams,
+    GetAuthStatusParams, GetAuthStatusResponse, GitDiffToRemoteParams, GitDiffToRemoteResponse,
+    HooksListParams, HooksListResponse, IncomingMessage, InitializeCapabilities, InitializeParams,
+    InitializeResponse, ListMcpServerStatusParams, ListMcpServerStatusResponse, LoginAccountParams,
     LoginAccountResponse, LogoutAccountResponse, MAX_INTERLEAVED_MESSAGES_PER_REQUEST,
     MAX_PENDING_REQUESTS, MarketplaceAddParams, MarketplaceAddResponse, MarketplaceRemoveParams,
     MarketplaceRemoveResponse, MarketplaceUpgradeParams, MarketplaceUpgradeResponse,
@@ -1115,6 +1115,14 @@ impl AppServerConnection {
     ) -> Result<GetAuthStatusResponse, AppServerError> {
         self.require_initialized()?;
         self.request("getAuthStatus", params)
+    }
+
+    pub fn git_diff_to_remote(
+        &self,
+        params: GitDiffToRemoteParams,
+    ) -> Result<GitDiffToRemoteResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("gitDiffToRemote", params)
     }
 
     pub fn start_account_login(
