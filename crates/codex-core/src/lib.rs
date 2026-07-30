@@ -2299,6 +2299,7 @@ pub struct GitState {
     pub repository_root: Option<PathBuf>,
     pub branch: Option<String>,
     pub default_branch: Option<String>,
+    pub review_default_base: Option<String>,
     pub upstream_ref: Option<String>,
     pub ahead: u32,
     pub behind: u32,
@@ -2306,9 +2307,11 @@ pub struct GitState {
     pub staged_files: usize,
     pub files: Vec<GitFileState>,
     pub branches: Vec<GitBranchState>,
+    pub review_branches: Vec<String>,
     pub worktrees: Vec<GitWorktreeState>,
     pub commits: Vec<GitReviewCommitState>,
     pub selected_commit_sha: Option<String>,
+    pub selected_review_base: Option<String>,
     pub diff_generation: u64,
     pub selected_scope: GitDiffScope,
     pub selected_path: Option<PathBuf>,
@@ -4572,9 +4575,10 @@ pub enum Action {
     },
     ClosePullRequestDetail,
     RefreshGit,
-    GitSnapshotLoaded(GitState),
+    GitSnapshotLoaded(Box<GitState>),
     SelectGitDiffScope(GitDiffScope),
     SelectGitReviewCommit(String),
+    SelectGitReviewBase(String),
     SelectDiffPath {
         path: PathBuf,
         scope: GitDiffScope,
@@ -5209,6 +5213,7 @@ pub enum Effect {
     LoadBranchDiff {
         generation: u64,
         cwd: PathBuf,
+        base: Option<String>,
     },
     LoadUncommittedDiff {
         generation: u64,
@@ -6138,6 +6143,7 @@ fn begin_git_source_diff(state: &mut AppState, scope: GitDiffScope) -> Vec<Effec
         GitDiffScope::Branch => vec![Effect::LoadBranchDiff {
             generation: state.git.diff_generation,
             cwd: root,
+            base: state.git.selected_review_base.clone(),
         }],
         GitDiffScope::Uncommitted => vec![Effect::LoadUncommittedDiff {
             generation: state.git.diff_generation,
@@ -13062,8 +13068,10 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 Vec::new()
             }),
         Action::GitSnapshotLoaded(git) => {
+            let previous_repository_root = state.git.repository_root.clone();
             let previous_scope = state.git.selected_scope;
             let previous_commit_sha = state.git.selected_commit_sha.clone();
+            let previous_review_base = state.git.selected_review_base.clone();
             let previous_diff_generation = state.git.diff_generation;
             let next_diff_generation = previous_diff_generation.saturating_add(1);
             let pull_request_lookup =
@@ -13074,9 +13082,14 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                         git.default_branch.as_deref() != Some(branch.as_str())
                             && git.default_branch.is_some()
                     });
-            state.git = git;
+            state.git = *git;
             state.git.selected_commit_sha = previous_commit_sha
                 .filter(|sha| state.git.commits.iter().any(|commit| commit.sha == *sha));
+            state.git.selected_review_base = (previous_repository_root
+                == state.git.repository_root)
+                .then_some(previous_review_base)
+                .flatten()
+                .filter(|base| state.git.review_default_base.as_ref() != Some(base));
             let mut effects = Vec::new();
             if previous_scope == GitDiffScope::LastTurn
                 || state.git_preferences.review_mode == GitReviewMode::LastTurnOnly
@@ -13166,6 +13179,37 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             state.git.selected_commit_sha = Some(sha.clone());
             begin_git_source_diff(state, GitDiffScope::Committed)
+        }
+        Action::SelectGitReviewBase(base) => {
+            if state.git_preferences.review_mode == GitReviewMode::LastTurnOnly {
+                return Vec::new();
+            }
+            if state.git.repository_root.is_none() {
+                state.status_message = Some("No Git repository is selected.".to_owned());
+                return Vec::new();
+            }
+            let base = base.trim().to_owned();
+            if base.is_empty()
+                || base.len() > MAX_GIT_BRANCH_BYTES
+                || base.starts_with('-')
+                || base.chars().any(char::is_control)
+            {
+                state.status_message = Some("Enter a valid Git reference.".to_owned());
+                return Vec::new();
+            }
+            let selected =
+                (state.git.review_default_base.as_deref() != Some(base.as_str())).then_some(base);
+            let retry = state.git.selected_scope == GitDiffScope::Branch
+                && state.git.selected_review_base == selected
+                && state.git.diff_status == Some(LoadStatus::Failed);
+            if state.git.selected_scope == GitDiffScope::Branch
+                && state.git.selected_review_base == selected
+                && !retry
+            {
+                return Vec::new();
+            }
+            state.git.selected_review_base = selected;
+            begin_git_source_diff(state, GitDiffScope::Branch)
         }
         Action::SelectDiffPath { path, scope } => {
             if matches!(
@@ -19025,6 +19069,7 @@ mod tests {
             [Effect::LoadBranchDiff {
                 generation: 1,
                 cwd: root.clone(),
+                base: None,
             }]
         );
         assert_eq!(state.git.diff_status, Some(LoadStatus::Loading));
@@ -19062,10 +19107,11 @@ mod tests {
             ..GitState::default()
         };
         assert_eq!(
-            reduce(&mut state, Action::GitSnapshotLoaded(refreshed)),
+            reduce(&mut state, Action::GitSnapshotLoaded(Box::new(refreshed))),
             [Effect::LoadBranchDiff {
                 generation: 2,
                 cwd: root,
+                base: None,
             }]
         );
         assert_eq!(state.git.selected_scope, GitDiffScope::Branch);
@@ -19118,14 +19164,69 @@ mod tests {
             ..GitState::default()
         };
         assert_eq!(
-            reduce(&mut state, Action::GitSnapshotLoaded(refreshed)),
+            reduce(&mut state, Action::GitSnapshotLoaded(Box::new(refreshed))),
             [Effect::LoadBranchDiff {
                 generation: 5,
                 cwd: PathBuf::from("C:\\repo"),
+                base: None,
             }]
         );
         assert_eq!(state.git.selected_scope, GitDiffScope::Branch);
         assert!(state.git.selected_commit_sha.is_none());
+    }
+
+    #[test]
+    fn explicit_review_base_is_repo_scoped_and_default_uses_app_server() {
+        let root = PathBuf::from("C:\\repo");
+        let mut state = AppState::default();
+        state.git.repository_root = Some(root.clone());
+        state.git.review_default_base = Some("origin/main".to_owned());
+
+        assert_eq!(
+            reduce(&mut state, Action::SelectGitDiffScope(GitDiffScope::Branch)),
+            [Effect::LoadBranchDiff {
+                generation: 1,
+                cwd: root.clone(),
+                base: None,
+            }]
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SelectGitReviewBase("release/1.0".to_owned()),
+            ),
+            [Effect::LoadBranchDiff {
+                generation: 2,
+                cwd: root.clone(),
+                base: Some("release/1.0".to_owned()),
+            }]
+        );
+
+        let refreshed = GitState {
+            repository_root: Some(root.clone()),
+            review_default_base: Some("origin/main".to_owned()),
+            ..GitState::default()
+        };
+        assert_eq!(
+            reduce(&mut state, Action::GitSnapshotLoaded(Box::new(refreshed))),
+            [Effect::LoadBranchDiff {
+                generation: 3,
+                cwd: root.clone(),
+                base: Some("release/1.0".to_owned()),
+            }]
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SelectGitReviewBase("origin/main".to_owned()),
+            ),
+            [Effect::LoadBranchDiff {
+                generation: 4,
+                cwd: root,
+                base: None,
+            }]
+        );
+        assert!(state.git.selected_review_base.is_none());
     }
 
     #[test]
@@ -19235,7 +19336,7 @@ mod tests {
             ..GitState::default()
         };
         assert_eq!(
-            reduce(&mut state, Action::GitSnapshotLoaded(git)),
+            reduce(&mut state, Action::GitSnapshotLoaded(Box::new(git))),
             [Effect::LoadGitPullRequest {
                 root: PathBuf::from("C:\\repo"),
                 branch: "feature/native-pr".to_owned(),
