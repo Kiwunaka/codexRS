@@ -137,6 +137,7 @@ const CONVERSATION_MARKDOWN_TRUNCATED_NOTICE: &str =
 const MAX_VISIBLE_COMPOSER_FILE_RESULTS: usize = 8;
 const MAX_BROWSER_DOWNLOAD_SAVE_REQUESTS: usize = 32;
 const MAX_THREAD_FIND_QUERY_BYTES: usize = 1_024;
+const MAX_THREAD_FIND_HISTORY_PAGES: usize = 32;
 const MAX_SETTINGS_SEARCH_QUERY_BYTES: usize = 1_024;
 const MAX_KEYBOARD_SHORTCUT_SEARCH_QUERY_BYTES: usize = 1_024;
 const KEYBOARD_SHORTCUT_SEQUENCE_TIMEOUT: Duration = Duration::from_secs(1);
@@ -2320,6 +2321,13 @@ struct PendingKeyboardShortcut {
 #[derive(Debug)]
 struct PendingConversationMarkdownCopy {
     task_id: String,
+    requested_cursors: HashSet<String>,
+}
+
+#[derive(Debug)]
+struct PendingThreadFindHistoryLoad {
+    task_id: String,
+    query: String,
     requested_cursors: HashSet<String>,
 }
 
@@ -4510,6 +4518,7 @@ struct WorkspaceView {
     about_window: Option<AnyWindowHandle>,
     process_manager_refresh_generation: u64,
     pending_conversation_markdown_copy: Option<PendingConversationMarkdownCopy>,
+    pending_thread_find_history_load: Option<PendingThreadFindHistoryLoad>,
     settings_section: SettingsSection,
     expanded_hook_sources: HashSet<String>,
     expanded_hook_keys: HashSet<String>,
@@ -4525,6 +4534,7 @@ struct WorkspaceView {
     expanded_timeline_item: Option<(String, String)>,
     thread_find_open: bool,
     thread_find_active_match: Option<ThreadFindActiveMatch>,
+    thread_find_history_truncated: bool,
     navigation_history: NavigationHistory,
     navigation_history_replaying: bool,
     sidebar_visible: bool,
@@ -5011,7 +5021,8 @@ impl WorkspaceView {
                             input.set_value(bounded, window, cx);
                         });
                     }
-                    this.refresh_thread_find_active(cx);
+                    this.refresh_thread_find_active(false, cx);
+                    this.begin_thread_find_history_load(cx);
                 },
             ),
             cx.subscribe_in(
@@ -5492,6 +5503,7 @@ impl WorkspaceView {
             about_window: None,
             process_manager_refresh_generation: 0,
             pending_conversation_markdown_copy: None,
+            pending_thread_find_history_load: None,
             settings_section: SettingsSection::General,
             expanded_hook_sources: HashSet::new(),
             expanded_hook_keys: HashSet::new(),
@@ -5507,6 +5519,7 @@ impl WorkspaceView {
             expanded_timeline_item: None,
             thread_find_open: false,
             thread_find_active_match: None,
+            thread_find_history_truncated: false,
             navigation_history,
             navigation_history_replaying: false,
             sidebar_visible: true,
@@ -5989,6 +6002,8 @@ impl WorkspaceView {
         {
             self.thread_find_open = false;
             self.thread_find_active_match = None;
+            self.pending_thread_find_history_load = None;
+            self.thread_find_history_truncated = false;
         }
         if !self.navigation_history_replaying && previous_location != next_location {
             self.navigation_history.record(next_location);
@@ -6233,6 +6248,7 @@ impl WorkspaceView {
                 }
             }
             self.continue_conversation_markdown_copy(cx);
+            self.continue_thread_find_history_load(cx);
         }
     }
 
@@ -10556,31 +10572,148 @@ impl WorkspaceView {
         find_timeline_matches(&timeline.items, &query)
     }
 
-    fn refresh_thread_find_active(&mut self, cx: &mut Context<Self>) {
+    fn refresh_thread_find_active(&mut self, preserve_active: bool, cx: &mut Context<Self>) {
         let matches = self.thread_find_matches(cx);
-        let active = matches.matches.first().and_then(|matched| {
-            let task_id = self.state.selected_task_id.as_deref()?;
-            let item = self
-                .state
-                .timelines
-                .get(task_id)?
-                .items
-                .get(matched.item_index)?;
-            Some((
-                ThreadFindActiveMatch {
-                    item_id: item.id.clone(),
-                    surface: matched.surface,
-                    range: matched.range.clone(),
-                },
-                matched.item_index,
-            ))
+        let previous_active = self.thread_find_active_match.clone();
+        let task_id = self.state.selected_task_id.as_deref();
+        let timeline = task_id.and_then(|task_id| self.state.timelines.get(task_id));
+        let active_position = preserve_active.then(|| {
+            let active = previous_active.as_ref()?;
+            let timeline = timeline?;
+            matches.matches.iter().position(|matched| {
+                timeline
+                    .items
+                    .get(matched.item_index)
+                    .is_some_and(|item| item.id == active.item_id)
+                    && matched.surface == active.surface
+                    && matched.range == active.range
+            })
         });
+        let active = active_position
+            .flatten()
+            .and_then(|position| matches.matches.get(position))
+            .or_else(|| matches.matches.first())
+            .and_then(|matched| {
+                let item = timeline?.items.get(matched.item_index)?;
+                Some((
+                    ThreadFindActiveMatch {
+                        item_id: item.id.clone(),
+                        surface: matched.surface,
+                        range: matched.range.clone(),
+                    },
+                    matched.item_index,
+                ))
+            });
         self.thread_find_active_match = active.as_ref().map(|(active, _)| active.clone());
         if self.thread_find_open
+            && (!preserve_active || self.thread_find_active_match != previous_active)
             && let Some((_, index)) = active
         {
             self.timeline_list.scroll_to_reveal_item(index);
         }
+        cx.notify();
+    }
+
+    fn begin_thread_find_history_load(&mut self, cx: &mut Context<Self>) {
+        let query = self.thread_find_input.read(cx).value().trim().to_owned();
+        let Some(task_id) = self
+            .thread_find_open
+            .then(|| self.state.selected_task_id.clone())
+            .flatten()
+            .filter(|_| !query.is_empty())
+        else {
+            self.pending_thread_find_history_load = None;
+            self.thread_find_history_truncated = false;
+            return;
+        };
+        if self
+            .pending_thread_find_history_load
+            .as_ref()
+            .is_some_and(|pending| pending.task_id == task_id && pending.query == query)
+        {
+            self.continue_thread_find_history_load(cx);
+            return;
+        }
+
+        self.pending_thread_find_history_load = Some(PendingThreadFindHistoryLoad {
+            task_id: task_id.clone(),
+            query,
+            requested_cursors: HashSet::new(),
+        });
+        self.thread_find_history_truncated = false;
+        if self
+            .state
+            .timelines
+            .get(&task_id)
+            .is_none_or(|timeline| matches!(timeline.status, LoadStatus::Idle | LoadStatus::Failed))
+        {
+            self.dispatch(Action::SelectTask(task_id), cx);
+        }
+        self.continue_thread_find_history_load(cx);
+    }
+
+    fn continue_thread_find_history_load(&mut self, cx: &mut Context<Self>) {
+        let Some((task_id, query)) = self
+            .pending_thread_find_history_load
+            .as_ref()
+            .map(|pending| (pending.task_id.clone(), pending.query.clone()))
+        else {
+            return;
+        };
+        let current_query = self.thread_find_input.read(cx).value().trim().to_owned();
+        if !self.thread_find_open
+            || self.state.selected_task_id.as_deref() != Some(task_id.as_str())
+            || current_query != query
+        {
+            self.pending_thread_find_history_load = None;
+            self.thread_find_history_truncated = false;
+            return;
+        }
+
+        let Some(timeline) = self.state.timelines.get(&task_id) else {
+            return;
+        };
+        match timeline.status {
+            LoadStatus::Idle | LoadStatus::Loading => return,
+            LoadStatus::Failed => {
+                self.pending_thread_find_history_load = None;
+                self.thread_find_history_truncated = true;
+                self.refresh_thread_find_active(true, cx);
+                return;
+            }
+            LoadStatus::Ready => {}
+        }
+
+        let item_count = timeline.items.len();
+        let next_cursor = timeline.next_cursor.clone();
+        let matches_capped = find_timeline_matches(&timeline.items, &query).is_capped;
+        self.refresh_thread_find_active(true, cx);
+        if matches_capped {
+            self.pending_thread_find_history_load = None;
+            return;
+        }
+
+        if let Some(cursor) = next_cursor {
+            if !matches!(self.state.connection, ConnectionStatus::Online) {
+                return;
+            }
+            let can_request_more =
+                self.pending_thread_find_history_load
+                    .as_mut()
+                    .is_some_and(|pending| {
+                        reserve_thread_find_history_page(
+                            item_count,
+                            &cursor,
+                            &mut pending.requested_cursors,
+                        )
+                    });
+            if can_request_more {
+                self.dispatch(Action::LoadMoreTimeline, cx);
+                return;
+            }
+            self.thread_find_history_truncated = true;
+        }
+        self.pending_thread_find_history_load = None;
         cx.notify();
     }
 
@@ -10590,7 +10723,8 @@ impl WorkspaceView {
         }
         self.command_palette = None;
         self.thread_find_open = true;
-        self.refresh_thread_find_active(cx);
+        self.refresh_thread_find_active(false, cx);
+        self.begin_thread_find_history_load(cx);
         self.thread_find_input
             .update(cx, |input, cx| input.focus(window, cx));
     }
@@ -10598,10 +10732,15 @@ impl WorkspaceView {
     fn close_thread_find(&mut self, cx: &mut Context<Self>) {
         self.thread_find_open = false;
         self.thread_find_active_match = None;
+        self.pending_thread_find_history_load = None;
+        self.thread_find_history_truncated = false;
         cx.notify();
     }
 
     fn navigate_thread_find(&mut self, next: bool, cx: &mut Context<Self>) {
+        if self.pending_thread_find_history_load.is_some() {
+            return;
+        }
         let matches = self.thread_find_matches(cx);
         if matches.matches.is_empty() {
             self.thread_find_active_match = None;
@@ -10680,6 +10819,7 @@ impl WorkspaceView {
         let matches = self.thread_find_matches(cx);
         let query = self.thread_find_input.read(cx).value().trim().to_owned();
         let has_query = !query.is_empty();
+        let history_pending = self.pending_thread_find_history_load.is_some();
         let active_position = self.thread_find_active_match.as_ref().and_then(|active| {
             let task_id = self.state.selected_task_id.as_deref()?;
             let timeline = self.state.timelines.get(task_id)?;
@@ -10694,10 +10834,23 @@ impl WorkspaceView {
         });
         let result_label = if !has_query {
             None
+        } else if history_pending {
+            Some(
+                if matches!(self.state.connection, ConnectionStatus::Online) {
+                    "Searching…"
+                } else {
+                    "Waiting for Codex…"
+                }
+                .to_owned(),
+            )
         } else if matches.matches.is_empty() {
             Some("0 results".to_owned())
         } else {
-            let suffix = if matches.is_capped { "+" } else { "" };
+            let suffix = if matches.is_capped || self.thread_find_history_truncated {
+                "+"
+            } else {
+                ""
+            };
             Some(format!(
                 "{} / {}{suffix} results",
                 active_position.unwrap_or(0) + 1,
@@ -10749,7 +10902,7 @@ impl WorkspaceView {
                     .tooltip("Previous result · Shift+F3")
                     .xsmall()
                     .ghost()
-                    .disabled(matches.matches.is_empty())
+                    .disabled(history_pending || matches.matches.is_empty())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.navigate_thread_find(false, cx);
                     })),
@@ -10760,7 +10913,7 @@ impl WorkspaceView {
                     .tooltip("Next result · Ctrl+G")
                     .xsmall()
                     .ghost()
-                    .disabled(matches.matches.is_empty())
+                    .disabled(history_pending || matches.matches.is_empty())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.navigate_thread_find(true, cx);
                     })),
@@ -38411,6 +38564,16 @@ struct ThreadFindMatches {
     is_capped: bool,
 }
 
+fn reserve_thread_find_history_page(
+    item_count: usize,
+    cursor: &str,
+    requested_cursors: &mut HashSet<String>,
+) -> bool {
+    item_count < MAX_TIMELINE_ITEMS
+        && requested_cursors.len() < MAX_THREAD_FIND_HISTORY_PAGES
+        && requested_cursors.insert(cursor.to_owned())
+}
+
 fn bounded_thread_find_query(value: &str) -> String {
     if value.len() <= MAX_THREAD_FIND_QUERY_BYTES {
         return value.to_owned();
@@ -39347,6 +39510,7 @@ fn plugin_logo_placeholder(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::path::{Path, PathBuf};
 
     use super::{
@@ -39354,10 +39518,10 @@ mod tests {
         ArchivedChatKindFilter, ArchivedChatProjectFilter, ArchivedChatSortKey, AssistantFinding,
         CONVERSATION_MARKDOWN_TRUNCATED_NOTICE, DiffLineKind, INIT_AGENTS_PROMPT,
         KeyboardShortcutGroup, MAX_CONVERSATION_MARKDOWN_BYTES, MAX_NAVIGATION_HISTORY_ENTRIES,
-        MAX_THREAD_FIND_MATCHES, NavigationHistory, NavigationLocation, PaletteCommand,
-        PaletteGroup, ReasoningEffortStep, SettingsSection, ShellWidthClass, TaskCopyKind,
-        ThreadFindSurface, accelerators_conflict, adjacent_task_id, app_chatgpt_url,
-        app_mention_prompt, appearance_color, appearance_color_value,
+        MAX_THREAD_FIND_HISTORY_PAGES, MAX_THREAD_FIND_MATCHES, NavigationHistory,
+        NavigationLocation, PaletteCommand, PaletteGroup, ReasoningEffortStep, SettingsSection,
+        ShellWidthClass, TaskCopyKind, ThreadFindSurface, accelerators_conflict, adjacent_task_id,
+        app_chatgpt_url, app_mention_prompt, appearance_color, appearance_color_value,
         appearance_theme_share_string, archived_chat_groups, archived_chat_projects,
         archived_delete_confirmation_copy, background_terminal_summary,
         bounded_keyboard_shortcut_search_query, bounded_settings_search_query,
@@ -39380,11 +39544,12 @@ mod tests {
         parse_mcp_list, parse_mcp_record, parse_unified_diff, plugin_logo_format,
         process_manager_auto_refresh_allowed, project_trigger_matches, project_workspace_options,
         pull_request_merge_submission_enabled, reasoning_effort_target,
-        render_conversation_markdown, replace_composer_file_query, sanitize_assistant_markdown,
-        selected_approval_request, selected_task_copy_value, settings_section_matches,
-        shell_width_class, sidebar_layout_width, split_diff_rows, status_context_total_label,
-        status_rate_limit_label, status_rate_limit_reset_metadata_at, task_slot_id,
-        terminal_tab_label, timeline_activity_content, validate_plugin_logo_dimensions,
+        render_conversation_markdown, replace_composer_file_query,
+        reserve_thread_find_history_page, sanitize_assistant_markdown, selected_approval_request,
+        selected_task_copy_value, settings_section_matches, shell_width_class,
+        sidebar_layout_width, split_diff_rows, status_context_total_label, status_rate_limit_label,
+        status_rate_limit_reset_metadata_at, task_slot_id, terminal_tab_label,
+        timeline_activity_content, validate_plugin_logo_dimensions,
     };
     use codex_core::{
         AppCard, AppState, AppearancePalette, AppearanceVariant, ApprovalContext, ApprovalKind,
@@ -40962,6 +41127,35 @@ mod tests {
                 Some(&format!("task-{}", MAX_NAVIGATION_HISTORY_ENTRIES + 9)),
             ))
         );
+    }
+
+    #[test]
+    fn thread_find_history_paging_is_bounded_and_rejects_repeated_cursors() {
+        let mut requested = HashSet::new();
+        assert!(reserve_thread_find_history_page(
+            100,
+            "cursor-1",
+            &mut requested
+        ));
+        assert!(!reserve_thread_find_history_page(
+            100,
+            "cursor-1",
+            &mut requested
+        ));
+
+        let mut page_limited = (0..MAX_THREAD_FIND_HISTORY_PAGES)
+            .map(|index| format!("cursor-{index}"))
+            .collect::<HashSet<_>>();
+        assert!(!reserve_thread_find_history_page(
+            100,
+            "next-cursor",
+            &mut page_limited
+        ));
+        assert!(!reserve_thread_find_history_page(
+            super::MAX_TIMELINE_ITEMS,
+            "next-cursor",
+            &mut HashSet::new()
+        ));
     }
 
     #[test]
