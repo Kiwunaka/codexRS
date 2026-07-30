@@ -1375,6 +1375,16 @@ pub struct ThreadCompactStartParams {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ThreadCompactStartResponse {}
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadShellCommandParams {
+    pub thread_id: String,
+    pub command: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ThreadShellCommandResponse {}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenUsageBreakdown {
@@ -3118,10 +3128,11 @@ mod tests {
         ThreadGoal, ThreadGoalGetResponse, ThreadGoalSetParams, ThreadGoalStatus, ThreadListParams,
         ThreadLoadedListParams, ThreadLoadedListResponse, ThreadResumeResponse,
         ThreadRollbackParams, ThreadRollbackResponse, ThreadSearchParams, ThreadSetNameParams,
-        ThreadSettingsUpdateParams, ThreadStartParams, ThreadTokenUsageUpdatedNotification,
-        ThreadUnarchiveParams, ToolRequestUserInputAnswer, ToolRequestUserInputParams,
-        ToolRequestUserInputResponse, TurnInterruptParams, TurnStartParams, TurnSteerParams,
-        UserInput, decode_incoming, encode_json_line, read_bounded_frame,
+        ThreadSettingsUpdateParams, ThreadShellCommandParams, ThreadShellCommandResponse,
+        ThreadStartParams, ThreadTokenUsageUpdatedNotification, ThreadUnarchiveParams,
+        ToolRequestUserInputAnswer, ToolRequestUserInputParams, ToolRequestUserInputResponse,
+        TurnInterruptParams, TurnStartParams, TurnSteerParams, UserInput, decode_incoming,
+        encode_json_line, read_bounded_frame,
     };
 
     fn limit(value: usize) -> NonZeroUsize {
@@ -3540,6 +3551,22 @@ mod tests {
             b"{\"method\":\"thread/compact/start\",\"id\":11,\"params\":{\"threadId\":\"thread-1\"}}\n"
         );
         assert!(serde_json::from_value::<ThreadCompactStartResponse>(json!({})).is_ok());
+    }
+
+    #[test]
+    fn thread_shell_command_preserves_shell_syntax_in_the_stable_contract() {
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "thread/shellCommand",
+                id: 12,
+                params: Some(ThreadShellCommandParams {
+                    thread_id: "thread-1".to_owned(),
+                    command: "git status --short | rg src".to_owned(),
+                }),
+            }),
+            b"{\"method\":\"thread/shellCommand\",\"id\":12,\"params\":{\"threadId\":\"thread-1\",\"command\":\"git status --short | rg src\"}}\n"
+        );
+        assert!(serde_json::from_value::<ThreadShellCommandResponse>(json!({})).is_ok());
     }
 
     #[test]
