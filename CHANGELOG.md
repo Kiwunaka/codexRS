@@ -3,6 +3,14 @@
 All notable changes to codexRS are documented here. The project follows
 [Semantic Versioning](https://semver.org/) once release tags are published.
 
+## [Unreleased]
+
+### Added
+
+- Native per-occurrence chat Find navigation with Unicode-safe matching,
+  stable-style result ordinals, inline highlights for plain-text timeline
+  content, and active-message reveal for rendered Markdown.
+
 ## [0.1.0-rc.1] - 2026-07-24
 
 ### Added
