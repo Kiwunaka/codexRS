@@ -25,7 +25,7 @@
 </p>
 
 > [!IMPORTANT]
-> The current tree targets `v0.1.0-rc.1`. Windows has passed an end-to-end
+> The current tree targets `v0.1.0-rc.2`. Windows has passed an end-to-end
 > source-build smoke test against the exact stable reference. Linux is covered
 > by native CI and still needs broader desktop-environment testing before a
 > stable release.

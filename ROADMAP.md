@@ -7,7 +7,7 @@ The product goal is a native Rust replacement with full Codex Desktop
 behavioral and UX parity. The detailed contract lives in the
 [parity matrix](docs/parity-matrix.md).
 
-## v0.1.0-rc.1
+## v0.1.0-rc.2
 
 - [x] Bounded official app-server supervisor and typed protocol.
 - [x] Native GPUI task browser, composer, streaming timeline, forks, and approvals.

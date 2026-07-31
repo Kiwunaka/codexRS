@@ -25,7 +25,7 @@
 </p>
 
 > [!IMPORTANT]
-> 当前代码树以 `v0.1.0-rc.1` 为目标。Windows 已通过针对精确 stable
+> 当前代码树以 `v0.1.0-rc.2` 为目标。Windows 已通过针对精确 stable
 > 参考版本的源码端到端冒烟测试。Linux 已纳入原生 CI，但在稳定版发布前仍需覆盖更多桌面环境。
 
 ## 为什么选择 codexRS
