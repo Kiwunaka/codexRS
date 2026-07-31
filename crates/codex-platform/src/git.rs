@@ -1220,7 +1220,37 @@ fn run_branch_mutation(command: &mut Command) -> Result<GitBranchMutationOutcome
 }
 
 fn valid_worktree_path(root: &Path, worktree_path: &Path) -> bool {
-    worktree_path.is_absolute() && !worktree_path.starts_with(root)
+    let Some(root) = normalized_absolute_path(root) else {
+        return false;
+    };
+    let Some(worktree_path) = normalized_absolute_path(worktree_path) else {
+        return false;
+    };
+    !worktree_path.starts_with(root)
+}
+
+fn normalized_absolute_path(path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute() {
+        return None;
+    }
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
+                normalized.push(component.as_os_str());
+            }
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(component) => normalized.push(component),
+            std::path::Component::ParentDir => {
+                if normalized.file_name().is_some() {
+                    normalized.pop();
+                } else {
+                    return None;
+                }
+            }
+        }
+    }
+    Some(normalized)
 }
 
 fn push_remote(root: &Path, branch: &str) -> Result<Option<String>, GitError> {
@@ -2240,7 +2270,21 @@ mod tests {
             Path::new("/repo-feature")
         };
         assert!(valid_worktree_path(root, sibling));
+        assert!(valid_worktree_path(
+            root,
+            &root.join("..").join("repo-feature")
+        ));
         assert!(!valid_worktree_path(root, &root.join("worktrees/feature")));
+        assert!(!valid_worktree_path(
+            root,
+            &root
+                .parent()
+                .unwrap_or(root)
+                .join("repo-alias")
+                .join("..")
+                .join(root.file_name().unwrap_or_default())
+                .join("worktrees/feature")
+        ));
         assert!(!valid_worktree_path(root, Path::new("../repo-feature")));
     }
 
