@@ -38,10 +38,9 @@ struct MonitorState {
 
 impl ComputerUseInterruptionMonitor {
     pub fn new() -> io::Result<Self> {
-        let shared = Arc::new(Mutex::new(MonitorState::default()));
-
         #[cfg(windows)]
         {
+            let shared = Arc::new(Mutex::new(MonitorState::default()));
             let (interrupted_tx, interrupted) = bounded(1);
             let (user_input_tx, user_input) = bounded(1);
             let shutdown = Arc::new(AtomicBool::new(false));
@@ -104,7 +103,10 @@ impl ComputerUseInterruptionMonitor {
         }
 
         #[cfg(not(windows))]
-        Ok(Self { shared })
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Computer Use interruption monitoring is not supported on this platform",
+        ))
     }
 
     pub fn arm(
@@ -408,8 +410,9 @@ mod tests {
         assert!(!edge.observe(true));
     }
 
+    #[cfg(windows)]
     #[test]
-    fn active_turn_survives_platforms_without_a_global_input_hook() -> std::io::Result<()> {
+    fn active_turn_tracks_the_windows_global_input_hook() -> std::io::Result<()> {
         let monitor = ComputerUseInterruptionMonitor::new()?;
         monitor.arm("thread-1", "turn-1", Some("window-1".to_owned()));
         assert_eq!(
@@ -425,6 +428,21 @@ mod tests {
         assert!(monitor.active_turn().is_some());
         monitor.disarm_turn("thread-1", "turn-1");
         assert!(monitor.active_turn().is_none());
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn non_windows_interruption_constructor_is_unsupported() -> std::io::Result<()> {
+        let error = match ComputerUseInterruptionMonitor::new() {
+            Err(error) => error,
+            Ok(_) => {
+                return Err(std::io::Error::other(
+                    "non-Windows platforms must not report an interruption hook as ready",
+                ));
+            }
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
         Ok(())
     }
 
