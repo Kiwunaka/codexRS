@@ -1987,6 +1987,7 @@ pub struct ConfigRequirementsReadResponse {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConfigRequirements {
+    pub allow_remote_control: Option<bool>,
     pub allowed_approval_policies: Option<Vec<Value>>,
     pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
     pub allowed_sandbox_modes: Option<Vec<String>>,
@@ -2007,6 +2008,121 @@ pub struct NewThreadModelDefaults {
     pub model_reasoning_effort: Option<String>,
     pub service_tier: Option<String>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteControlConnectionStatus {
+    Disabled,
+    Connecting,
+    Connected,
+    Errored,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteControlStatusReadResponse {
+    pub status: RemoteControlConnectionStatus,
+    pub installation_id: String,
+    pub environment_id: Option<String>,
+    pub server_name: String,
+}
+
+pub type RemoteControlEnableResponse = RemoteControlStatusReadResponse;
+pub type RemoteControlDisableResponse = RemoteControlStatusReadResponse;
+pub type RemoteControlStatusChangedNotification = RemoteControlStatusReadResponse;
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteControlEnableParams {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ephemeral: bool,
+}
+
+pub type NullableRemoteControlEnableParams = Option<RemoteControlEnableParams>;
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteControlDisableParams {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ephemeral: bool,
+}
+
+pub type NullableRemoteControlDisableParams = Option<RemoteControlDisableParams>;
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteControlPairingStartParams {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub manual_code: bool,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteControlPairingStartResponse {
+    pub pairing_code: String,
+    pub manual_pairing_code: Option<String>,
+    pub environment_id: String,
+    pub expires_at: i64,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteControlPairingStatusParams {
+    pub pairing_code: Option<String>,
+    pub manual_pairing_code: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteControlPairingStatusResponse {
+    pub claimed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RemoteControlClientsListOrder {
+    Asc,
+    Desc,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteControlClientsListParams {
+    pub environment_id: String,
+    pub cursor: Option<String>,
+    pub limit: Option<u32>,
+    pub order: Option<RemoteControlClientsListOrder>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteControlClientsListResponse {
+    pub data: Vec<RemoteControlClient>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteControlClient {
+    pub client_id: String,
+    pub display_name: Option<String>,
+    pub device_type: Option<String>,
+    pub device_model: Option<String>,
+    pub platform: Option<String>,
+    pub os_version: Option<String>,
+    pub app_version: Option<String>,
+    pub last_seen_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteControlClientsRevokeParams {
+    pub environment_id: String,
+    pub client_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RemoteControlClientsRevokeResponse {}
 
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -3339,17 +3455,26 @@ mod tests {
         McpServerStatusUpdatedNotification, MemoryResetResponse, ModelListParams,
         ModelListResponse, ModelSafetyBufferingUpdatedNotification, ModelVerification,
         ModelVerificationNotification, NetworkPolicyAmendment, NetworkPolicyAmendmentDecision,
-        NetworkPolicyRuleAction, PermissionGrantScope, PermissionProfile,
+        NetworkPolicyRuleAction, NullableRemoteControlDisableParams,
+        NullableRemoteControlEnableParams, PermissionGrantScope, PermissionProfile,
         PermissionProfileListParams, PermissionProfileListResponse,
         PermissionsRequestApprovalParams, PermissionsRequestApprovalResponse, PlanType,
         PluginListMarketplaceKind, PluginReadParams, PluginReadResponse,
-        PluginScheduledTaskSchedule, PluginScheduledTaskSummary, ProtocolError, SkillScope,
-        SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams, SkillsListResponse,
-        ThreadArchiveParams, ThreadBackgroundTerminalsCleanResponse,
-        ThreadBackgroundTerminalsListParams, ThreadBackgroundTerminalsListResponse,
-        ThreadBackgroundTerminalsTerminateParams, ThreadBackgroundTerminalsTerminateResponse,
-        ThreadCompactStartParams, ThreadCompactStartResponse, ThreadDeleteParams, ThreadForkParams,
-        ThreadGoal, ThreadGoalGetResponse, ThreadGoalSetParams, ThreadGoalStatus, ThreadListParams,
+        PluginScheduledTaskSchedule, PluginScheduledTaskSummary, ProtocolError,
+        RemoteControlClientsListOrder, RemoteControlClientsListParams,
+        RemoteControlClientsListResponse, RemoteControlClientsRevokeParams,
+        RemoteControlClientsRevokeResponse, RemoteControlConnectionStatus,
+        RemoteControlDisableParams, RemoteControlDisableResponse, RemoteControlEnableParams,
+        RemoteControlEnableResponse, RemoteControlPairingStartParams,
+        RemoteControlPairingStartResponse, RemoteControlPairingStatusParams,
+        RemoteControlPairingStatusResponse, RemoteControlStatusChangedNotification,
+        RemoteControlStatusReadResponse, SkillScope, SkillsConfigWriteParams,
+        SkillsConfigWriteResponse, SkillsListParams, SkillsListResponse, ThreadArchiveParams,
+        ThreadBackgroundTerminalsCleanResponse, ThreadBackgroundTerminalsListParams,
+        ThreadBackgroundTerminalsListResponse, ThreadBackgroundTerminalsTerminateParams,
+        ThreadBackgroundTerminalsTerminateResponse, ThreadCompactStartParams,
+        ThreadCompactStartResponse, ThreadDeleteParams, ThreadForkParams, ThreadGoal,
+        ThreadGoalGetResponse, ThreadGoalSetParams, ThreadGoalStatus, ThreadListParams,
         ThreadLoadedListParams, ThreadLoadedListResponse, ThreadMemoryMode,
         ThreadMemoryModeSetParams, ThreadMemoryModeSetResponse, ThreadResumeResponse,
         ThreadRollbackParams, ThreadRollbackResponse, ThreadSearchParams, ThreadSetNameParams,
@@ -4186,6 +4311,7 @@ mod tests {
 
         let requirements = serde_json::from_value::<ConfigRequirementsReadResponse>(json!({
             "requirements": {
+                "allowRemoteControl": true,
                 "allowedApprovalPolicies": ["on-request", "never"],
                 "allowedApprovalsReviewers": ["user", "auto_review"],
                 "allowedSandboxModes": ["read-only", "workspace-write"],
@@ -4203,7 +4329,8 @@ mod tests {
             requirements,
             Ok(response)
                 if response.requirements.as_ref().is_some_and(|requirements| {
-                    requirements.default_permissions.as_deref() == Some(":workspace")
+                    requirements.allow_remote_control == Some(true)
+                        && requirements.default_permissions.as_deref() == Some(":workspace")
                         && requirements.allowed_approvals_reviewers.as_deref()
                             == Some(&[
                                 ApprovalsReviewer::User,
@@ -4328,6 +4455,167 @@ mod tests {
                         .and_then(Value::as_bool)
                         == Some(true)
         ));
+    }
+
+    #[test]
+    fn remote_control_types_match_the_stable_schema() {
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "remoteControl/enable",
+                id: 14,
+                params: Some(RemoteControlEnableParams { ephemeral: true }),
+            }),
+            b"{\"method\":\"remoteControl/enable\",\"id\":14,\"params\":{\"ephemeral\":true}}\n"
+        );
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "remoteControl/disable",
+                id: 15,
+                params: Some(RemoteControlDisableParams { ephemeral: false }),
+            }),
+            b"{\"method\":\"remoteControl/disable\",\"id\":15,\"params\":{}}\n"
+        );
+        let nullable_enable: NullableRemoteControlEnableParams = None;
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "remoteControl/enable",
+                id: 21,
+                params: Some(nullable_enable),
+            }),
+            b"{\"method\":\"remoteControl/enable\",\"id\":21,\"params\":null}\n"
+        );
+        let nullable_disable: NullableRemoteControlDisableParams = None;
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "remoteControl/disable",
+                id: 22,
+                params: Some(nullable_disable),
+            }),
+            b"{\"method\":\"remoteControl/disable\",\"id\":22,\"params\":null}\n"
+        );
+        assert_eq!(
+            encoded(&ClientRequest::<()> {
+                method: "remoteControl/status/read",
+                id: 16,
+                params: None,
+            }),
+            b"{\"method\":\"remoteControl/status/read\",\"id\":16}\n"
+        );
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "remoteControl/pairing/start",
+                id: 17,
+                params: Some(RemoteControlPairingStartParams { manual_code: true }),
+            }),
+            b"{\"method\":\"remoteControl/pairing/start\",\"id\":17,\"params\":{\"manualCode\":true}}\n"
+        );
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "remoteControl/pairing/status",
+                id: 18,
+                params: Some(RemoteControlPairingStatusParams {
+                    pairing_code: None,
+                    manual_pairing_code: None,
+                }),
+            }),
+            b"{\"method\":\"remoteControl/pairing/status\",\"id\":18,\"params\":{\"pairingCode\":null,\"manualPairingCode\":null}}\n"
+        );
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "remoteControl/client/list",
+                id: 19,
+                params: Some(RemoteControlClientsListParams {
+                    environment_id: "environment-1".to_owned(),
+                    cursor: Some("cursor-1".to_owned()),
+                    limit: Some(64),
+                    order: Some(RemoteControlClientsListOrder::Desc),
+                }),
+            }),
+            b"{\"method\":\"remoteControl/client/list\",\"id\":19,\"params\":{\"environmentId\":\"environment-1\",\"cursor\":\"cursor-1\",\"limit\":64,\"order\":\"desc\"}}\n"
+        );
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "remoteControl/client/list",
+                id: 23,
+                params: Some(RemoteControlClientsListParams {
+                    environment_id: "environment-1".to_owned(),
+                    cursor: None,
+                    limit: None,
+                    order: None,
+                }),
+            }),
+            b"{\"method\":\"remoteControl/client/list\",\"id\":23,\"params\":{\"environmentId\":\"environment-1\",\"cursor\":null,\"limit\":null,\"order\":null}}\n"
+        );
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "remoteControl/client/revoke",
+                id: 20,
+                params: Some(RemoteControlClientsRevokeParams {
+                    environment_id: "environment-1".to_owned(),
+                    client_id: "client-1".to_owned(),
+                }),
+            }),
+            b"{\"method\":\"remoteControl/client/revoke\",\"id\":20,\"params\":{\"environmentId\":\"environment-1\",\"clientId\":\"client-1\"}}\n"
+        );
+
+        let status = json!({
+            "status": "connected",
+            "installationId": "installation-1",
+            "environmentId": "environment-1",
+            "serverName": "server-1"
+        });
+        let response = serde_json::from_value::<RemoteControlStatusReadResponse>(status.clone());
+        assert!(matches!(
+            response,
+            Ok(RemoteControlStatusReadResponse {
+                status: RemoteControlConnectionStatus::Connected,
+                environment_id: Some(environment_id),
+                ..
+            }) if environment_id == "environment-1"
+        ));
+        assert!(serde_json::from_value::<RemoteControlEnableResponse>(status.clone()).is_ok());
+        assert!(serde_json::from_value::<RemoteControlDisableResponse>(status.clone()).is_ok());
+        assert!(serde_json::from_value::<RemoteControlStatusChangedNotification>(status).is_ok());
+
+        let pairing = serde_json::from_value::<RemoteControlPairingStartResponse>(json!({
+            "environmentId": "environment-1",
+            "expiresAt": 123,
+            "pairingCode": "pairing-code",
+            "manualPairingCode": null
+        }));
+        assert!(matches!(
+            pairing,
+            Ok(RemoteControlPairingStartResponse {
+                environment_id,
+                expires_at: 123,
+                manual_pairing_code: None,
+                ..
+            }) if environment_id == "environment-1"
+        ));
+        assert!(matches!(
+            serde_json::from_value::<RemoteControlPairingStatusResponse>(
+                json!({ "claimed": true })
+            ),
+            Ok(RemoteControlPairingStatusResponse { claimed: true })
+        ));
+        assert!(matches!(
+            serde_json::from_value::<RemoteControlClientsListResponse>(json!({
+                "data": [{
+                    "clientId": "client-1",
+                    "displayName": "Phone",
+                    "deviceType": "mobile",
+                    "deviceModel": null,
+                    "platform": "android",
+                    "osVersion": "1",
+                    "appVersion": "2",
+                    "lastSeenAt": 456
+                }],
+                "nextCursor": null
+            })),
+            Ok(RemoteControlClientsListResponse { data, next_cursor: None })
+                if data.len() == 1 && data[0].client_id == "client-1"
+        ));
+        assert!(serde_json::from_value::<RemoteControlClientsRevokeResponse>(json!({})).is_ok());
     }
 
     #[test]
