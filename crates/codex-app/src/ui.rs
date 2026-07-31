@@ -29,7 +29,8 @@ use codex_core::{
     GitCommitNextStep, GitCommitPhase, GitDiffScope, GitFileKind, GitPreferences,
     GitPullRequestPhase, GitPullRequestProvider, GitReviewCommitState, GitReviewMode,
     GitWorktreeState, HookCard, HookEventName, HookHandlerType, HookIssue, HookProjectEntry,
-    HookSource, HookTrustStatus, InspectorPane, IntegratedTerminalShell,
+    HookSource, HookTrustStatus, ImportHistory, ImportItemFailure, ImportItemSuccess,
+    ImportItemType, ImportMigrationItem, ImportProvider, InspectorPane, IntegratedTerminalShell,
     KeyboardShortcutPreferences, KeyboardShortcutUpdateTarget, LoadStatus, LocalProjectSummary,
     MAX_COMPOSER_OPTIONS, MAX_FEEDBACK_DETAILS_BYTES, MAX_FUZZY_FILE_QUERY_BYTES,
     MAX_GIT_COMMIT_MESSAGE_CHARS, MAX_GIT_PULL_REQUEST_BODY_CHARS,
@@ -1896,6 +1897,8 @@ enum WorkspaceModal {
     Feedback,
     ChatMemories,
     ResetMemories,
+    ImportProviders,
+    ImportItems,
     KeyboardShortcuts,
     ResetKeyboardShortcuts,
     ProcessManager,
@@ -2117,6 +2120,7 @@ enum SettingsSection {
     Personalization,
     KeyboardShortcuts,
     Usage,
+    Import,
     Configuration,
     Git,
     Hooks,
@@ -7242,6 +7246,14 @@ impl WorkspaceView {
             && self.state.personalization.status != LoadStatus::Loading
         {
             self.dispatch(Action::RefreshPersonalization, cx);
+        } else if section == SettingsSection::Import
+            && self.state.imports.detection_status != LoadStatus::Loading
+            && self.state.imports.history_status != LoadStatus::Loading
+        {
+            self.dispatch(Action::RefreshImports, cx);
+            if self.state.marketplace.mcp_status != Some(LoadStatus::Loading) {
+                self.dispatch(Action::RefreshMcpServers, cx);
+            }
         } else if section == SettingsSection::Configuration
             && self.state.agent_configuration.status != LoadStatus::Loading
         {
@@ -28374,6 +28386,7 @@ impl WorkspaceView {
         let keyboard_shortcuts_visible =
             settings_section_matches(SettingsSection::KeyboardShortcuts, &query);
         let usage_visible = settings_section_matches(SettingsSection::Usage, &query);
+        let import_visible = settings_section_matches(SettingsSection::Import, &query);
         let configuration_visible =
             settings_section_matches(SettingsSection::Configuration, &query);
         let git_visible = settings_section_matches(SettingsSection::Git, &query);
@@ -28389,7 +28402,8 @@ impl WorkspaceView {
             || appearance_visible
             || personalization_visible
             || keyboard_shortcuts_visible
-            || usage_visible;
+            || usage_visible
+            || import_visible;
         let integrations_visible =
             plugins_visible || mcp_servers_visible || browser_visible || computer_use_visible;
         let coding_visible =
@@ -28402,6 +28416,7 @@ impl WorkspaceView {
             SettingsSection::Personalization => self.render_personalization_settings(cx),
             SettingsSection::KeyboardShortcuts => self.render_keyboard_shortcut_settings(cx),
             SettingsSection::Usage => self.render_usage_settings(cx),
+            SettingsSection::Import => self.render_import_settings(cx),
             SettingsSection::Configuration => self.render_agent_configuration_settings(cx),
             SettingsSection::Git => self.render_git_settings(cx),
             SettingsSection::Hooks => self.render_hooks_settings(cx),
@@ -28512,6 +28527,15 @@ impl WorkspaceView {
                                         "Usage & billing",
                                         IconName::ChartPie,
                                         SettingsSection::Usage,
+                                        cx,
+                                    ))
+                                })
+                                .when(import_visible, |group| {
+                                    group.child(self.render_settings_nav_item(
+                                        "settings-import",
+                                        "Import",
+                                        IconName::ArrowDown,
+                                        SettingsSection::Import,
                                         cx,
                                     ))
                                 }),
@@ -31826,6 +31850,799 @@ impl WorkspaceView {
             .into_any_element()
     }
 
+    fn render_import_settings(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let imports = self.state.imports.clone();
+        let running = imports.import_running();
+        let has_history = !imports.histories.is_empty();
+        let selected_categories = import_category_summary(
+            imports
+                .providers
+                .iter()
+                .flat_map(|provider| provider.items.iter())
+                .filter(|item| item.selected),
+        );
+        let detected_categories = import_category_summary(
+            imports
+                .providers
+                .iter()
+                .flat_map(|provider| provider.items.iter()),
+        );
+        let provider_names = imports
+            .providers
+            .iter()
+            .map(|provider| provider.provider.label())
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let (status_title, status_description, status_action) = if running {
+            (
+                "Import in progress".to_owned(),
+                if selected_categories.is_empty() {
+                    "Importing selected setup, projects, and recent chats".to_owned()
+                } else {
+                    format!("Importing {selected_categories}")
+                },
+                Icon::new(IconName::LoaderCircle)
+                    .small()
+                    .text_color(cx.theme().muted_foreground)
+                    .into_any_element(),
+            )
+        } else if imports.import_status == LoadStatus::Failed {
+            (
+                "Couldn't finish the import".to_owned(),
+                imports.error.clone().unwrap_or_else(|| {
+                    "Try again, or review the selected items before importing".to_owned()
+                }),
+                Button::new("retry-external-import")
+                    .label("Try again")
+                    .small()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if this.state.imports.has_detected_items() {
+                            this.workspace_modal = Some(WorkspaceModal::ImportProviders);
+                            cx.notify();
+                        } else {
+                            this.dispatch(Action::RefreshImports, cx);
+                        }
+                    }))
+                    .into_any_element(),
+            )
+        } else if imports.detection_status == LoadStatus::Loading {
+            (
+                "Checking for imports".to_owned(),
+                "Looking for compatible setup, projects, and recent chats".to_owned(),
+                Icon::new(IconName::LoaderCircle)
+                    .small()
+                    .text_color(cx.theme().muted_foreground)
+                    .into_any_element(),
+            )
+        } else if imports.detection_status == LoadStatus::Failed {
+            (
+                "Couldn't check for imports".to_owned(),
+                "Try again to look for compatible setup, projects, and recent chats".to_owned(),
+                Button::new("retry-external-import-detection")
+                    .label("Retry")
+                    .small()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.dispatch(Action::RefreshImports, cx);
+                    }))
+                    .into_any_element(),
+            )
+        } else if imports.has_detected_items() {
+            let title = if has_history {
+                format!("New items found in {provider_names}")
+            } else {
+                format!("Found setup from {provider_names}")
+            };
+            (
+                title,
+                detected_categories,
+                Button::new("review-external-import")
+                    .label(if has_history {
+                        "Review new items"
+                    } else {
+                        "Review and import"
+                    })
+                    .small()
+                    .primary()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.workspace_modal = Some(WorkspaceModal::ImportProviders);
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+            )
+        } else if has_history {
+            let last_imported = imports
+                .histories
+                .first()
+                .map(|history| import_last_imported_label(history.completed_at_ms))
+                .unwrap_or_else(|| "Last import recorded".to_owned());
+            (
+                "No new items found".to_owned(),
+                last_imported,
+                Button::new("refresh-external-import-detection")
+                    .label("Check again")
+                    .small()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.dispatch(Action::RefreshImports, cx);
+                    }))
+                    .into_any_element(),
+            )
+        } else {
+            (
+                "Import from other AI apps".to_owned(),
+                "No importable setup found".to_owned(),
+                Button::new("empty-external-import")
+                    .label("Import")
+                    .small()
+                    .disabled(true)
+                    .into_any_element(),
+            )
+        };
+
+        let status_card = v_flex()
+            .w_full()
+            .max_w(px(760.0))
+            .overflow_hidden()
+            .rounded_lg()
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().sidebar)
+            .child(
+                h_flex()
+                    .min_h(px(78.0))
+                    .px_4()
+                    .py_3()
+                    .gap_4()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        v_flex()
+                            .min_w_0()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child(status_title),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(status_description),
+                            ),
+                    )
+                    .child(status_action),
+            )
+            .when(!imports.detection_failures.is_empty(), |card| {
+                let providers = imports
+                    .detection_failures
+                    .iter()
+                    .map(|provider| provider.label())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                card.child(
+                    h_flex()
+                        .px_4()
+                        .py_2()
+                        .gap_2()
+                        .border_t_1()
+                        .border_color(cx.theme().border)
+                        .bg(cx.theme().warning.opacity(0.07))
+                        .child(
+                            Icon::new(IconName::Info)
+                                .xsmall()
+                                .text_color(cx.theme().warning),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(format!("Couldn't check {providers}")),
+                        ),
+                )
+            });
+
+        let attention = self.render_import_attention(cx);
+        let history = self.render_import_history_section(cx);
+
+        v_flex()
+            .flex_1()
+            .h_full()
+            .min_w_0()
+            .child(
+                h_flex()
+                    .min_h(px(86.0))
+                    .px_6()
+                    .py_4()
+                    .items_center()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_lg()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child("Import"),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(
+                                        "Bring setup, projects, and chats from other AI apps into codexRS",
+                                    ),
+                            ),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .items_center()
+                    .p_6()
+                    .gap_6()
+                    .child(
+                        v_flex()
+                            .w_full()
+                            .max_w(px(760.0))
+                            .gap_3()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child("Import from another AI app"),
+                            )
+                            .child(status_card),
+                    )
+                    .when_some(attention, |page, attention| page.child(attention))
+                    .child(history),
+            )
+            .into_any_element()
+    }
+
+    fn render_import_attention(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let connectors = self.state.imports.connectors.clone();
+        if connectors.is_empty() {
+            return None;
+        }
+        let mcp_loading = matches!(
+            self.state.marketplace.mcp_status,
+            None | Some(LoadStatus::Idle | LoadStatus::Loading)
+        );
+        let mcp_failed = self.state.marketplace.mcp_status == Some(LoadStatus::Failed);
+        let attention = connectors
+            .into_iter()
+            .filter(|connector| {
+                self.state
+                    .marketplace
+                    .mcp_servers
+                    .iter()
+                    .chain(self.state.marketplace.plugin_mcp_servers.iter())
+                    .find(|server| server.key == connector.name || server.name == connector.name)
+                    .is_some_and(|server| {
+                        server.auth_status == McpAuthStatus::NotLoggedIn
+                            || server.startup_failure_reason
+                                == Some(McpServerStartupFailureReason::ReauthenticationRequired)
+                    })
+            })
+            .collect::<Vec<_>>();
+        if attention.is_empty() && !mcp_loading && !mcp_failed {
+            return None;
+        }
+        let mut body = v_flex()
+            .w_full()
+            .overflow_hidden()
+            .rounded_lg()
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().sidebar);
+        if mcp_loading {
+            body = body.child(
+                h_flex()
+                    .min_h(px(64.0))
+                    .px_4()
+                    .gap_3()
+                    .items_center()
+                    .child(Icon::new(IconName::LoaderCircle).xsmall())
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Checking imported MCP servers"),
+                    ),
+            );
+        } else if mcp_failed {
+            body = body.child(
+                h_flex()
+                    .min_h(px(64.0))
+                    .px_4()
+                    .gap_3()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Couldn't check imported MCP servers"),
+                    )
+                    .child(
+                        Button::new("retry-imported-mcp-servers")
+                            .label("Retry")
+                            .small()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.dispatch(Action::RefreshMcpServers, cx);
+                            })),
+                    ),
+            );
+        } else {
+            for (index, connector) in attention.into_iter().enumerate() {
+                let name = connector.name.clone();
+                let pending = self.state.marketplace.pending_mcp_auth_name.as_deref()
+                    == Some(connector.name.as_str());
+                body = body.child(
+                    h_flex()
+                        .min_h(px(64.0))
+                        .px_4()
+                        .gap_4()
+                        .items_center()
+                        .justify_between()
+                        .when(index > 0, |row| {
+                            row.border_t_1().border_color(cx.theme().border)
+                        })
+                        .child(
+                            v_flex()
+                                .min_w_0()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .child(connector.name),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("Authentication required"),
+                                ),
+                        )
+                        .child(
+                            Button::new(SharedString::from(format!(
+                                "authenticate-imported-mcp-{index}"
+                            )))
+                            .label(if pending {
+                                "Authenticating…"
+                            } else {
+                                "Authenticate"
+                            })
+                            .small()
+                            .disabled(pending)
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    this.dispatch(
+                                        Action::AuthenticateMcpServer { name: name.clone() },
+                                        cx,
+                                    );
+                                },
+                            )),
+                        ),
+                );
+            }
+        }
+        Some(
+            v_flex()
+                .w_full()
+                .max_w(px(760.0))
+                .gap_3()
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child("Needs attention"),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("Finish setting up items from a previous import"),
+                        ),
+                )
+                .child(body)
+                .into_any_element(),
+        )
+    }
+
+    fn render_import_history_section(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let imports = self.state.imports.clone();
+        let mut cards = Vec::new();
+        if imports.import_running() {
+            let categories = ImportItemType::ALL
+                .into_iter()
+                .filter(|item_type| {
+                    imports.providers.iter().any(|provider| {
+                        provider
+                            .items
+                            .iter()
+                            .any(|item| item.selected && item.item_type == *item_type)
+                    })
+                })
+                .map(|item_type| {
+                    h_flex()
+                        .min_h(px(48.0))
+                        .px_4()
+                        .items_center()
+                        .justify_between()
+                        .border_t_1()
+                        .border_color(cx.theme().border)
+                        .child(div().text_sm().child(item_type.label()))
+                        .child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .rounded_full()
+                                .bg(cx.theme().secondary)
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("Importing"),
+                        )
+                        .into_any_element()
+                })
+                .collect::<Vec<_>>();
+            cards.push(
+                v_flex()
+                    .w_full()
+                    .overflow_hidden()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().sidebar)
+                    .child(
+                        h_flex()
+                            .min_h(px(58.0))
+                            .px_4()
+                            .gap_3()
+                            .items_center()
+                            .child(Icon::new(IconName::LoaderCircle).xsmall())
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child("Importing now"),
+                            ),
+                    )
+                    .children(categories)
+                    .into_any_element(),
+            );
+        }
+        if imports.history_status == LoadStatus::Loading && imports.histories.is_empty() {
+            cards.push(
+                h_flex()
+                    .w_full()
+                    .min_h(px(64.0))
+                    .px_4()
+                    .gap_3()
+                    .items_center()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .child(Icon::new(IconName::LoaderCircle).xsmall())
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Loading import history"),
+                    )
+                    .into_any_element(),
+            );
+        } else if imports.history_status == LoadStatus::Failed {
+            cards.push(
+                h_flex()
+                    .w_full()
+                    .min_h(px(64.0))
+                    .px_4()
+                    .gap_3()
+                    .items_center()
+                    .justify_between()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(cx.theme().danger.opacity(0.35))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Couldn't load import history"),
+                    )
+                    .child(
+                        Button::new("retry-external-import-history")
+                            .label("Retry")
+                            .small()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.dispatch(Action::RefreshImports, cx);
+                            })),
+                    )
+                    .into_any_element(),
+            );
+        } else if imports.histories.is_empty() && !imports.import_running() {
+            cards.push(
+                div()
+                    .w_full()
+                    .px_4()
+                    .py_4()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("No results recorded")
+                    .into_any_element(),
+            );
+        }
+        for history in imports
+            .histories
+            .into_iter()
+            .take(imports.visible_history_count)
+        {
+            cards.push(self.render_import_history_card(history, cx));
+        }
+        let has_more =
+            self.state.imports.visible_history_count < self.state.imports.histories.len();
+
+        v_flex()
+            .w_full()
+            .max_w(px(760.0))
+            .gap_3()
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("Import history"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Current and previous import results"),
+                    ),
+            )
+            .children(cards)
+            .when(has_more, |history| {
+                history.child(
+                    Button::new("view-more-external-import-history")
+                        .label("View more")
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.dispatch(Action::ShowMoreImportHistory, cx);
+                        })),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn render_import_history_card(
+        &mut self,
+        history: ImportHistory,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let imported = history.successes.len();
+        let failed = history.failures.len();
+        let summary = import_history_summary(imported, failed);
+        let timestamp = import_history_timestamp(history.completed_at_ms);
+        let mut rows = Vec::new();
+        for item_type in ImportItemType::ALL {
+            let successes = history
+                .successes
+                .iter()
+                .filter(|item| item.item_type == item_type)
+                .cloned()
+                .collect::<Vec<_>>();
+            let failures = history
+                .failures
+                .iter()
+                .filter(|item| item.item_type == item_type)
+                .cloned()
+                .collect::<Vec<_>>();
+            if successes.is_empty() && failures.is_empty() {
+                continue;
+            }
+            rows.push(self.render_import_history_category(item_type, successes, failures, cx));
+        }
+        if rows.is_empty() {
+            rows.push(
+                div()
+                    .px_4()
+                    .py_3()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("No results recorded")
+                    .into_any_element(),
+            );
+        }
+        v_flex()
+            .w_full()
+            .overflow_hidden()
+            .rounded_lg()
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().sidebar)
+            .child(
+                v_flex()
+                    .px_4()
+                    .py_3()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(timestamp),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(summary),
+                    ),
+            )
+            .children(rows)
+            .into_any_element()
+    }
+
+    fn render_import_history_category(
+        &mut self,
+        item_type: ImportItemType,
+        successes: Vec<ImportItemSuccess>,
+        failures: Vec<ImportItemFailure>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let imported = successes.len();
+        let failed = failures.len();
+        let summary = import_history_summary(imported, failed);
+        let detail = if !failures.is_empty() {
+            format!("Couldn't import {}", item_type.label().to_ascii_lowercase())
+        } else if item_type == ImportItemType::Commands {
+            "Converted into Codex skills".to_owned()
+        } else if item_type == ImportItemType::Hooks {
+            "Manage imported hooks in Hooks settings".to_owned()
+        } else {
+            successes
+                .iter()
+                .map(import_success_label)
+                .take(3)
+                .collect::<Vec<_>>()
+                .join(" · ")
+        };
+        let action = self.render_import_history_action(item_type, &successes, cx);
+        v_flex()
+            .w_full()
+            .px_4()
+            .py_3()
+            .gap_1()
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .child(
+                h_flex()
+                    .gap_3()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        v_flex()
+                            .min_w_0()
+                            .gap_1()
+                            .child(div().text_sm().child(item_type.label()))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(if failed > 0 {
+                                        cx.theme().danger
+                                    } else {
+                                        cx.theme().muted_foreground
+                                    })
+                                    .child(summary),
+                            ),
+                    )
+                    .when_some(action, |row, action| row.child(action)),
+            )
+            .when(!detail.is_empty(), |row| {
+                row.child(
+                    div()
+                        .text_xs()
+                        .text_color(if failed > 0 {
+                            cx.theme().danger
+                        } else {
+                            cx.theme().muted_foreground
+                        })
+                        .child(detail),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn render_import_history_action(
+        &mut self,
+        item_type: ImportItemType,
+        successes: &[ImportItemSuccess],
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if successes.is_empty() {
+            return None;
+        }
+        match item_type {
+            ImportItemType::Skills | ImportItemType::Commands => Some(
+                Button::new(SharedString::from(format!(
+                    "open-imported-skills-{}",
+                    item_type.label()
+                )))
+                .label("Open in Skills")
+                .small()
+                .ghost()
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.open_skills(window, cx);
+                }))
+                .into_any_element(),
+            ),
+            ImportItemType::Plugins => Some(
+                Button::new("open-imported-plugins")
+                    .label("Open plugin")
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_plugins_settings(window, cx);
+                    }))
+                    .into_any_element(),
+            ),
+            ImportItemType::McpServerConfig => Some(
+                Button::new("open-imported-mcp-settings")
+                    .label("Open MCP settings")
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_mcp_settings(window, cx);
+                    }))
+                    .into_any_element(),
+            ),
+            ImportItemType::Hooks => Some(
+                Button::new("open-imported-hooks")
+                    .label("Manage imported hooks")
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.open_settings_section(SettingsSection::Hooks, cx);
+                    }))
+                    .into_any_element(),
+            ),
+            ImportItemType::Sessions => successes
+                .iter()
+                .find_map(|success| success.target.clone())
+                .map(|task_id| {
+                    Button::new("open-imported-chat")
+                        .label("Open chat")
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.navigate(MainRoute::Tasks, cx);
+                            this.dispatch(Action::SelectTask(task_id.clone()), cx);
+                        }))
+                        .into_any_element()
+                }),
+            ImportItemType::AgentsMd
+            | ImportItemType::Config
+            | ImportItemType::Subagents
+            | ImportItemType::Memory => None,
+        }
+    }
+
     fn render_git_settings(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let preferences = self.state.git_preferences.clone();
         let commit_instructions_changed = self.git_commit_instructions.read(cx).value().as_ref()
@@ -34906,6 +35723,333 @@ impl WorkspaceView {
             .into_any_element()
     }
 
+    fn render_import_providers_modal(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let providers = self.state.imports.providers.clone();
+        let selected_count = providers
+            .iter()
+            .filter(|provider| provider.selected())
+            .count();
+        let mentions_claude = providers.iter().any(|provider| {
+            matches!(
+                provider.provider,
+                ImportProvider::ClaudeCode | ImportProvider::ClaudeCowork
+            )
+        });
+        let rows = providers
+            .into_iter()
+            .map(|provider| {
+                let kind = provider.provider;
+                let checked = provider.selected();
+                let count = provider.items.len();
+                h_flex()
+                    .min_h(px(64.0))
+                    .px_4()
+                    .gap_4()
+                    .items_center()
+                    .justify_between()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        v_flex()
+                            .min_w_0()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .child(kind.label()),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(format!(
+                                        "{count} detected item{}",
+                                        if count == 1 { "" } else { "s" }
+                                    )),
+                            ),
+                    )
+                    .child(
+                        Switch::new(SharedString::from(format!(
+                            "external-import-provider-{}",
+                            kind.migration_source()
+                        )))
+                        .small()
+                        .checked(checked)
+                        .tooltip(format!("Import {}", kind.label()))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.dispatch(Action::ToggleImportProvider(kind), cx);
+                        })),
+                    )
+                    .into_any_element()
+            })
+            .collect::<Vec<_>>();
+        let note = if mentions_claude {
+            "Your existing Claude setup won’t be affected. Standard Claude Chat data cannot be imported."
+        } else {
+            "Your existing app setup won’t be affected"
+        };
+
+        v_flex()
+            .w(px(modal_surface_width(self.shell_viewport_width, 440.0)))
+            .max_h(px(modal_surface_max_height(
+                self.shell_viewport_height,
+                640.0,
+            )))
+            .rounded(px(20.0))
+            .bg(cx.theme().popover)
+            .shadow_xl()
+            .overflow_hidden()
+            .occlude()
+            .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+            .child(
+                v_flex()
+                    .px_5()
+                    .pt_5()
+                    .pb_4()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("Import from other AI apps"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Bring over your setup, projects, and recent chats"),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .px_5()
+                    .pb_4()
+                    .gap_2()
+                    .child(
+                        div()
+                            .px_1()
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Apps found"),
+                    )
+                    .child(
+                        v_flex()
+                            .overflow_hidden()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .children(rows),
+                    )
+                    .child(
+                        div()
+                            .px_1()
+                            .pt_2()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(note),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .px_5()
+                    .py_4()
+                    .gap_2()
+                    .justify_end()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        Button::new("cancel-external-import-providers")
+                            .label("Cancel")
+                            .ghost()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.close_workspace_modal(cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("continue-external-import-providers")
+                            .label("Continue")
+                            .primary()
+                            .disabled(selected_count == 0)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.workspace_modal = Some(WorkspaceModal::ImportItems);
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_import_items_modal(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let providers = self.state.imports.providers.clone();
+        let selected_count = self.state.imports.selected_item_count();
+        let mut groups = Vec::new();
+        for provider in providers {
+            if !provider.selected() {
+                continue;
+            }
+            let kind = provider.provider;
+            let rows = provider
+                .items
+                .into_iter()
+                .enumerate()
+                .map(|(index, item)| {
+                    let view = cx.entity().downgrade();
+                    let checked = item.selected;
+                    let description = item.description.clone();
+                    let cwd = item.cwd.clone().filter(|cwd| !cwd.trim().is_empty());
+                    v_flex()
+                        .min_h(px(58.0))
+                        .px_4()
+                        .py_3()
+                        .gap_1()
+                        .border_t_1()
+                        .border_color(cx.theme().border)
+                        .child(
+                            Checkbox::new(SharedString::from(format!(
+                                "external-import-item-{}-{index}",
+                                kind.migration_source()
+                            )))
+                            .label(item.item_type.label())
+                            .checked(checked)
+                            .on_click(move |_, _, cx| {
+                                let _ = view.update(cx, |this, cx| {
+                                    this.dispatch(
+                                        Action::ToggleImportItem {
+                                            provider: kind,
+                                            index,
+                                        },
+                                        cx,
+                                    );
+                                });
+                            }),
+                        )
+                        .child(
+                            div()
+                                .pl_7()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(description),
+                        )
+                        .when_some(cwd, |row, cwd| {
+                            row.child(
+                                div()
+                                    .pl_7()
+                                    .text_xs()
+                                    .font_family(cx.theme().mono_font_family.clone())
+                                    .text_color(cx.theme().muted_foreground)
+                                    .truncate()
+                                    .child(cwd),
+                            )
+                        })
+                        .into_any_element()
+                })
+                .collect::<Vec<_>>();
+            groups.push(
+                v_flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .px_1()
+                            .text_xs()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(cx.theme().muted_foreground)
+                            .child(kind.label()),
+                    )
+                    .child(
+                        v_flex()
+                            .overflow_hidden()
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .children(rows),
+                    )
+                    .into_any_element(),
+            );
+        }
+
+        v_flex()
+            .w(px(modal_surface_width(self.shell_viewport_width, 560.0)))
+            .h(px(modal_surface_max_height(
+                self.shell_viewport_height,
+                700.0,
+            )))
+            .rounded(px(20.0))
+            .bg(cx.theme().popover)
+            .shadow_xl()
+            .overflow_hidden()
+            .occlude()
+            .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+            .child(
+                v_flex()
+                    .px_5()
+                    .pt_5()
+                    .pb_4()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("Select items to import"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Import all your work or handpick what to bring over"),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .px_5()
+                    .pb_4()
+                    .gap_4()
+                    .children(groups)
+                    .child(
+                        div()
+                            .px_1()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Your existing app setup will not be affected"),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .px_5()
+                    .py_4()
+                    .gap_2()
+                    .justify_between()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        Button::new("back-external-import-items")
+                            .label("Back")
+                            .ghost()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.workspace_modal = Some(WorkspaceModal::ImportProviders);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("confirm-external-import-items")
+                            .label("Import to codexRS")
+                            .primary()
+                            .disabled(selected_count == 0)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.workspace_modal = None;
+                                this.dispatch(Action::StartImport, cx);
+                            })),
+                    ),
+            )
+            .into_any_element()
+    }
+
     fn render_workspace_modal(
         &mut self,
         modal: WorkspaceModal,
@@ -34927,6 +36071,14 @@ impl WorkspaceView {
             }
             WorkspaceModal::ChatMemories => {
                 let panel = self.render_chat_memories_modal(cx);
+                self.render_workspace_modal_overlay(panel, true, cx)
+            }
+            WorkspaceModal::ImportProviders => {
+                let panel = self.render_import_providers_modal(cx);
+                self.render_workspace_modal_overlay(panel, true, cx)
+            }
+            WorkspaceModal::ImportItems => {
+                let panel = self.render_import_items_modal(cx);
                 self.render_workspace_modal_overlay(panel, true, cx)
             }
             WorkspaceModal::ResetMemories => {
@@ -35171,6 +36323,8 @@ impl WorkspaceView {
             WorkspaceModal::PendingWorktreeFork
             | WorkspaceModal::ChatMemories
             | WorkspaceModal::ResetMemories
+            | WorkspaceModal::ImportProviders
+            | WorkspaceModal::ImportItems
             | WorkspaceModal::KeyboardShortcuts
             | WorkspaceModal::ResetKeyboardShortcuts
             | WorkspaceModal::ProcessManager
@@ -36742,6 +37896,54 @@ fn relative_time(updated_at: i64) -> String {
         86_400..=604_799 => format!("{}d", elapsed / 86_400),
         _ => format!("{}w", elapsed / 604_800),
     }
+}
+
+fn import_category_summary<'a>(items: impl Iterator<Item = &'a ImportMigrationItem>) -> String {
+    let item_types = items.map(|item| item.item_type).collect::<HashSet<_>>();
+    ImportItemType::ALL
+        .into_iter()
+        .filter(|item_type| item_types.contains(item_type))
+        .map(|item_type| item_type.label())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn import_last_imported_label(completed_at_ms: i64) -> String {
+    let relative = relative_time(completed_at_ms.saturating_div(1_000));
+    if relative.is_empty() {
+        "Last import recorded".to_owned()
+    } else if relative == "now" {
+        "Last imported just now".to_owned()
+    } else {
+        format!("Last imported {relative} ago")
+    }
+}
+
+fn import_history_timestamp(completed_at_ms: i64) -> String {
+    Local
+        .timestamp_millis_opt(completed_at_ms)
+        .single()
+        .map(|timestamp| timestamp.format("%b %-d, %Y, %-I:%M %p").to_string())
+        .unwrap_or_else(|| "Completed import".to_owned())
+}
+
+fn import_history_summary(imported: usize, failed: usize) -> String {
+    match (imported, failed) {
+        (0, 0) => "No results recorded".to_owned(),
+        (0, failed) => format!("{failed} did not import",),
+        (imported, 0) => format!("{imported} imported"),
+        (imported, failed) => format!("{imported} imported · {failed} did not import"),
+    }
+}
+
+fn import_success_label(success: &ImportItemSuccess) -> String {
+    success
+        .target
+        .as_ref()
+        .or(success.source.as_ref())
+        .or(success.cwd.as_ref())
+        .cloned()
+        .unwrap_or_else(|| "Imported item".to_owned())
 }
 
 fn goal_elapsed_seconds(goal: &codex_core::ThreadGoal) -> i64 {
@@ -39429,6 +40631,9 @@ fn settings_section_matches(section: SettingsSection, raw_query: &str) -> bool {
             "keyboard shortcuts hotkeys key bindings commands customize"
         }
         SettingsSection::Usage => "usage billing account plan credits limits login",
+        SettingsSection::Import => {
+            "import migration migrate claude code cowork cursor setup projects chats sessions plugins skills"
+        }
         SettingsSection::Configuration => {
             "configuration config approval policy sandbox network access project user admin coding"
         }
@@ -41610,6 +42815,10 @@ mod tests {
         assert!(settings_section_matches(
             SettingsSection::Usage,
             "billing credits"
+        ));
+        assert!(settings_section_matches(
+            SettingsSection::Import,
+            "cursor migration"
         ));
         assert!(settings_section_matches(
             SettingsSection::Configuration,
