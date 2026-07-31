@@ -8002,7 +8002,7 @@ impl WorkspaceView {
 
         let mut history_truncated = false;
         if let Some(cursor) = timeline.next_cursor.clone() {
-            let can_request_more = timeline.items.len() < MAX_TIMELINE_ITEMS
+            let can_request_more = timeline.items().len() < MAX_TIMELINE_ITEMS
                 && matches!(self.state.connection, ConnectionStatus::Online)
                 && self
                     .pending_conversation_markdown_copy
@@ -8024,7 +8024,7 @@ impl WorkspaceView {
             .iter()
             .find(|task| task.id == task_id)
             .and_then(|task| {
-                render_conversation_markdown(&task.title, &timeline.items, history_truncated)
+                render_conversation_markdown(&task.title, timeline.items(), history_truncated)
             });
         self.pending_conversation_markdown_copy = None;
         if let Some(markdown) = markdown {
@@ -10602,7 +10602,7 @@ impl WorkspaceView {
         let Some(timeline) = self.state.timelines.get(task_id) else {
             return ThreadFindMatches::default();
         };
-        find_timeline_matches(&timeline.items, &query)
+        find_timeline_matches(timeline.items(), &query)
     }
 
     fn refresh_thread_find_active(&mut self, preserve_active: bool, cx: &mut Context<Self>) {
@@ -10615,7 +10615,7 @@ impl WorkspaceView {
             let timeline = timeline?;
             matches.matches.iter().position(|matched| {
                 timeline
-                    .items
+                    .items()
                     .get(matched.item_index)
                     .is_some_and(|item| item.id == active.item_id)
                     && matched.surface == active.surface
@@ -10627,7 +10627,7 @@ impl WorkspaceView {
             .and_then(|position| matches.matches.get(position))
             .or_else(|| matches.matches.first())
             .and_then(|matched| {
-                let item = timeline?.items.get(matched.item_index)?;
+                let item = timeline?.items().get(matched.item_index)?;
                 Some((
                     ThreadFindActiveMatch {
                         item_id: item.id.clone(),
@@ -10717,9 +10717,9 @@ impl WorkspaceView {
             LoadStatus::Ready => {}
         }
 
-        let item_count = timeline.items.len();
+        let item_count = timeline.items().len();
         let next_cursor = timeline.next_cursor.clone();
-        let matches_capped = find_timeline_matches(&timeline.items, &query).is_capped;
+        let matches_capped = find_timeline_matches(timeline.items(), &query).is_capped;
         self.refresh_thread_find_active(true, cx);
         if matches_capped {
             self.pending_thread_find_history_load = None;
@@ -10789,7 +10789,7 @@ impl WorkspaceView {
         let active_position = self.thread_find_active_match.as_ref().and_then(|active| {
             matches.matches.iter().position(|matched| {
                 timeline
-                    .items
+                    .items()
                     .get(matched.item_index)
                     .is_some_and(|item| item.id == active.item_id)
                     && matched.surface == active.surface
@@ -10803,7 +10803,7 @@ impl WorkspaceView {
             (None, true) => 0,
         };
         let matched = &matches.matches[position];
-        let Some(item) = timeline.items.get(matched.item_index) else {
+        let Some(item) = timeline.items().get(matched.item_index) else {
             return;
         };
         self.thread_find_active_match = Some(ThreadFindActiveMatch {
@@ -10858,7 +10858,7 @@ impl WorkspaceView {
             let timeline = self.state.timelines.get(task_id)?;
             matches.matches.iter().position(|matched| {
                 timeline
-                    .items
+                    .items()
                     .get(matched.item_index)
                     .is_some_and(|item| item.id == active.item_id)
                     && matched.surface == active.surface
@@ -12113,42 +12113,51 @@ impl WorkspaceView {
         let updated_at = relative_time(task.updated_at);
         let forked = task.forked_from_id.is_some();
 
-        h_flex()
-            .id(SharedString::from(format!("task-{}", task.id)))
+        Button::new(SharedString::from(format!("task-{}", task.id)))
+            .w_full()
             .h(px(38.0))
             .px_2()
             .gap_2()
             .items_center()
+            .justify_start()
             .rounded_md()
             .when(pointer_cursors_enabled(cx), |element| {
                 element.cursor_pointer()
             })
-            .when(selected, |item| item.bg(cx.theme().sidebar_accent))
-            .when(!selected, |item| {
-                item.hover(|style| style.bg(cx.theme().list_hover))
-            })
+            .custom(
+                ButtonCustomVariant::new(cx)
+                    .hover(cx.theme().list_hover)
+                    .active(cx.theme().sidebar_accent),
+            )
+            .selected(selected)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.dispatch(Action::SelectTask(task_id.clone()), cx);
                 this.close_narrow_sidebar();
             }))
-            .child(Icon::new(status_icon).xsmall().text_color(status_color))
-            .child(div().flex_1().min_w_0().text_sm().truncate().child(title))
-            .when(forked, |row| {
-                row.child(
-                    Icon::new(IconName::ExternalLink)
-                        .xsmall()
-                        .text_color(cx.theme().muted_foreground),
-                )
-            })
-            .when(!updated_at.is_empty(), |row| {
-                row.child(
-                    div()
-                        .flex_none()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(updated_at),
-                )
-            })
+            .child(
+                h_flex()
+                    .w_full()
+                    .gap_2()
+                    .items_center()
+                    .child(Icon::new(status_icon).xsmall().text_color(status_color))
+                    .child(div().flex_1().min_w_0().text_sm().truncate().child(title))
+                    .when(forked, |row| {
+                        row.child(
+                            Icon::new(IconName::ExternalLink)
+                                .xsmall()
+                                .text_color(cx.theme().muted_foreground),
+                        )
+                    })
+                    .when(!updated_at.is_empty(), |row| {
+                        row.child(
+                            div()
+                                .flex_none()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(updated_at),
+                        )
+                    }),
+            )
             .context_menu(move |menu, window, cx| {
                 Self::task_actions_menu(
                     menu,
@@ -14766,7 +14775,7 @@ impl WorkspaceView {
             .get(&task_id)
             .map(|timeline| {
                 timeline
-                    .items
+                    .items()
                     .iter()
                     .map(|item| (item.id.clone(), item.kind))
                     .collect::<Vec<_>>()
@@ -15029,7 +15038,7 @@ impl WorkspaceView {
                                             .state
                                             .timelines
                                             .get(&task_id_for_list)
-                                            .and_then(|timeline| timeline.items.get(index))
+                                            .and_then(|timeline| timeline.items().get(index))
                                             .is_some_and(|item: &TimelineItem| {
                                                 this.thread_find_active_match
                                                     .as_ref()
@@ -15101,7 +15110,7 @@ impl WorkspaceView {
         let Some(timeline) = self.state.timelines.get(task_id) else {
             return div().into_any_element();
         };
-        let Some(mut item) = timeline.items.get(index).cloned() else {
+        let Some(mut item) = timeline.items().get(index).cloned() else {
             return div().into_any_element();
         };
         let thread_find_query = self
@@ -15155,7 +15164,7 @@ impl WorkspaceView {
             return self.render_timeline_activity(task_id, index, item, cx);
         }
         let is_latest_user_message = item.kind == TimelineKind::User
-            && !timeline.items[index.saturating_add(1)..]
+            && !timeline.items()[index.saturating_add(1)..]
                 .iter()
                 .any(|later| later.kind == TimelineKind::User);
         let message_edit = timeline
@@ -15184,7 +15193,7 @@ impl WorkspaceView {
                 goal_state.completed_goal_turn_id.as_deref() == Some(item.turn_id.as_str());
             let is_final_assistant_item = item.kind == TimelineKind::Agent
                 && item.completed
-                && !timeline.items[index.saturating_add(1)..]
+                && !timeline.items()[index.saturating_add(1)..]
                     .iter()
                     .any(|later| {
                         later.kind == TimelineKind::Agent && later.turn_id == item.turn_id
@@ -18592,7 +18601,7 @@ impl WorkspaceView {
                             .get(&approval.task_id)
                             .and_then(|timeline| {
                                 timeline
-                                    .items
+                                    .items()
                                     .iter()
                                     .find(|item| item.id == context.item_id)
                             });

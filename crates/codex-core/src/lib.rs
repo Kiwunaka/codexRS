@@ -1119,7 +1119,8 @@ impl ContextWindowUsage {
 pub struct TimelineState {
     pub status: LoadStatus,
     pub generation: u64,
-    pub items: Vec<TimelineItem>,
+    items: Vec<TimelineItem>,
+    item_indices: HashMap<String, usize>,
     pub next_cursor: Option<String>,
     pub active_turn_id: Option<String>,
     pub interrupt_pending: bool,
@@ -1138,6 +1139,7 @@ impl Default for TimelineState {
             status: LoadStatus::Idle,
             generation: 0,
             items: Vec::new(),
+            item_indices: HashMap::new(),
             next_cursor: None,
             active_turn_id: None,
             interrupt_pending: false,
@@ -1188,6 +1190,33 @@ pub struct TurnDiffState {
 }
 
 impl TimelineState {
+    fn rebuild_item_indices(&mut self) {
+        let mut item_indices = HashMap::with_capacity(self.items.len());
+        for (index, item) in self.items.iter().enumerate() {
+            item_indices.entry(item.id.clone()).or_insert(index);
+        }
+        self.item_indices = item_indices;
+    }
+
+    fn item_index(&self, item_id: &str) -> Option<usize> {
+        self.item_indices.get(item_id).copied()
+    }
+
+    fn trim_items(&mut self, limit: usize) -> bool {
+        let overflow = self.items.len().saturating_sub(limit);
+        if overflow == 0 {
+            return false;
+        }
+        self.items.drain(..overflow);
+        self.rebuild_item_indices();
+        true
+    }
+
+    #[must_use]
+    pub fn items(&self) -> &[TimelineItem] {
+        &self.items
+    }
+
     #[must_use]
     pub fn output_artifacts(&self) -> Vec<OutputArtifact> {
         let mut seen = HashSet::new();
@@ -8421,7 +8450,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             } else {
                 timeline.items = items;
             }
-            trim_front(&mut timeline.items, MAX_TIMELINE_ITEMS);
+            if !timeline.trim_items(MAX_TIMELINE_ITEMS) {
+                timeline.rebuild_item_indices();
+            }
             timeline.next_cursor = next_cursor;
             timeline.status = LoadStatus::Ready;
             Vec::new()
@@ -8760,6 +8791,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 .is_some_and(|edit| edit.turn_id == turn_id)
             {
                 timeline.items.retain(|item| item.turn_id != turn_id);
+                timeline.rebuild_item_indices();
                 timeline.message_edit = None;
             }
             Vec::new()
@@ -10715,7 +10747,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 timeline.retryable_turn = None;
                 timeline.safety_buffering = None;
             }
-            if let Some(item) = timeline.items.iter_mut().find(|item| item.id == item_id) {
+            if let Some(index) = timeline.item_index(&item_id) {
+                let item = &mut timeline.items[index];
                 if item.kind == TimelineKind::Command {
                     append_bounded(
                         item.detail.get_or_insert_default(),
@@ -10748,7 +10781,11 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     edit_supported: false,
                     completed: false,
                 });
-                trim_front(&mut timeline.items, MAX_TIMELINE_ITEMS);
+                if !timeline.trim_items(MAX_TIMELINE_ITEMS) {
+                    let index = timeline.items.len() - 1;
+                    let item_id = timeline.items[index].id.clone();
+                    timeline.item_indices.insert(item_id, index);
+                }
             }
             Vec::new()
         }
@@ -10763,21 +10800,22 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             if item.kind == TimelineKind::ContextCompaction && item.completed {
                 timeline.compaction_in_flight = false;
             }
-            if let Some(existing) = timeline
-                .items
-                .iter_mut()
-                .find(|existing| existing.id == item.id)
-            {
-                *existing = item;
+            if let Some(index) = timeline.item_index(&item.id) {
+                timeline.items[index] = item;
             } else {
                 timeline.items.push(item);
-                trim_front(&mut timeline.items, MAX_TIMELINE_ITEMS);
+                if !timeline.trim_items(MAX_TIMELINE_ITEMS) {
+                    let index = timeline.items.len() - 1;
+                    let item_id = timeline.items[index].id.clone();
+                    timeline.item_indices.insert(item_id, index);
+                }
             }
             Vec::new()
         }
         Action::TimelineItemCompleted { task_id, item_id } => {
             let timeline = state.timelines.entry(task_id).or_default();
-            if let Some(item) = timeline.items.iter_mut().find(|item| item.id == item_id) {
+            if let Some(index) = timeline.item_index(&item_id) {
+                let item = &mut timeline.items[index];
                 item.completed = true;
                 if item.kind == TimelineKind::ContextCompaction {
                     timeline.compaction_in_flight = false;
@@ -15007,13 +15045,6 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
     }
 }
 
-fn trim_front<T>(items: &mut Vec<T>, limit: usize) {
-    let overflow = items.len().saturating_sub(limit);
-    if overflow > 0 {
-        items.drain(..overflow);
-    }
-}
-
 fn append_bounded(target: &mut String, delta: &str, limit: usize) {
     if target.len() >= limit {
         return;
@@ -15888,9 +15919,9 @@ mod tests {
         IntegratedTerminalShell, KeyboardShortcutPreferences, KeyboardShortcutUpdateTarget,
         LoadStatus, LocalProjectSummary, MAX_BROWSER_DOWNLOADS, MAX_COMPOSER_BYTES,
         MAX_GIT_DIFF_BYTES, MAX_GIT_INSTRUCTIONS_BYTES, MAX_GIT_SHA_BYTES, MAX_PLUGIN_DETAIL_ITEMS,
-        MAX_TURN_DIFF_BYTES, MainRoute, MarketplaceManageTab, MarketplaceSectionFilter,
-        MarketplaceSourceCard, MarketplaceTab, MarketplaceUpgradeFailure, McpAuthStatus,
-        McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
+        MAX_TIMELINE_ITEMS, MAX_TURN_DIFF_BYTES, MainRoute, MarketplaceManageTab,
+        MarketplaceSectionFilter, MarketplaceSourceCard, MarketplaceTab, MarketplaceUpgradeFailure,
+        McpAuthStatus, McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
         McpElicitationContent, McpElicitationDecision, McpElicitationValue, McpFormElicitation,
         McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpFormOption, McpFormStringFormat,
         McpResourceCard, McpResourceContentCard, McpServerCard, McpServerDraft,
@@ -18704,7 +18735,7 @@ mod tests {
                 turn_id: "turn-1".to_owned(),
             },
         );
-        assert!(state.timelines["t1"].items.is_empty());
+        assert!(state.timelines["t1"].items().is_empty());
         assert!(state.timelines["t1"].message_edit.is_none());
     }
 
@@ -19439,12 +19470,140 @@ mod tests {
         let Some(item) = state
             .timelines
             .get("t1")
-            .and_then(|timeline| timeline.items.first())
+            .and_then(|timeline| timeline.items().first())
         else {
             panic!("command output should create one timeline item");
         };
         assert_eq!(item.text, "Running command");
         assert_eq!(item.detail.as_deref(), Some("first line\nsecond line"));
+    }
+
+    #[test]
+    fn timeline_deltas_update_loaded_items_after_limit_trim() {
+        let mut state = AppState::default();
+        let items = (0..MAX_TIMELINE_ITEMS)
+            .map(|index| TimelineItem {
+                id: format!("item-{index}"),
+                turn_id: "turn-1".to_owned(),
+                kind: TimelineKind::Agent,
+                text: String::new(),
+                detail: None,
+                process_id: None,
+                memory_citations: Vec::new(),
+                sources: Vec::new(),
+                attachments: Vec::new(),
+                output_artifacts: Vec::new(),
+                edit_supported: false,
+                completed: false,
+            })
+            .collect();
+        reduce(
+            &mut state,
+            Action::TimelineLoaded {
+                task_id: "t1".to_owned(),
+                generation: 0,
+                items,
+                next_cursor: None,
+                append: false,
+            },
+        );
+
+        reduce(
+            &mut state,
+            Action::TimelineDelta {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                item_id: "item-1999".to_owned(),
+                kind: TimelineKind::Agent,
+                delta: " updated".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::TimelineDelta {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-2".to_owned(),
+                item_id: "new-item".to_owned(),
+                kind: TimelineKind::Agent,
+                delta: "new".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::TimelineDelta {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-3".to_owned(),
+                item_id: "item-0".to_owned(),
+                kind: TimelineKind::Agent,
+                delta: "restored".to_owned(),
+            },
+        );
+
+        let timeline = &state.timelines["t1"];
+        assert_eq!(timeline.items().len(), MAX_TIMELINE_ITEMS);
+        assert_eq!(
+            timeline
+                .items()
+                .iter()
+                .find(|item| item.id == "item-1999")
+                .map(|item| item.text.as_str()),
+            Some(" updated")
+        );
+        assert!(!timeline.items().iter().any(|item| item.id == "item-1"));
+        assert_eq!(
+            timeline.items().last().map(|item| item.id.as_str()),
+            Some("item-0")
+        );
+        assert_eq!(
+            timeline.items().last().map(|item| item.text.as_str()),
+            Some("restored")
+        );
+    }
+
+    #[test]
+    fn timeline_delta_updates_the_first_duplicate_item_id() {
+        let mut state = AppState::default();
+        let first = TimelineItem {
+            id: "duplicate".to_owned(),
+            turn_id: "turn-1".to_owned(),
+            kind: TimelineKind::Agent,
+            text: "first".to_owned(),
+            detail: None,
+            process_id: None,
+            memory_citations: Vec::new(),
+            sources: Vec::new(),
+            attachments: Vec::new(),
+            output_artifacts: Vec::new(),
+            edit_supported: false,
+            completed: false,
+        };
+        let mut second = first.clone();
+        second.text = "second".to_owned();
+        reduce(
+            &mut state,
+            Action::TimelineLoaded {
+                task_id: "t1".to_owned(),
+                generation: 0,
+                items: vec![first, second],
+                next_cursor: None,
+                append: false,
+            },
+        );
+
+        reduce(
+            &mut state,
+            Action::TimelineDelta {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                item_id: "duplicate".to_owned(),
+                kind: TimelineKind::Agent,
+                delta: " updated".to_owned(),
+            },
+        );
+
+        let items = state.timelines["t1"].items();
+        assert_eq!(items[0].text, "first updated");
+        assert_eq!(items[1].text, "second");
     }
 
     #[test]
