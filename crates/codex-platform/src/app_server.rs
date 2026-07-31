@@ -50,11 +50,17 @@ use codex_protocol::{
     decode_result, encode_error_response, encode_json_line, encode_success_response,
     encode_unsupported_request, read_bounded_frame,
 };
-use crossbeam_channel::{Receiver as CrossbeamReceiver, Sender as CrossbeamSender, TrySendError};
+use crossbeam_channel::{
+    Receiver as CrossbeamReceiver, SendTimeoutError, Sender as CrossbeamSender, TrySendError,
+};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+#[cfg(unix)]
+use rustix::process::{Pid, Signal, kill_process_group};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
 #[cfg(windows)]
@@ -1575,18 +1581,54 @@ fn handle_routed_message(
         }
         IncomingMessage::Notification { method, params } => {
             publish_drop_count(events, dropped_notifications);
-            match events.try_send(AppServerEvent::Notification { method, params }) {
-                Ok(()) => {}
-                Err(TrySendError::Full(_)) => {
-                    *dropped_notifications = dropped_notifications.saturating_add(1);
-                }
-                Err(TrySendError::Disconnected(_)) => {
-                    return Err(AppServerError::TransportClosed);
-                }
-            }
+            publish_notification(method, params, events, dropped_notifications)?;
         }
     }
     Ok(())
+}
+
+fn publish_notification(
+    method: String,
+    params: Value,
+    events: &CrossbeamSender<AppServerEvent>,
+    dropped_notifications: &mut usize,
+) -> Result<(), AppServerError> {
+    let event = AppServerEvent::Notification { method, params };
+    if notification_requires_resync(&event) {
+        return events
+            .send_timeout(event, EVENT_BACKPRESSURE_TIMEOUT)
+            .map_err(|error| match error {
+                SendTimeoutError::Timeout(_) => AppServerError::EventQueueOverloaded,
+                SendTimeoutError::Disconnected(_) => AppServerError::TransportClosed,
+            });
+    }
+
+    match events.try_send(event) {
+        Ok(()) => Ok(()),
+        Err(TrySendError::Full(_)) => {
+            *dropped_notifications = dropped_notifications.saturating_add(1);
+            Ok(())
+        }
+        Err(TrySendError::Disconnected(_)) => Err(AppServerError::TransportClosed),
+    }
+}
+
+fn notification_requires_resync(event: &AppServerEvent) -> bool {
+    matches!(
+        event,
+        AppServerEvent::Notification { method, .. }
+            if matches!(
+                method.as_str(),
+                "turn/started"
+                    | "item/started"
+                    | "item/agentMessage/delta"
+                    | "item/plan/delta"
+                    | "item/reasoning/summaryTextDelta"
+                    | "item/reasoning/textDelta"
+                    | "item/completed"
+                    | "turn/completed"
+            )
+    )
 }
 
 fn publish_drop_count(events: &CrossbeamSender<AppServerEvent>, dropped_notifications: &mut usize) {
@@ -1641,20 +1683,31 @@ fn routed_stdout_reader(
             Ok(Some(frame)) => {
                 let message = decode_incoming(&frame);
                 let terminal = message.is_err();
-                if sender.send(RoutedReaderEvent::Message(message)).is_err() || terminal {
+                if !send_routed_reader_event(&sender, RoutedReaderEvent::Message(message))
+                    || terminal
+                {
                     return;
                 }
             }
             Ok(None) => {
-                let _ = sender.send(RoutedReaderEvent::Eof);
+                let _ = send_routed_reader_event(&sender, RoutedReaderEvent::Eof);
                 return;
             }
             Err(error) => {
-                let _ = sender.send(RoutedReaderEvent::Message(Err(error)));
+                let _ = send_routed_reader_event(&sender, RoutedReaderEvent::Message(Err(error)));
                 return;
             }
         }
     }
+}
+
+fn send_routed_reader_event(
+    sender: &CrossbeamSender<RoutedReaderEvent>,
+    event: RoutedReaderEvent,
+) -> bool {
+    sender
+        .send_timeout(event, EVENT_BACKPRESSURE_TIMEOUT)
+        .is_ok()
 }
 
 fn add_interleaved(current: usize) -> Result<usize, AppServerError> {
@@ -1725,6 +1778,9 @@ struct ManagedChild {
 
 impl ManagedChild {
     fn spawn(command: &mut Command) -> Result<Self, AppServerError> {
+        #[cfg(unix)]
+        command.process_group(0);
+
         #[cfg(windows)]
         let job = {
             let mut limits = ExtendedLimitInfo::new();
@@ -1799,7 +1855,17 @@ impl ManagedChild {
         }
         #[cfg(not(windows))]
         {
-            let _ = self.child.kill();
+            #[cfg(unix)]
+            let killed_group = i32::try_from(self.child.id())
+                .ok()
+                .and_then(Pid::from_raw)
+                .is_some_and(|pid| kill_process_group(pid, Signal::KILL).is_ok());
+            #[cfg(not(unix))]
+            let killed_group = false;
+
+            if !killed_group {
+                let _ = self.child.kill();
+            }
         }
     }
 }
@@ -1817,8 +1883,16 @@ mod tests {
     use std::env;
     use std::fs;
     use std::path::PathBuf;
+    use std::time::{Duration, Instant};
 
-    use super::{CodexHome, CodexHomeKind, MAX_THREAD_PAGE_LIMIT};
+    use crossbeam_channel::bounded;
+    use serde_json::Value;
+
+    use super::{
+        AppServerError, AppServerEvent, CodexHome, CodexHomeKind, EVENT_BACKPRESSURE_TIMEOUT,
+        MAX_THREAD_PAGE_LIMIT, RoutedReaderEvent, notification_requires_resync,
+        publish_notification, send_routed_reader_event,
+    };
 
     #[test]
     fn configured_home_is_canonicalized_without_reading_its_contents() {
@@ -1840,5 +1914,67 @@ mod tests {
         assert!(home.path().is_absolute());
         assert_eq!(home.kind(), CodexHomeKind::Configured);
         assert_eq!(MAX_THREAD_PAGE_LIMIT, 100);
+    }
+
+    #[test]
+    fn routed_reader_stops_when_its_bounded_queue_is_full() {
+        let (sender, _receiver) = bounded(1);
+        assert!(sender.send(RoutedReaderEvent::Eof).is_ok());
+        let started = Instant::now();
+
+        assert!(!send_routed_reader_event(&sender, RoutedReaderEvent::Eof));
+        assert!(
+            started.elapsed() < EVENT_BACKPRESSURE_TIMEOUT + Duration::from_secs(1),
+            "bounded delivery must not wait indefinitely"
+        );
+    }
+
+    #[test]
+    fn semantic_notifications_require_resync_if_delivery_fails() {
+        for method in [
+            "turn/started",
+            "item/started",
+            "item/agentMessage/delta",
+            "item/plan/delta",
+            "item/reasoning/summaryTextDelta",
+            "item/reasoning/textDelta",
+            "item/completed",
+            "turn/completed",
+        ] {
+            assert!(notification_requires_resync(
+                &AppServerEvent::Notification {
+                    method: method.to_owned(),
+                    params: Value::Null,
+                }
+            ));
+        }
+        assert!(!notification_requires_resync(
+            &AppServerEvent::Notification {
+                method: "item/commandExecution/outputDelta".to_owned(),
+                params: Value::Null,
+            }
+        ));
+    }
+
+    #[test]
+    fn full_event_queue_disconnects_instead_of_dropping_a_semantic_notification() {
+        let (events, _receiver) = bounded(1);
+        assert!(events.send(AppServerEvent::Disconnected).is_ok());
+        let mut dropped_notifications = 0;
+        let started = Instant::now();
+
+        let result = publish_notification(
+            "item/completed".to_owned(),
+            Value::Null,
+            &events,
+            &mut dropped_notifications,
+        );
+
+        assert!(matches!(result, Err(AppServerError::EventQueueOverloaded)));
+        assert_eq!(dropped_notifications, 0);
+        assert!(
+            started.elapsed() < EVENT_BACKPRESSURE_TIMEOUT + Duration::from_secs(1),
+            "bounded delivery must not wait indefinitely"
+        );
     }
 }

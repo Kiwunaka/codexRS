@@ -161,9 +161,9 @@ use codex_protocol::{
     ThreadResumeInitialTurnsPageParams, ThreadResumeParams, ThreadRollbackParams,
     ThreadSearchParams, ThreadSetNameParams, ThreadSettingsUpdateParams, ThreadShellCommandParams,
     ThreadStartParams, ThreadTokenUsageUpdatedNotification, ThreadTurnsListParams,
-    ThreadUnarchiveParams, ToolRequestUserInputAnswer, ToolRequestUserInputParams,
-    ToolRequestUserInputResponse, TurnDiffUpdatedNotification, TurnInterruptParams,
-    TurnStartParams, TurnSteerParams, UserInput,
+    ThreadUnarchiveParams, ThreadUnsubscribeParams, ThreadUnsubscribeResponse,
+    ToolRequestUserInputAnswer, ToolRequestUserInputParams, ToolRequestUserInputResponse,
+    TurnDiffUpdatedNotification, TurnInterruptParams, TurnStartParams, TurnSteerParams, UserInput,
 };
 use codex_storage::{
     BrowserDownloadRecordStatus, MAX_BROWSER_DOWNLOAD_RECORDS, Store, StoredBrowserDownload,
@@ -3095,11 +3095,13 @@ fn run_backend(commands: Receiver<BackendCommand>, events: Sender<Action>) {
                         }
                     }
                     Ok(None) => break,
-                    Err(error) => {
+                    Err(_) => {
                         emit(
                             &events,
-                            Action::SetStatus(format!("app-server event error: {error}")),
+                            Action::SetStatus("app-server event channel closed".to_owned()),
                         );
+                        emit(&events, Action::ConnectionLost);
+                        disconnected = true;
                         break;
                     }
                 }
@@ -8519,8 +8521,12 @@ fn structured_turn_error(status: &str, detail: Option<&str>) -> String {
 }
 
 fn unsubscribe_thread(app_server: &AppServerConnection, thread_id: &str) {
-    let _: Result<Value, _> =
-        app_server.request("thread/unsubscribe", json!({ "threadId": thread_id }));
+    let _: Result<ThreadUnsubscribeResponse, _> = app_server.request(
+        "thread/unsubscribe",
+        ThreadUnsubscribeParams {
+            thread_id: thread_id.to_owned(),
+        },
+    );
 }
 
 fn composer_rich_mention(name: &str, path: &Path) -> String {
@@ -11627,7 +11633,9 @@ fn handle_notification(method: &str, params: Value, events: &Sender<Action>) -> 
                     Action::McpServerAuthenticationCompleted {
                         name: notification.name,
                         success: notification.success,
-                        error: notification.error,
+                        error: notification
+                            .error
+                            .map(|_| "MCP server authentication failed. Try again.".to_owned()),
                     },
                 );
             }
@@ -11641,7 +11649,10 @@ fn handle_notification(method: &str, params: Value, events: &Sender<Action>) -> 
                     Action::McpServerStartupStatusUpdated {
                         name: notification.name,
                         status: map_mcp_startup_state(notification.status),
-                        error: notification.error,
+                        error: notification.error.map(|_| {
+                            "MCP server could not start. Check its configuration and try again."
+                                .to_owned()
+                        }),
                         failure_reason: notification
                             .failure_reason
                             .map(map_mcp_startup_failure_reason),
@@ -17911,8 +17922,8 @@ mod tests {
             json!({
                 "name": "calendar",
                 "threadId": null,
-                "success": true,
-                "error": null
+                "success": false,
+                "error": "provider token=secret"
             }),
             &sender,
         ));
@@ -17923,9 +17934,10 @@ mod tests {
             action,
             Action::McpServerAuthenticationCompleted {
                 name,
-                success: true,
-                error: None,
+                success: false,
+                error: Some(error),
             } if name == "calendar"
+                && error == "MCP server authentication failed. Try again."
         ));
     }
 
@@ -17965,7 +17977,7 @@ mod tests {
                 "threadId": null,
                 "name": "remote",
                 "status": "failed",
-                "error": "OAuth token expired",
+                "error": "OAuth token expired: secret=do-not-expose",
                 "failureReason": "reauthenticationRequired"
             }),
             &sender,
@@ -17982,7 +17994,8 @@ mod tests {
                 failure_reason: Some(
                     McpServerStartupFailureReason::ReauthenticationRequired
                 ),
-            } if name == "remote" && error == "OAuth token expired"
+            } if name == "remote"
+                && error == "MCP server could not start. Check its configuration and try again."
         ));
     }
 

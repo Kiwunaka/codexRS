@@ -1454,6 +1454,25 @@ pub struct ThreadArchiveParams {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ThreadUnsubscribeParams {
+    pub thread_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ThreadUnsubscribeStatus {
+    NotLoaded,
+    NotSubscribed,
+    Unsubscribed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ThreadUnsubscribeResponse {
+    pub status: ThreadUnsubscribeStatus,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ThreadUnarchiveParams {
     pub thread_id: String,
 }
@@ -3336,6 +3355,7 @@ mod tests {
         ThreadRollbackParams, ThreadRollbackResponse, ThreadSearchParams, ThreadSetNameParams,
         ThreadSettingsUpdateParams, ThreadShellCommandParams, ThreadShellCommandResponse,
         ThreadStartParams, ThreadTokenUsageUpdatedNotification, ThreadUnarchiveParams,
+        ThreadUnsubscribeParams, ThreadUnsubscribeResponse, ThreadUnsubscribeStatus,
         ToolRequestUserInputAnswer, ToolRequestUserInputParams, ToolRequestUserInputResponse,
         TurnInterruptParams, TurnStartParams, TurnSteerParams, UserInput, decode_incoming,
         encode_json_line, read_bounded_frame,
@@ -4860,6 +4880,21 @@ mod tests {
             .ok(),
             Some(json!({"threadId": "thread-1"}))
         );
+        assert_eq!(
+            serde_json::to_value(ThreadUnsubscribeParams {
+                thread_id: "thread-1".to_owned(),
+            })
+            .ok(),
+            Some(json!({"threadId": "thread-1"}))
+        );
+        assert!(matches!(
+            serde_json::from_value::<ThreadUnsubscribeResponse>(json!({
+                "status": "unsubscribed"
+            })),
+            Ok(ThreadUnsubscribeResponse {
+                status: ThreadUnsubscribeStatus::Unsubscribed
+            })
+        ));
         assert_eq!(
             serde_json::to_value(ThreadUnarchiveParams {
                 thread_id: "thread-1".to_owned(),
