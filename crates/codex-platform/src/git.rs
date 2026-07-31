@@ -1604,6 +1604,14 @@ fn untracked_diff_with_limit(
                 break;
             }
         }
+        if !input_truncated && !text.is_empty() && !text.ends_with('\n') {
+            push_bounded_text(
+                &mut output,
+                "\\ No newline at end of file\n",
+                limit,
+                &mut output_truncated,
+            );
+        }
     }
     Ok(GitDiff {
         text: output,
@@ -2066,6 +2074,54 @@ mod tests {
         assert!(diff.text.contains("--- /dev/null"));
         assert!(diff.text.contains("+++ b/new file.txt"));
         assert!(diff.text.contains("+first\n+second\n"));
+        Ok(())
+    }
+
+    #[test]
+    fn untracked_text_diff_marks_a_missing_final_newline() -> Result<(), super::GitError> {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| super::GitError::InvalidOutput)?
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "codexrs-untracked-no-final-newline-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir(&root)?;
+        let directory = TemporaryDirectory(root);
+        fs::write(directory.0.join("new file.txt"), "first\nsecond")?;
+
+        let diff = untracked_diff(&directory.0, Path::new("new file.txt"))?;
+
+        assert!(!diff.truncated);
+        assert!(
+            diff.text
+                .ends_with("+first\n+second\n\\ No newline at end of file\n")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn untracked_empty_file_diff_has_no_final_newline_marker() -> Result<(), super::GitError> {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| super::GitError::InvalidOutput)?
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "codexrs-untracked-empty-file-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir(&root)?;
+        let directory = TemporaryDirectory(root);
+        fs::write(directory.0.join("empty.txt"), [])?;
+
+        let diff = untracked_diff(&directory.0, Path::new("empty.txt"))?;
+
+        assert!(!diff.truncated);
+        assert_eq!(
+            diff.text,
+            "diff --git a/empty.txt b/empty.txt\nnew file mode 100644\n--- /dev/null\n+++ b/empty.txt\n"
+        );
         Ok(())
     }
 
