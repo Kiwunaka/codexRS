@@ -1054,7 +1054,7 @@ dependencies = [
  "uiautomation",
  "url",
  "win32job",
- "winsafe",
+ "winsafe 0.0.28",
  "xcap",
 ]
 
@@ -7594,7 +7594,7 @@ dependencies = [
  "either",
  "home",
  "rustix 0.38.44",
- "winsafe",
+ "winsafe 0.0.19",
 ]
 
 [[package]]
@@ -8204,6 +8204,12 @@ name = "winsafe"
 version = "0.0.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d135d17ab770252ad95e9a872d365cf3090e3be864a34ab46f48555993efc904"
+
+[[package]]
+name = "winsafe"
+version = "0.0.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d3922ac07e168376bc6799e7896fc737ddb9538be7533ca44bc3463091db1ad"
 
 [[package]]
 name = "wio"

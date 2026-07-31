@@ -29,7 +29,7 @@ roxmltree = "0.20.0"
 sha2.workspace = true
 uiautomation = { version = "0.25.0", default-features = false, features = ["input", "pattern"] }
 win32job = "2.0.3"
-winsafe = { version = "0.0.19", default-features = false, features = ["gui"] }
+winsafe = { version = "0.0.28", default-features = false, features = ["gui"] }
 xcap = "0.9.7"
 
 [target.'cfg(unix)'.dependencies]
