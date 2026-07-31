@@ -10482,6 +10482,13 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             failed,
         } => {
             let timeline = state.timelines.entry(task_id.clone()).or_default();
+            if timeline
+                .active_turn_id
+                .as_deref()
+                .is_some_and(|active_turn_id| active_turn_id != turn_id)
+            {
+                return Vec::new();
+            }
             let completed_active = timeline.active_turn_id.as_deref() == Some(turn_id.as_str());
             if completed_active {
                 timeline.active_turn_id = None;
@@ -10507,6 +10514,13 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::TurnInterrupted { task_id, turn_id } => {
             let timeline = state.timelines.entry(task_id.clone()).or_default();
+            if timeline
+                .active_turn_id
+                .as_deref()
+                .is_some_and(|active_turn_id| active_turn_id != turn_id)
+            {
+                return Vec::new();
+            }
             let interrupted_active = timeline.active_turn_id.as_deref() == Some(turn_id.as_str());
             if interrupted_active {
                 timeline.active_turn_id = None;
@@ -17636,6 +17650,55 @@ mod tests {
                 .get("t1")
                 .is_some_and(|timeline| !timeline.interrupt_pending)
         );
+    }
+
+    #[test]
+    fn stale_terminal_turn_events_do_not_override_a_new_active_turn() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(
+            &mut state,
+            Action::TurnStarted {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-old".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::TurnStarted {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-current".to_owned(),
+            },
+        );
+        reduce(&mut state, Action::InterruptActiveTurn);
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::TurnCompleted {
+                    task_id: "t1".to_owned(),
+                    turn_id: "turn-old".to_owned(),
+                    failed: false,
+                },
+            )
+            .is_empty()
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::TurnInterrupted {
+                    task_id: "t1".to_owned(),
+                    turn_id: "turn-old".to_owned(),
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.timelines["t1"].active_turn_id.as_deref(),
+            Some("turn-current")
+        );
+        assert!(state.timelines["t1"].interrupt_pending);
+        assert_eq!(state.tasks[0].status, TaskRunStatus::Running);
     }
 
     #[test]
