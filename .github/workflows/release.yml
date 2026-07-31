@@ -20,11 +20,20 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Validate release tag
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          set -euo pipefail
+          CARGO_PKG_VERSION="$(cargo metadata --locked --manifest-path crates/codex-app/Cargo.toml --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "codex-app") | .version')"
+          test -n "${CARGO_PKG_VERSION}"
+          test "${GITHUB_REF_NAME}" = "v${CARGO_PKG_VERSION}"
+
       - name: Install cargo-about
         run: cargo install --locked --features cli --version 0.9.1 cargo-about
 
       - name: Generate license inventory
-        run: cargo about generate about.hbs --output-file THIRD_PARTY_LICENSES.html
+        run: cargo about generate --locked about.hbs --output-file THIRD_PARTY_LICENSES.html
 
       - uses: actions/upload-artifact@v7
         with:
@@ -103,17 +112,17 @@ jobs:
       - name: Patched Markdown renderer
         run: |
           rustfmt --edition 2024 --check third_party/gpui-component/src/text/text_view.rs third_party/gpui-component/src/text/node.rs third_party/gpui-component/src/text/format/markdown.rs
-          cargo clippy --manifest-path third_party/gpui-component/Cargo.toml --target-dir target --lib -- -D warnings
-          cargo test --manifest-path third_party/gpui-component/Cargo.toml --target-dir target source_highlights_preserve_nested_markdown_marks
+          cargo clippy --locked --manifest-path third_party/gpui-component/Cargo.toml --target-dir target --lib -- -D warnings
+          cargo test --locked --manifest-path third_party/gpui-component/Cargo.toml --target-dir target source_highlights_preserve_nested_markdown_marks
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --locked --workspace
 
       - name: Release build
-        run: cargo build --release -p codex-app
+        run: cargo build --locked --release -p codex-app
 
       - name: Package Windows
         if: runner.os == 'Windows'
