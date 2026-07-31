@@ -25,15 +25,21 @@ use codex_core::{
     GitPullRequestProvider, GitPullRequestState, GitReviewCommitState, GitReviewMode, GitState,
     GitWorktreeState, HookCard, HookEventName as CoreHookEventName,
     HookHandlerType as CoreHookHandlerType, HookIssue, HookProjectEntry,
-    HookSource as CoreHookSource, HookTrustStatus as CoreHookTrustStatus, InspectorPane,
-    IntegratedTerminalShell, KEYBOARD_SHORTCUT_COMMAND_IDS, KeyboardShortcutPreferences,
-    LocalProjectSummary, MAX_APPEARANCE_FONT_FAMILY_BYTES, MAX_ATTACHMENT_LABEL_BYTES,
-    MAX_BACKGROUND_TERMINALS, MAX_BROWSER_DOWNLOAD_PATH_BYTES, MAX_BROWSER_PERMISSION_ORIGIN_BYTES,
-    MAX_BROWSER_SITE_PERMISSIONS, MAX_COMPOSER_ATTACHMENTS, MAX_COMPUTER_ALLOWED_APPS,
-    MAX_COMPUTER_APP_ID_BYTES, MAX_FUZZY_FILE_PATH_BYTES, MAX_FUZZY_FILE_QUERY_BYTES,
-    MAX_FUZZY_FILE_RESULTS, MAX_FUZZY_FILE_ROOTS, MAX_GIT_BRANCH_PREFIX_BYTES, MAX_GIT_DIFF_BYTES,
-    MAX_GIT_INSTRUCTIONS_BYTES, MAX_GIT_SHA_BYTES, MAX_HOOK_FIELD_BYTES, MAX_HOOK_ISSUES,
-    MAX_HOOK_ITEMS, MAX_HOOK_PROJECTS, MAX_KEYBOARD_SHORTCUT_ACCELERATOR_BYTES,
+    HookSource as CoreHookSource, HookTrustStatus as CoreHookTrustStatus, ImportHistory,
+    ImportItemFailure, ImportItemSuccess, ImportItemType, ImportMigrationDetails,
+    ImportMigrationItem, ImportPluginMigration, ImportProvider, ImportProviderItems,
+    ImportSessionMigration, ImportStartFailure, ImportTypeResult, ImportedConnectorCandidate,
+    InspectorPane, IntegratedTerminalShell, KEYBOARD_SHORTCUT_COMMAND_IDS,
+    KeyboardShortcutPreferences, LocalProjectSummary, MAX_APPEARANCE_FONT_FAMILY_BYTES,
+    MAX_ATTACHMENT_LABEL_BYTES, MAX_BACKGROUND_TERMINALS, MAX_BROWSER_DOWNLOAD_PATH_BYTES,
+    MAX_BROWSER_PERMISSION_ORIGIN_BYTES, MAX_BROWSER_SITE_PERMISSIONS, MAX_COMPOSER_ATTACHMENTS,
+    MAX_COMPUTER_ALLOWED_APPS, MAX_COMPUTER_APP_ID_BYTES, MAX_FUZZY_FILE_PATH_BYTES,
+    MAX_FUZZY_FILE_QUERY_BYTES, MAX_FUZZY_FILE_RESULTS, MAX_FUZZY_FILE_ROOTS,
+    MAX_GIT_BRANCH_PREFIX_BYTES, MAX_GIT_DIFF_BYTES, MAX_GIT_INSTRUCTIONS_BYTES, MAX_GIT_SHA_BYTES,
+    MAX_HOOK_FIELD_BYTES, MAX_HOOK_ISSUES, MAX_HOOK_ITEMS, MAX_HOOK_PROJECTS,
+    MAX_IMPORT_DETAIL_ITEMS, MAX_IMPORT_FIELD_BYTES, MAX_IMPORT_HISTORY_ENTRIES,
+    MAX_IMPORT_MIGRATION_ITEMS, MAX_IMPORT_RESULTS_PER_HISTORY, MAX_IMPORT_SESSION_AGE_DAYS,
+    MAX_IMPORT_SESSIONS, MAX_KEYBOARD_SHORTCUT_ACCELERATOR_BYTES,
     MAX_KEYBOARD_SHORTCUTS_PER_COMMAND, MAX_LOCAL_PROJECTS, MAX_MCP_FORM_FIELDS,
     MAX_MCP_FORM_IMAGE_DATA_URL_BYTES, MAX_MCP_FORM_OPTIONS, MAX_MCP_FORM_VALUE_BYTES,
     MAX_MCP_SERVER_FIELD_BYTES, MAX_MCP_SERVER_LIST_ITEMS, MAX_PENDING_APPROVALS,
@@ -60,10 +66,10 @@ use codex_core::{
     PullRequestRelationship, PullRequestReviewEvent, PullRequestState, PullRequestSummary,
     ReasoningEffortOption as CoreReasoningEffortOption, ReducedMotionPreference,
     RetryableTurnSubmission, RetryableUserMessage, STANDARD_SERVICE_TIER_ID, ServiceTierOption,
-    SkillCard, SkillScope as CoreSkillScope, TaskRunStatus, TaskSearchResult, TaskSummary,
-    TerminalDockLocation, ThreadGoal as CoreThreadGoal, ThreadGoalStatus as CoreThreadGoalStatus,
-    TimelineCitation, TimelineItem, TimelineKind, TimelineSource, UsageLimitWindow,
-    UserInputAnswers, UserInputOption as CoreUserInputOption,
+    SkillCard, SkillScope as CoreSkillScope, StartedImport, TaskRunStatus, TaskSearchResult,
+    TaskSummary, TerminalDockLocation, ThreadGoal as CoreThreadGoal,
+    ThreadGoalStatus as CoreThreadGoalStatus, TimelineCitation, TimelineItem, TimelineKind,
+    TimelineSource, UsageLimitWindow, UserInputAnswers, UserInputOption as CoreUserInputOption,
     UserInputQuestion as CoreUserInputQuestion, UserInputRequest,
     appearance_code_theme_supports_variant, computer_app_id_matches, is_appearance_code_theme_id,
 };
@@ -110,23 +116,31 @@ use codex_protocol::{
     ConfigMergeStrategy, ConfigReadParams, ConfigReadResponse, ConfigWriteStatus,
     DynamicToolCallOutputContentItem, DynamicToolCallParams, DynamicToolCallResponse,
     DynamicToolFunction, DynamicToolNamespaceTool, DynamicToolSpec, ExecpolicyAmendment,
-    FeedbackUploadParams, FileChangeApprovalDecision, FileChangeRequestApprovalParams,
-    FileChangeRequestApprovalResponse, FileSystemAccessMode, FileSystemPath, FileSystemSpecialPath,
-    FuzzyFileSearchMatchType, FuzzyFileSearchParams, FuzzyFileSearchResponse,
-    FuzzyFileSearchResult as ProtocolFuzzyFileResult, FuzzyFileSearchSessionCompletedNotification,
-    FuzzyFileSearchSessionStartParams, FuzzyFileSearchSessionStopParams,
-    FuzzyFileSearchSessionUpdateParams, FuzzyFileSearchSessionUpdatedNotification,
-    GetAccountParams, GetAuthStatusParams, GitDiffToRemoteParams, HistorySortDirection,
-    HookEventName as ProtocolHookEventName, HookHandlerType as ProtocolHookHandlerType,
-    HookSource as ProtocolHookSource, HookTrustStatus as ProtocolHookTrustStatus, HooksListParams,
-    InitializeCapabilities, ListMcpServerStatusParams, LoginAccountParams, LoginAccountResponse,
-    MarketplaceAddParams, MarketplaceRemoveParams, MarketplaceUpgradeParams,
-    McpAuthStatus as ProtocolMcpAuthStatus, McpElicitationArrayItems,
-    McpElicitationPrimitiveSchema, McpElicitationStringFormat, McpOpenAiElicitationFieldSchema,
-    McpOpenAiImagePickerSchema, McpResourceReadParams, McpServerConfig,
-    McpServerElicitationAction as ProtocolMcpServerElicitationAction, McpServerElicitationRequest,
-    McpServerElicitationRequestParams, McpServerElicitationRequestResponse,
-    McpServerOauthLoginCompletedNotification, McpServerOauthLoginParams,
+    ExternalAgentConfigDetectParams, ExternalAgentConfigImportCompletedNotification,
+    ExternalAgentConfigImportHistoriesReadResponse, ExternalAgentConfigImportItemTypeFailure,
+    ExternalAgentConfigImportItemTypeSuccess, ExternalAgentConfigImportParams,
+    ExternalAgentConfigImportProgressNotification, ExternalAgentConfigImportTypeResult,
+    ExternalAgentConfigMigrationItem, ExternalAgentConfigMigrationItemType,
+    ExternalAgentImportedConnectorCandidate, ExternalAgentImportedConnectorSource,
+    ExternalAgentMigrationDetails, ExternalAgentNamedMigration, ExternalAgentPluginsMigration,
+    ExternalAgentSessionMigration, FeedbackUploadParams, FileChangeApprovalDecision,
+    FileChangeRequestApprovalParams, FileChangeRequestApprovalResponse, FileSystemAccessMode,
+    FileSystemPath, FileSystemSpecialPath, FuzzyFileSearchMatchType, FuzzyFileSearchParams,
+    FuzzyFileSearchResponse, FuzzyFileSearchResult as ProtocolFuzzyFileResult,
+    FuzzyFileSearchSessionCompletedNotification, FuzzyFileSearchSessionStartParams,
+    FuzzyFileSearchSessionStopParams, FuzzyFileSearchSessionUpdateParams,
+    FuzzyFileSearchSessionUpdatedNotification, GetAccountParams, GetAuthStatusParams,
+    GitDiffToRemoteParams, HistorySortDirection, HookEventName as ProtocolHookEventName,
+    HookHandlerType as ProtocolHookHandlerType, HookSource as ProtocolHookSource,
+    HookTrustStatus as ProtocolHookTrustStatus, HooksListParams, InitializeCapabilities,
+    ListMcpServerStatusParams, LoginAccountParams, LoginAccountResponse, MarketplaceAddParams,
+    MarketplaceRemoveParams, MarketplaceUpgradeParams, McpAuthStatus as ProtocolMcpAuthStatus,
+    McpElicitationArrayItems, McpElicitationPrimitiveSchema, McpElicitationStringFormat,
+    McpOpenAiElicitationFieldSchema, McpOpenAiImagePickerSchema, McpResourceReadParams,
+    McpServerConfig, McpServerElicitationAction as ProtocolMcpServerElicitationAction,
+    McpServerElicitationRequest, McpServerElicitationRequestParams,
+    McpServerElicitationRequestResponse, McpServerOauthLoginCompletedNotification,
+    McpServerOauthLoginParams,
     McpServerStartupFailureReason as ProtocolMcpServerStartupFailureReason,
     McpServerStartupState as ProtocolMcpServerStartupState,
     McpServerStatus as ProtocolMcpServerStatus, McpServerStatusDetail,
@@ -872,6 +886,227 @@ fn map_mcp_startup_failure_reason(
             CoreMcpServerStartupFailureReason::ReauthenticationRequired
         }
     }
+}
+
+const fn map_import_item_type(item_type: ExternalAgentConfigMigrationItemType) -> ImportItemType {
+    match item_type {
+        ExternalAgentConfigMigrationItemType::AgentsMd => ImportItemType::AgentsMd,
+        ExternalAgentConfigMigrationItemType::Config => ImportItemType::Config,
+        ExternalAgentConfigMigrationItemType::Skills => ImportItemType::Skills,
+        ExternalAgentConfigMigrationItemType::Plugins => ImportItemType::Plugins,
+        ExternalAgentConfigMigrationItemType::McpServerConfig => ImportItemType::McpServerConfig,
+        ExternalAgentConfigMigrationItemType::Subagents => ImportItemType::Subagents,
+        ExternalAgentConfigMigrationItemType::Hooks => ImportItemType::Hooks,
+        ExternalAgentConfigMigrationItemType::Commands => ImportItemType::Commands,
+        ExternalAgentConfigMigrationItemType::Memory => ImportItemType::Memory,
+        ExternalAgentConfigMigrationItemType::Sessions => ImportItemType::Sessions,
+    }
+}
+
+const fn protocol_import_item_type(
+    item_type: ImportItemType,
+) -> ExternalAgentConfigMigrationItemType {
+    match item_type {
+        ImportItemType::AgentsMd => ExternalAgentConfigMigrationItemType::AgentsMd,
+        ImportItemType::Config => ExternalAgentConfigMigrationItemType::Config,
+        ImportItemType::Skills => ExternalAgentConfigMigrationItemType::Skills,
+        ImportItemType::Plugins => ExternalAgentConfigMigrationItemType::Plugins,
+        ImportItemType::McpServerConfig => ExternalAgentConfigMigrationItemType::McpServerConfig,
+        ImportItemType::Subagents => ExternalAgentConfigMigrationItemType::Subagents,
+        ImportItemType::Hooks => ExternalAgentConfigMigrationItemType::Hooks,
+        ImportItemType::Commands => ExternalAgentConfigMigrationItemType::Commands,
+        ImportItemType::Memory => ExternalAgentConfigMigrationItemType::Memory,
+        ImportItemType::Sessions => ExternalAgentConfigMigrationItemType::Sessions,
+    }
+}
+
+fn bounded_import_optional(value: Option<String>) -> Option<String> {
+    value.map(|value| bounded(value, MAX_IMPORT_FIELD_BYTES))
+}
+
+fn map_import_details(details: ExternalAgentMigrationDetails) -> ImportMigrationDetails {
+    let names = |items: Vec<ExternalAgentNamedMigration>| {
+        items
+            .into_iter()
+            .take(MAX_IMPORT_DETAIL_ITEMS)
+            .map(|item| bounded(item.name, MAX_IMPORT_FIELD_BYTES))
+            .collect()
+    };
+    ImportMigrationDetails {
+        commands: names(details.commands),
+        hooks: names(details.hooks),
+        mcp_servers: names(details.mcp_servers),
+        memory: details
+            .memory
+            .unwrap_or_default()
+            .into_iter()
+            .take(MAX_IMPORT_DETAIL_ITEMS)
+            .map(|item| bounded(item, MAX_IMPORT_FIELD_BYTES))
+            .collect(),
+        plugins: details
+            .plugins
+            .into_iter()
+            .take(MAX_IMPORT_DETAIL_ITEMS)
+            .map(|plugin| ImportPluginMigration {
+                marketplace_name: bounded(plugin.marketplace_name, MAX_IMPORT_FIELD_BYTES),
+                plugin_names: plugin
+                    .plugin_names
+                    .into_iter()
+                    .take(MAX_IMPORT_DETAIL_ITEMS)
+                    .map(|name| bounded(name, MAX_IMPORT_FIELD_BYTES))
+                    .collect(),
+            })
+            .collect(),
+        sessions: details
+            .sessions
+            .into_iter()
+            .take(MAX_IMPORT_DETAIL_ITEMS)
+            .map(|session| ImportSessionMigration {
+                cwd: bounded(session.cwd, MAX_IMPORT_FIELD_BYTES),
+                path: bounded(session.path, MAX_IMPORT_FIELD_BYTES),
+                title: bounded_import_optional(session.title),
+            })
+            .collect(),
+        skills: names(details.skills),
+        subagents: names(details.subagents),
+    }
+}
+
+fn map_import_item(item: ExternalAgentConfigMigrationItem) -> ImportMigrationItem {
+    ImportMigrationItem {
+        cwd: bounded_import_optional(item.cwd),
+        description: bounded(item.description, MAX_IMPORT_FIELD_BYTES),
+        details: item.details.map(map_import_details),
+        item_type: map_import_item_type(item.item_type),
+        selected: true,
+    }
+}
+
+fn protocol_import_details(details: ImportMigrationDetails) -> ExternalAgentMigrationDetails {
+    let names = |items: Vec<String>| {
+        items
+            .into_iter()
+            .map(|name| ExternalAgentNamedMigration { name })
+            .collect()
+    };
+    ExternalAgentMigrationDetails {
+        commands: names(details.commands),
+        hooks: names(details.hooks),
+        mcp_servers: names(details.mcp_servers),
+        memory: (!details.memory.is_empty()).then_some(details.memory),
+        plugins: details
+            .plugins
+            .into_iter()
+            .map(|plugin| ExternalAgentPluginsMigration {
+                marketplace_name: plugin.marketplace_name,
+                plugin_names: plugin.plugin_names,
+            })
+            .collect(),
+        sessions: details
+            .sessions
+            .into_iter()
+            .map(|session| ExternalAgentSessionMigration {
+                cwd: session.cwd,
+                path: session.path,
+                title: session.title,
+            })
+            .collect(),
+        skills: names(details.skills),
+        subagents: names(details.subagents),
+    }
+}
+
+fn protocol_import_item(item: ImportMigrationItem) -> ExternalAgentConfigMigrationItem {
+    ExternalAgentConfigMigrationItem {
+        cwd: item.cwd,
+        description: item.description,
+        details: item.details.map(protocol_import_details),
+        item_type: protocol_import_item_type(item.item_type),
+    }
+}
+
+fn map_import_success(success: ExternalAgentConfigImportItemTypeSuccess) -> ImportItemSuccess {
+    ImportItemSuccess {
+        item_type: map_import_item_type(success.item_type),
+        cwd: bounded_import_optional(success.cwd),
+        source: bounded_import_optional(success.source),
+        target: bounded_import_optional(success.target),
+    }
+}
+
+fn map_import_failure(failure: ExternalAgentConfigImportItemTypeFailure) -> ImportItemFailure {
+    ImportItemFailure {
+        item_type: map_import_item_type(failure.item_type),
+    }
+}
+
+fn map_import_type_results(
+    results: Vec<ExternalAgentConfigImportTypeResult>,
+) -> Vec<ImportTypeResult> {
+    results
+        .into_iter()
+        .take(ImportItemType::ALL.len())
+        .map(|result| ImportTypeResult {
+            item_type: map_import_item_type(result.item_type),
+            successes: result
+                .successes
+                .into_iter()
+                .take(MAX_IMPORT_RESULTS_PER_HISTORY)
+                .map(map_import_success)
+                .collect(),
+            failures: result
+                .failures
+                .into_iter()
+                .take(MAX_IMPORT_RESULTS_PER_HISTORY)
+                .map(map_import_failure)
+                .collect(),
+        })
+        .collect()
+}
+
+fn map_import_histories(
+    response: ExternalAgentConfigImportHistoriesReadResponse,
+) -> (Vec<ImportHistory>, Vec<ImportedConnectorCandidate>) {
+    let histories = response
+        .data
+        .into_iter()
+        .take(MAX_IMPORT_HISTORY_ENTRIES)
+        .map(|history| ImportHistory {
+            import_id: bounded(history.import_id, MAX_IMPORT_FIELD_BYTES),
+            completed_at_ms: history.completed_at_ms,
+            successes: history
+                .successes
+                .into_iter()
+                .take(MAX_IMPORT_RESULTS_PER_HISTORY)
+                .map(map_import_success)
+                .collect(),
+            failures: history
+                .failures
+                .into_iter()
+                .take(MAX_IMPORT_RESULTS_PER_HISTORY)
+                .map(map_import_failure)
+                .collect(),
+        })
+        .collect();
+    let connectors = response
+        .connectors
+        .into_iter()
+        .filter(|connector| {
+            connector.source == ExternalAgentImportedConnectorSource::RemoteMcpServersConfig
+        })
+        .take(MAX_IMPORT_DETAIL_ITEMS)
+        .map(
+            |ExternalAgentImportedConnectorCandidate {
+                 name,
+                 session_count,
+                 ..
+             }| ImportedConnectorCandidate {
+                name: bounded(name, MAX_IMPORT_FIELD_BYTES),
+                session_count,
+            },
+        )
+        .collect();
+    (histories, connectors)
 }
 
 fn mcp_server_config_value(existing: Option<&McpServerConfig>, draft: &McpServerDraft) -> Value {
@@ -4987,6 +5222,112 @@ fn run_effect(
             Ok(_) => emit(events, Action::MemoriesReset),
             Err(error) => emit(events, Action::MemoryResetFailed(error.to_string())),
         },
+        Effect::DetectExternalAgentConfig { cwds } => {
+            let cwds = cwds
+                .into_iter()
+                .take(MAX_FUZZY_FILE_ROOTS)
+                .map(|cwd| bounded(cwd.to_string_lossy().into_owned(), MAX_IMPORT_FIELD_BYTES))
+                .collect::<Vec<_>>();
+            let mut providers = Vec::new();
+            let mut failures = Vec::new();
+            let mut successful_requests = 0_usize;
+            let mut remaining = MAX_IMPORT_MIGRATION_ITEMS;
+            for provider in ImportProvider::ALL {
+                let response =
+                    app_server.detect_external_agent_config(ExternalAgentConfigDetectParams {
+                        cwds: Some(cwds.clone()),
+                        include_home: Some(true),
+                        max_session_age_days: Some(MAX_IMPORT_SESSION_AGE_DAYS),
+                        max_sessions: Some(MAX_IMPORT_SESSIONS),
+                        migration_source: Some(provider.migration_source().to_owned()),
+                    });
+                match response {
+                    Ok(response) => {
+                        successful_requests = successful_requests.saturating_add(1);
+                        let items = response
+                            .items
+                            .into_iter()
+                            .take(remaining)
+                            .map(map_import_item)
+                            .collect::<Vec<_>>();
+                        remaining = remaining.saturating_sub(items.len());
+                        if !items.is_empty() {
+                            providers.push(ImportProviderItems {
+                                provider,
+                                items,
+                                selected: true,
+                            });
+                        }
+                    }
+                    Err(_) => failures.push(provider),
+                }
+            }
+            if successful_requests == 0 {
+                emit(
+                    events,
+                    Action::ImportDetectionFailed(
+                        "Couldn't check for imports. Try again.".to_owned(),
+                    ),
+                );
+            } else {
+                emit(
+                    events,
+                    Action::ImportDetectionLoaded {
+                        providers,
+                        failures,
+                    },
+                );
+            }
+        }
+        Effect::LoadExternalAgentImportHistories => {
+            match app_server.read_external_agent_import_histories() {
+                Ok(response) => {
+                    let (histories, connectors) = map_import_histories(response);
+                    emit(
+                        events,
+                        Action::ImportHistoriesLoaded {
+                            histories,
+                            connectors,
+                        },
+                    );
+                }
+                Err(_) => emit(
+                    events,
+                    Action::ImportHistoriesFailed(
+                        "Couldn't load import history. Try again.".to_owned(),
+                    ),
+                ),
+            }
+        }
+        Effect::ImportExternalAgentConfig { batches } => {
+            let mut imports = Vec::new();
+            let mut failures = Vec::new();
+            for batch in batches.into_iter().take(ImportProvider::ALL.len()) {
+                let provider = batch.provider;
+                let migration_items = batch
+                    .items
+                    .into_iter()
+                    .take(MAX_IMPORT_MIGRATION_ITEMS)
+                    .map(protocol_import_item)
+                    .collect::<Vec<_>>();
+                if migration_items.is_empty() {
+                    continue;
+                }
+                match app_server.import_external_agent_config(ExternalAgentConfigImportParams {
+                    migration_items,
+                    migration_source: Some(provider.migration_source().to_owned()),
+                    provider_id: Some(provider.migration_source().to_owned()),
+                    source: Some("settings".to_owned()),
+                }) {
+                    Ok(response) => imports.push(StartedImport {
+                        import_id: bounded(response.import_id, MAX_IMPORT_FIELD_BYTES),
+                        wait_for_completion: batch.wait_for_completion,
+                    }),
+                    Err(_) => failures.push(ImportStartFailure { provider }),
+                }
+            }
+            emit(events, Action::ExternalImportsStarted { imports, failures });
+        }
         Effect::LoadModels => {
             match app_server.list_models(ModelListParams {
                 cursor: None,
@@ -11308,6 +11649,32 @@ fn handle_notification(method: &str, params: Value, events: &Sender<Action>) -> 
                 );
             }
         }
+        "externalAgentConfig/import/progress" => {
+            if let Ok(notification) =
+                serde_json::from_value::<ExternalAgentConfigImportProgressNotification>(params)
+            {
+                emit(
+                    events,
+                    Action::ExternalImportProgress {
+                        import_id: bounded(notification.import_id, MAX_IMPORT_FIELD_BYTES),
+                        results: map_import_type_results(notification.item_type_results),
+                    },
+                );
+            }
+        }
+        "externalAgentConfig/import/completed" => {
+            if let Ok(notification) =
+                serde_json::from_value::<ExternalAgentConfigImportCompletedNotification>(params)
+            {
+                emit(
+                    events,
+                    Action::ExternalImportCompleted {
+                        import_id: bounded(notification.import_id, MAX_IMPORT_FIELD_BYTES),
+                        results: map_import_type_results(notification.item_type_results),
+                    },
+                );
+            }
+        }
         "warning" | "guardianWarning" | "deprecationNotice" | "configWarning" => {
             if let Some(message) = string_field(&params, "message") {
                 emit(
@@ -14791,14 +15158,15 @@ mod tests {
         BrowserPermissionResource, BrowserPermissionValue, BrowserPermissionsState,
         BrowserResourceElicitationDecision, BrowserSitePermission, ComposerAttachment,
         ComposerAttachmentKind, DiffMarkerStyle, FuzzyFileMatchType, GitPreferences, GitReviewMode,
-        KeyboardShortcutPreferences, MAX_MCP_SERVER_FIELD_BYTES, McpBrowserOriginElicitation,
-        McpBrowserResourceElicitation, McpElicitation, McpElicitationContent, McpElicitationValue,
-        McpFormElicitation, McpFormFieldKind, McpServerDraft, McpServerStartupFailureReason,
-        McpServerStartupState, McpTransportKind, NetworkPolicyAction, OutputArtifactKind,
-        PermissionFileSystemAccess, PermissionRequestDetail, Personality, PluginDirectoryTab,
-        PrimaryWindowPlacement, PullRequestMergeMethod, ReducedMotionPreference,
-        RetryableTurnSubmission, RetryableUserMessage, TimelineItem, TimelineKind, TimelineSource,
-        UserInputAnswer, UserInputAnswers,
+        ImportItemType, KeyboardShortcutPreferences, MAX_MCP_SERVER_FIELD_BYTES,
+        McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
+        McpElicitationContent, McpElicitationValue, McpFormElicitation, McpFormFieldKind,
+        McpServerDraft, McpServerStartupFailureReason, McpServerStartupState, McpTransportKind,
+        NetworkPolicyAction, OutputArtifactKind, PermissionFileSystemAccess,
+        PermissionRequestDetail, Personality, PluginDirectoryTab, PrimaryWindowPlacement,
+        PullRequestMergeMethod, ReducedMotionPreference, RetryableTurnSubmission,
+        RetryableUserMessage, TimelineItem, TimelineKind, TimelineSource, UserInputAnswer,
+        UserInputAnswers,
     };
     use codex_platform::{AppServerEvent, ComputerApplication, ComputerKey};
     use codex_protocol::{
@@ -16430,6 +16798,37 @@ mod tests {
             &events
         ));
         assert!(matches!(actions.try_recv(), Ok(Action::RefreshAccount)));
+    }
+
+    #[test]
+    fn external_import_completion_notification_reaches_the_reducer() {
+        let (events, actions) = bounded(1);
+
+        assert!(!handle_notification(
+            "externalAgentConfig/import/completed",
+            json!({
+                "importId": "import-1",
+                "itemTypeResults": [{
+                    "itemType": "SESSIONS",
+                    "successes": [{
+                        "itemType": "SESSIONS",
+                        "target": "thread-1"
+                    }],
+                    "failures": []
+                }]
+            }),
+            &events
+        ));
+        assert!(matches!(
+            actions.try_recv(),
+            Ok(Action::ExternalImportCompleted {
+                import_id,
+                results,
+            }) if import_id == "import-1"
+                && results.len() == 1
+                && results[0].item_type == ImportItemType::Sessions
+                && results[0].successes.len() == 1
+        ));
     }
 
     #[test]

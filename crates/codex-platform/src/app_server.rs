@@ -17,7 +17,9 @@ use codex_protocol::{
     CancelLoginAccountResponse, ClientInfo, ClientNotification, ClientRequest,
     ConfigBatchWriteParams, ConfigReadParams, ConfigReadResponse, ConfigRequirementsReadResponse,
     ConfigWriteResponse, DEFAULT_COMMAND_CHANNEL_CAPACITY, DEFAULT_EVENT_CHANNEL_CAPACITY,
-    DEFAULT_MAX_FRAME_BYTES, DEFAULT_MESSAGE_CHANNEL_CAPACITY, FeedbackUploadParams,
+    DEFAULT_MAX_FRAME_BYTES, DEFAULT_MESSAGE_CHANNEL_CAPACITY, ExternalAgentConfigDetectParams,
+    ExternalAgentConfigDetectResponse, ExternalAgentConfigImportHistoriesReadResponse,
+    ExternalAgentConfigImportParams, ExternalAgentConfigImportResponse, FeedbackUploadParams,
     FeedbackUploadResponse, GetAccountParams, GetAccountRateLimitsResponse, GetAccountResponse,
     GetAuthStatusParams, GetAuthStatusResponse, GitDiffToRemoteParams, GitDiffToRemoteResponse,
     HooksListParams, HooksListResponse, IncomingMessage, InitializeCapabilities, InitializeParams,
@@ -1073,6 +1075,29 @@ impl AppServerConnection {
     pub fn reset_memories(&self) -> Result<MemoryResetResponse, AppServerError> {
         self.require_initialized()?;
         self.request_without_params("memory/reset")
+    }
+
+    pub fn detect_external_agent_config(
+        &self,
+        params: ExternalAgentConfigDetectParams,
+    ) -> Result<ExternalAgentConfigDetectResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("externalAgentConfig/detect", params)
+    }
+
+    pub fn import_external_agent_config(
+        &self,
+        params: ExternalAgentConfigImportParams,
+    ) -> Result<ExternalAgentConfigImportResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("externalAgentConfig/import", params)
+    }
+
+    pub fn read_external_agent_import_histories(
+        &self,
+    ) -> Result<ExternalAgentConfigImportHistoriesReadResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request_without_params("externalAgentConfig/import/readHistories")
     }
 
     pub fn start_turn(&self, params: TurnStartParams) -> Result<TurnStartResponse, AppServerError> {

@@ -84,6 +84,13 @@ pub const MAX_GOAL_OBJECTIVE_BYTES: usize = 16 * 1024;
 pub const MAX_ACCOUNT_FIELD_BYTES: usize = 512;
 pub const MAX_USAGE_LIMIT_WINDOWS: usize = 2;
 pub const MAX_FEEDBACK_DETAILS_BYTES: usize = 16 * 1024;
+pub const MAX_IMPORT_MIGRATION_ITEMS: usize = 500;
+pub const MAX_IMPORT_HISTORY_ENTRIES: usize = 50;
+pub const MAX_IMPORT_RESULTS_PER_HISTORY: usize = 100;
+pub const MAX_IMPORT_DETAIL_ITEMS: usize = 100;
+pub const MAX_IMPORT_FIELD_BYTES: usize = 8 * 1024;
+pub const MAX_IMPORT_SESSIONS: u32 = 50;
+pub const MAX_IMPORT_SESSION_AGE_DAYS: u32 = 30;
 pub const MAX_KEYBOARD_SHORTCUT_COMMANDS: usize = 70;
 pub const MAX_KEYBOARD_SHORTCUTS_PER_COMMAND: usize = 4;
 pub const MAX_KEYBOARD_SHORTCUT_ACCELERATOR_BYTES: usize = 128;
@@ -2660,6 +2667,242 @@ impl Default for PersonalizationState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ImportProvider {
+    ClaudeCode,
+    ClaudeCowork,
+    Cursor,
+}
+
+impl ImportProvider {
+    pub const ALL: [Self; 3] = [Self::ClaudeCode, Self::ClaudeCowork, Self::Cursor];
+
+    #[must_use]
+    pub const fn migration_source(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "claude-code",
+            Self::ClaudeCowork => "claude-cowork",
+            Self::Cursor => "cursor",
+        }
+    }
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "Claude Code",
+            Self::ClaudeCowork => "Claude Cowork",
+            Self::Cursor => "Cursor",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ImportItemType {
+    AgentsMd,
+    Config,
+    Skills,
+    Plugins,
+    McpServerConfig,
+    Subagents,
+    Hooks,
+    Commands,
+    Memory,
+    Sessions,
+}
+
+impl ImportItemType {
+    pub const ALL: [Self; 10] = [
+        Self::AgentsMd,
+        Self::Config,
+        Self::Skills,
+        Self::Plugins,
+        Self::McpServerConfig,
+        Self::Subagents,
+        Self::Hooks,
+        Self::Commands,
+        Self::Memory,
+        Self::Sessions,
+    ];
+
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::AgentsMd => "Instructions",
+            Self::Config => "Settings",
+            Self::Skills => "Skills",
+            Self::Plugins => "Plugins",
+            Self::McpServerConfig => "MCP servers",
+            Self::Subagents => "Agents",
+            Self::Hooks => "Hooks",
+            Self::Commands => "Commands",
+            Self::Memory => "Memory",
+            Self::Sessions => "Chat sessions",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportPluginMigration {
+    pub marketplace_name: String,
+    pub plugin_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportSessionMigration {
+    pub cwd: String,
+    pub path: String,
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ImportMigrationDetails {
+    pub commands: Vec<String>,
+    pub hooks: Vec<String>,
+    pub mcp_servers: Vec<String>,
+    pub memory: Vec<String>,
+    pub plugins: Vec<ImportPluginMigration>,
+    pub sessions: Vec<ImportSessionMigration>,
+    pub skills: Vec<String>,
+    pub subagents: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportMigrationItem {
+    pub cwd: Option<String>,
+    pub description: String,
+    pub details: Option<ImportMigrationDetails>,
+    pub item_type: ImportItemType,
+    pub selected: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportProviderItems {
+    pub provider: ImportProvider,
+    pub items: Vec<ImportMigrationItem>,
+    pub selected: bool,
+}
+
+impl ImportProviderItems {
+    #[must_use]
+    pub fn selected(&self) -> bool {
+        self.selected
+    }
+
+    #[must_use]
+    pub fn selected_count(&self) -> usize {
+        self.items.iter().filter(|item| item.selected).count()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportItemSuccess {
+    pub item_type: ImportItemType,
+    pub cwd: Option<String>,
+    pub source: Option<String>,
+    pub target: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportItemFailure {
+    pub item_type: ImportItemType,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportTypeResult {
+    pub item_type: ImportItemType,
+    pub successes: Vec<ImportItemSuccess>,
+    pub failures: Vec<ImportItemFailure>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportHistory {
+    pub import_id: String,
+    pub completed_at_ms: i64,
+    pub successes: Vec<ImportItemSuccess>,
+    pub failures: Vec<ImportItemFailure>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedConnectorCandidate {
+    pub name: String,
+    pub session_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportBatch {
+    pub provider: ImportProvider,
+    pub items: Vec<ImportMigrationItem>,
+    pub wait_for_completion: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartedImport {
+    pub import_id: String,
+    pub wait_for_completion: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportStartFailure {
+    pub provider: ImportProvider,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportMigrationState {
+    pub detection_status: LoadStatus,
+    pub providers: Vec<ImportProviderItems>,
+    pub detection_failures: Vec<ImportProvider>,
+    pub history_status: LoadStatus,
+    pub histories: Vec<ImportHistory>,
+    pub connectors: Vec<ImportedConnectorCandidate>,
+    pub import_status: LoadStatus,
+    pub active_import_ids: HashSet<String>,
+    pub progress: Vec<ImportTypeResult>,
+    pub error: Option<String>,
+    pub history_error: Option<String>,
+    pub visible_history_count: usize,
+}
+
+impl Default for ImportMigrationState {
+    fn default() -> Self {
+        Self {
+            detection_status: LoadStatus::Idle,
+            providers: Vec::new(),
+            detection_failures: Vec::new(),
+            history_status: LoadStatus::Idle,
+            histories: Vec::new(),
+            connectors: Vec::new(),
+            import_status: LoadStatus::Idle,
+            active_import_ids: HashSet::new(),
+            progress: Vec::new(),
+            error: None,
+            history_error: None,
+            visible_history_count: 5,
+        }
+    }
+}
+
+impl ImportMigrationState {
+    #[must_use]
+    pub fn selected_item_count(&self) -> usize {
+        self.providers
+            .iter()
+            .map(ImportProviderItems::selected_count)
+            .sum()
+    }
+
+    #[must_use]
+    pub fn has_detected_items(&self) -> bool {
+        self.providers
+            .iter()
+            .any(|provider| !provider.items.is_empty())
+    }
+
+    #[must_use]
+    pub fn import_running(&self) -> bool {
+        self.import_status == LoadStatus::Loading
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChatMemoryPreferences {
     pub generate_memories: bool,
@@ -3647,6 +3890,7 @@ pub struct AppState {
     pub runtime: RuntimeState,
     pub account: AccountState,
     pub personalization: PersonalizationState,
+    pub imports: ImportMigrationState,
     pub chat_memory: ChatMemoryState,
     pub agent_configuration: AgentConfigurationState,
     pub feedback: FeedbackUploadState,
@@ -3706,6 +3950,7 @@ impl Default for AppState {
             runtime: RuntimeState::default(),
             account: AccountState::default(),
             personalization: PersonalizationState::default(),
+            imports: ImportMigrationState::default(),
             chat_memory: ChatMemoryState::default(),
             agent_configuration: AgentConfigurationState::default(),
             feedback: FeedbackUploadState::default(),
@@ -4083,6 +4328,36 @@ pub enum Action {
         kind: PersonalizationMutationKind,
         message: String,
     },
+    RefreshImports,
+    ImportDetectionLoaded {
+        providers: Vec<ImportProviderItems>,
+        failures: Vec<ImportProvider>,
+    },
+    ImportDetectionFailed(String),
+    ImportHistoriesLoaded {
+        histories: Vec<ImportHistory>,
+        connectors: Vec<ImportedConnectorCandidate>,
+    },
+    ImportHistoriesFailed(String),
+    ToggleImportProvider(ImportProvider),
+    ToggleImportItem {
+        provider: ImportProvider,
+        index: usize,
+    },
+    StartImport,
+    ExternalImportsStarted {
+        imports: Vec<StartedImport>,
+        failures: Vec<ImportStartFailure>,
+    },
+    ExternalImportProgress {
+        import_id: String,
+        results: Vec<ImportTypeResult>,
+    },
+    ExternalImportCompleted {
+        import_id: String,
+        results: Vec<ImportTypeResult>,
+    },
+    ShowMoreImportHistory,
     RefreshAgentConfiguration {
         cwd: Option<PathBuf>,
     },
@@ -4848,6 +5123,13 @@ pub enum Effect {
         previous: ChatMemoryPreferences,
     },
     ResetMemories,
+    DetectExternalAgentConfig {
+        cwds: Vec<PathBuf>,
+    },
+    LoadExternalAgentImportHistories,
+    ImportExternalAgentConfig {
+        batches: Vec<ImportBatch>,
+    },
     LoadAgentConfiguration {
         cwd: Option<PathBuf>,
     },
@@ -6429,6 +6711,19 @@ fn global_chat_memory_preferences(state: &AppState) -> ChatMemoryPreferences {
     }
 }
 
+fn refresh_import_effects(state: &mut AppState) -> Vec<Effect> {
+    state.imports.detection_status = LoadStatus::Loading;
+    state.imports.history_status = LoadStatus::Loading;
+    state.imports.error = None;
+    state.imports.history_error = None;
+    vec![
+        Effect::DetectExternalAgentConfig {
+            cwds: composer_workspace_roots(state),
+        },
+        Effect::LoadExternalAgentImportHistories,
+    ]
+}
+
 pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
     match action {
         Action::Connect | Action::RetryConnection => {
@@ -6510,6 +6805,18 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             };
             state.status_message = Some("Connection lost. Reconnecting…".to_owned());
             state.personalization.pending = false;
+            if state.imports.import_running() {
+                state.imports.import_status = LoadStatus::Failed;
+                state.imports.error =
+                    Some("Couldn't finish the import because Codex disconnected.".to_owned());
+            }
+            if state.imports.detection_status == LoadStatus::Loading {
+                state.imports.detection_status = LoadStatus::Failed;
+            }
+            if state.imports.history_status == LoadStatus::Loading {
+                state.imports.history_status = LoadStatus::Failed;
+            }
+            state.imports.active_import_ids.clear();
             state.mcp_elicitations.clear();
             let generation = state.fuzzy_file_search.generation;
             state.fuzzy_file_search = FuzzyFileSearchState {
@@ -9012,6 +9319,216 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             };
             state.status_message = Some(format!("Unable to update {setting}: {message}"));
             vec![Effect::LoadPersonalization]
+        }
+        Action::RefreshImports => {
+            if state.connection != ConnectionStatus::Online
+                || state.imports.import_running()
+                || state.imports.detection_status == LoadStatus::Loading
+                || state.imports.history_status == LoadStatus::Loading
+            {
+                return Vec::new();
+            }
+            state.imports.import_status = LoadStatus::Idle;
+            state.imports.progress.clear();
+            refresh_import_effects(state)
+        }
+        Action::ImportDetectionLoaded {
+            mut providers,
+            mut failures,
+        } => {
+            providers.truncate(ImportProvider::ALL.len());
+            failures.truncate(ImportProvider::ALL.len());
+            state.imports.providers = providers;
+            state.imports.detection_failures = failures;
+            state.imports.detection_status = LoadStatus::Ready;
+            if state.imports.history_status != LoadStatus::Failed {
+                state.imports.error = None;
+            }
+            Vec::new()
+        }
+        Action::ImportDetectionFailed(message) => {
+            state.imports.detection_status = LoadStatus::Failed;
+            state.imports.error = Some(message);
+            Vec::new()
+        }
+        Action::ImportHistoriesLoaded {
+            mut histories,
+            mut connectors,
+        } => {
+            histories.sort_by_key(|history| std::cmp::Reverse(history.completed_at_ms));
+            histories.truncate(MAX_IMPORT_HISTORY_ENTRIES);
+            connectors.truncate(MAX_IMPORT_DETAIL_ITEMS);
+            state.imports.histories = histories;
+            state.imports.connectors = connectors;
+            state.imports.history_status = LoadStatus::Ready;
+            state.imports.history_error = None;
+            state.imports.visible_history_count = state
+                .imports
+                .visible_history_count
+                .max(5)
+                .min(state.imports.histories.len().max(5));
+            Vec::new()
+        }
+        Action::ImportHistoriesFailed(message) => {
+            state.imports.history_status = LoadStatus::Failed;
+            state.imports.history_error = Some(message);
+            Vec::new()
+        }
+        Action::ToggleImportProvider(provider) => {
+            if state.imports.import_running() {
+                return Vec::new();
+            }
+            let Some(group) = state
+                .imports
+                .providers
+                .iter_mut()
+                .find(|group| group.provider == provider)
+            else {
+                return Vec::new();
+            };
+            let selected = !group.selected;
+            group.selected = selected;
+            for item in &mut group.items {
+                item.selected = selected;
+            }
+            Vec::new()
+        }
+        Action::ToggleImportItem { provider, index } => {
+            if state.imports.import_running() {
+                return Vec::new();
+            }
+            if let Some(item) = state
+                .imports
+                .providers
+                .iter_mut()
+                .find(|group| group.provider == provider)
+                .and_then(|group| group.items.get_mut(index))
+            {
+                item.selected = !item.selected;
+            }
+            Vec::new()
+        }
+        Action::StartImport => {
+            if state.connection != ConnectionStatus::Online || state.imports.import_running() {
+                return Vec::new();
+            }
+            let batches = state
+                .imports
+                .providers
+                .iter()
+                .filter_map(|group| {
+                    let items = group
+                        .items
+                        .iter()
+                        .filter(|item| item.selected)
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    if items.is_empty() {
+                        None
+                    } else {
+                        Some(ImportBatch {
+                            provider: group.provider,
+                            wait_for_completion: items
+                                .iter()
+                                .any(|item| item.item_type == ImportItemType::Sessions),
+                            items,
+                        })
+                    }
+                })
+                .collect::<Vec<_>>();
+            if batches.is_empty() {
+                return Vec::new();
+            }
+            state.imports.import_status = LoadStatus::Loading;
+            state.imports.active_import_ids.clear();
+            state.imports.progress.clear();
+            state.imports.error = None;
+            vec![Effect::ImportExternalAgentConfig { batches }]
+        }
+        Action::ExternalImportsStarted { imports, failures } => {
+            state.imports.active_import_ids = imports
+                .iter()
+                .filter(|started| started.wait_for_completion)
+                .map(|started| started.import_id.clone())
+                .collect();
+            let failure_message = (!failures.is_empty()).then(|| {
+                let providers = failures
+                    .iter()
+                    .map(|failure| failure.provider.label())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("Couldn't import from {providers}. Try again.")
+            });
+            if let Some(message) = failure_message.as_ref() {
+                state.status_message = Some(message.clone());
+            }
+            if imports.is_empty() {
+                state.imports.import_status = LoadStatus::Failed;
+                state.imports.error = failure_message
+                    .or_else(|| Some("Couldn't finish the import. Try again.".to_owned()));
+                return Vec::new();
+            }
+            state.imports.error = failure_message;
+            if !state.imports.active_import_ids.is_empty() {
+                return Vec::new();
+            }
+            state.imports.import_status = LoadStatus::Ready;
+            let error = state.imports.error.clone();
+            let effects = refresh_import_effects(state);
+            state.imports.error = error;
+            effects
+        }
+        Action::ExternalImportProgress {
+            import_id,
+            mut results,
+        } => {
+            if !state.imports.import_running()
+                || !state.imports.active_import_ids.contains(&import_id)
+            {
+                return Vec::new();
+            }
+            results.truncate(ImportItemType::ALL.len());
+            state.imports.progress = results;
+            Vec::new()
+        }
+        Action::ExternalImportCompleted {
+            import_id,
+            mut results,
+        } => {
+            if !state.imports.import_running()
+                || !state.imports.active_import_ids.contains(&import_id)
+            {
+                return Vec::new();
+            }
+            results.truncate(ImportItemType::ALL.len());
+            let failed = results
+                .iter()
+                .map(|result| result.failures.len())
+                .sum::<usize>();
+            state.imports.progress = results;
+            state.imports.active_import_ids.remove(&import_id);
+            if failed > 0 {
+                state.status_message = Some(format!(
+                    "{failed} imported item{} did not import.",
+                    if failed == 1 { "" } else { "s" }
+                ));
+            }
+            if !state.imports.active_import_ids.is_empty() {
+                return Vec::new();
+            }
+            state.imports.import_status = LoadStatus::Ready;
+            let error = state.imports.error.clone();
+            let effects = refresh_import_effects(state);
+            state.imports.error = error;
+            effects
+        }
+        Action::ShowMoreImportHistory => {
+            state.imports.visible_history_count = state
+                .imports
+                .visible_history_count
+                .saturating_add(5)
+                .min(state.imports.histories.len());
+            Vec::new()
         }
         Action::RefreshAgentConfiguration { cwd } => {
             if state.agent_configuration.pending.is_some()
@@ -15351,7 +15868,9 @@ mod tests {
         FuzzyFileResult, GitCommitNextStep, GitCommitPhase, GitDiffScope, GitPreferences,
         GitPullRequestNextStep, GitPullRequestPhase, GitPullRequestProvider, GitPullRequestState,
         GitReviewCommitState, GitReviewMode, GitState, GitWorktreeState, HookCard, HookEventName,
-        HookHandlerType, HookProjectEntry, HookSource, HookTrustStatus, InspectorPane,
+        HookHandlerType, HookProjectEntry, HookSource, HookTrustStatus, ImportBatch, ImportHistory,
+        ImportItemSuccess, ImportItemType, ImportMigrationDetails, ImportMigrationItem,
+        ImportProvider, ImportProviderItems, ImportTypeResult, InspectorPane,
         IntegratedTerminalShell, KeyboardShortcutPreferences, KeyboardShortcutUpdateTarget,
         LoadStatus, LocalProjectSummary, MAX_BROWSER_DOWNLOADS, MAX_COMPOSER_BYTES,
         MAX_GIT_DIFF_BYTES, MAX_GIT_INSTRUCTIONS_BYTES, MAX_GIT_SHA_BYTES, MAX_PLUGIN_DETAIL_ITEMS,
@@ -15370,11 +15889,11 @@ mod tests {
         PullRequestMutation, PullRequestMutationKind, PullRequestRelationship,
         PullRequestReviewEvent, PullRequestReviewState, PullRequestState, PullRequestSummary,
         ReasoningEffortOption, RetryableTurnSubmission, RetryableUserMessage, ServiceTierOption,
-        SkillCard, SkillScope, TaskRunStatus, TaskSearchResult, TaskSummary, TerminalDockLocation,
-        ThreadGoal, ThreadGoalStatus, TimelineItem, TimelineKind, UsageLimitWindow,
-        UserInputAnswer, UserInputAnswers, UserInputOption, UserInputQuestion, UserInputRequest,
-        appearance_code_theme_supports_variant, computer_app_id_matches, permission_mode_options,
-        reduce, stable_reference, validate_mcp_form_content,
+        SkillCard, SkillScope, StartedImport, TaskRunStatus, TaskSearchResult, TaskSummary,
+        TerminalDockLocation, ThreadGoal, ThreadGoalStatus, TimelineItem, TimelineKind,
+        UsageLimitWindow, UserInputAnswer, UserInputAnswers, UserInputOption, UserInputQuestion,
+        UserInputRequest, appearance_code_theme_supports_variant, computer_app_id_matches,
+        permission_mode_options, reduce, stable_reference, validate_mcp_form_content,
     };
 
     fn task(id: &str) -> TaskSummary {
@@ -16284,6 +16803,137 @@ mod tests {
         );
         reduce(&mut state, Action::MemoriesReset);
         assert_eq!(state.status_message.as_deref(), Some("Memories reset"));
+    }
+
+    #[test]
+    fn external_import_runs_selected_provider_batches_and_refreshes_history() {
+        let root = repository_path();
+        let mut state = AppState {
+            connection: ConnectionStatus::Online,
+            new_chat_cwd: Some(root.clone()),
+            ..AppState::default()
+        };
+        assert_eq!(
+            reduce(&mut state, Action::RefreshImports),
+            [
+                Effect::DetectExternalAgentConfig {
+                    cwds: vec![root.clone()]
+                },
+                Effect::LoadExternalAgentImportHistories,
+            ]
+        );
+        assert_eq!(state.imports.detection_status, LoadStatus::Loading);
+        assert_eq!(state.imports.history_status, LoadStatus::Loading);
+
+        let items = vec![
+            ImportMigrationItem {
+                cwd: Some(root.display().to_string()),
+                description: "Cursor project settings".to_owned(),
+                details: None,
+                item_type: ImportItemType::Config,
+                selected: true,
+            },
+            ImportMigrationItem {
+                cwd: Some(root.display().to_string()),
+                description: "Recent chats".to_owned(),
+                details: Some(ImportMigrationDetails::default()),
+                item_type: ImportItemType::Sessions,
+                selected: true,
+            },
+        ];
+        reduce(
+            &mut state,
+            Action::ImportDetectionLoaded {
+                providers: vec![ImportProviderItems {
+                    provider: ImportProvider::Cursor,
+                    items: items.clone(),
+                    selected: true,
+                }],
+                failures: Vec::new(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::ImportHistoriesLoaded {
+                histories: Vec::new(),
+                connectors: Vec::new(),
+            },
+        );
+        assert_eq!(state.imports.selected_item_count(), 2);
+        assert_eq!(
+            reduce(&mut state, Action::StartImport),
+            [Effect::ImportExternalAgentConfig {
+                batches: vec![ImportBatch {
+                    provider: ImportProvider::Cursor,
+                    items,
+                    wait_for_completion: true,
+                }]
+            }]
+        );
+
+        reduce(
+            &mut state,
+            Action::ExternalImportsStarted {
+                imports: vec![StartedImport {
+                    import_id: "import-1".to_owned(),
+                    wait_for_completion: true,
+                }],
+                failures: Vec::new(),
+            },
+        );
+        assert!(state.imports.import_running());
+        assert!(state.imports.active_import_ids.contains("import-1"));
+        assert!(
+            reduce(
+                &mut state,
+                Action::ExternalImportCompleted {
+                    import_id: "other-import".to_owned(),
+                    results: Vec::new(),
+                }
+            )
+            .is_empty()
+        );
+        assert!(state.imports.import_running());
+        let results = vec![ImportTypeResult {
+            item_type: ImportItemType::Sessions,
+            successes: vec![ImportItemSuccess {
+                item_type: ImportItemType::Sessions,
+                cwd: Some(root.display().to_string()),
+                source: Some("session.jsonl".to_owned()),
+                target: Some("thread-1".to_owned()),
+            }],
+            failures: Vec::new(),
+        }];
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::ExternalImportCompleted {
+                    import_id: "import-1".to_owned(),
+                    results: results.clone(),
+                }
+            ),
+            [
+                Effect::DetectExternalAgentConfig { cwds: vec![root] },
+                Effect::LoadExternalAgentImportHistories,
+            ]
+        );
+        assert_eq!(state.imports.import_status, LoadStatus::Ready);
+        assert!(state.imports.active_import_ids.is_empty());
+        assert_eq!(state.imports.progress, results);
+
+        reduce(
+            &mut state,
+            Action::ImportHistoriesLoaded {
+                histories: vec![ImportHistory {
+                    import_id: "import-1".to_owned(),
+                    completed_at_ms: 1_700_000_000_000,
+                    successes: Vec::new(),
+                    failures: Vec::new(),
+                }],
+                connectors: Vec::new(),
+            },
+        );
+        assert_eq!(state.imports.histories[0].import_id, "import-1");
     }
 
     #[test]
