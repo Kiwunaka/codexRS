@@ -1639,6 +1639,185 @@ pub struct ThreadMemoryModeSetResponse {}
 #[derive(Debug, Clone, Deserialize)]
 pub struct MemoryResetResponse {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ExternalAgentConfigMigrationItemType {
+    AgentsMd,
+    Config,
+    Skills,
+    Plugins,
+    McpServerConfig,
+    Subagents,
+    Hooks,
+    Commands,
+    Memory,
+    Sessions,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalAgentNamedMigration {
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAgentPluginsMigration {
+    pub marketplace_name: String,
+    pub plugin_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalAgentSessionMigration {
+    pub cwd: String,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAgentMigrationDetails {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<ExternalAgentNamedMigration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hooks: Vec<ExternalAgentNamedMigration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_servers: Vec<ExternalAgentNamedMigration>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugins: Vec<ExternalAgentPluginsMigration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sessions: Vec<ExternalAgentSessionMigration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<ExternalAgentNamedMigration>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subagents: Vec<ExternalAgentNamedMigration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAgentConfigMigrationItem {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<ExternalAgentMigrationDetails>,
+    pub item_type: ExternalAgentConfigMigrationItemType,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAgentConfigDetectParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwds: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_home: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_session_age_days: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_sessions: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub migration_source: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ExternalAgentConfigDetectResponse {
+    pub items: Vec<ExternalAgentConfigMigrationItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAgentConfigImportParams {
+    pub migration_items: Vec<ExternalAgentConfigMigrationItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub migration_source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAgentConfigImportResponse {
+    pub import_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAgentConfigImportItemTypeSuccess {
+    pub item_type: ExternalAgentConfigMigrationItemType,
+    pub cwd: Option<String>,
+    pub source: Option<String>,
+    pub target: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAgentConfigImportItemTypeFailure {
+    pub item_type: ExternalAgentConfigMigrationItemType,
+    pub cwd: Option<String>,
+    pub source: Option<String>,
+    pub failure_stage: String,
+    pub message: String,
+    pub error_type: Option<String>,
+    pub sub_error_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAgentConfigImportTypeResult {
+    pub item_type: ExternalAgentConfigMigrationItemType,
+    pub successes: Vec<ExternalAgentConfigImportItemTypeSuccess>,
+    pub failures: Vec<ExternalAgentConfigImportItemTypeFailure>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAgentConfigImportProgressNotification {
+    pub import_id: String,
+    pub item_type_results: Vec<ExternalAgentConfigImportTypeResult>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAgentConfigImportCompletedNotification {
+    pub import_id: String,
+    pub item_type_results: Vec<ExternalAgentConfigImportTypeResult>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAgentConfigImportHistory {
+    pub import_id: String,
+    pub completed_at_ms: i64,
+    pub successes: Vec<ExternalAgentConfigImportItemTypeSuccess>,
+    pub failures: Vec<ExternalAgentConfigImportItemTypeFailure>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExternalAgentImportedConnectorSource {
+    RemoteMcpServersConfig,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalAgentImportedConnectorCandidate {
+    pub name: String,
+    pub session_count: u32,
+    pub source: ExternalAgentImportedConnectorSource,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ExternalAgentConfigImportHistoriesReadResponse {
+    pub data: Vec<ExternalAgentConfigImportHistory>,
+    pub connectors: Vec<ExternalAgentImportedConnectorCandidate>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnStartParams {
@@ -3118,9 +3297,14 @@ mod tests {
         ConfigMergeStrategy, ConfigReadParams, ConfigReadResponse, ConfigRequirementsReadResponse,
         ConfigWriteResponse, ConfigWriteStatus, DynamicToolCallOutputContentItem,
         DynamicToolCallParams, DynamicToolCallResponse, DynamicToolFunction,
-        DynamicToolNamespaceTool, DynamicToolSpec, ExecpolicyAmendment, FeedbackUploadParams,
-        FeedbackUploadResponse, FileChangeApprovalDecision, FileChangeRequestApprovalResponse,
-        FuzzyFileSearchMatchType, FuzzyFileSearchParams, FuzzyFileSearchResponse,
+        DynamicToolNamespaceTool, DynamicToolSpec, ExecpolicyAmendment,
+        ExternalAgentConfigDetectParams, ExternalAgentConfigDetectResponse,
+        ExternalAgentConfigImportCompletedNotification,
+        ExternalAgentConfigImportHistoriesReadResponse, ExternalAgentConfigImportParams,
+        ExternalAgentConfigImportProgressNotification, ExternalAgentConfigImportResponse,
+        ExternalAgentConfigMigrationItemType, FeedbackUploadParams, FeedbackUploadResponse,
+        FileChangeApprovalDecision, FileChangeRequestApprovalResponse, FuzzyFileSearchMatchType,
+        FuzzyFileSearchParams, FuzzyFileSearchResponse,
         FuzzyFileSearchSessionCompletedNotification, FuzzyFileSearchSessionStartParams,
         FuzzyFileSearchSessionUpdateParams, FuzzyFileSearchSessionUpdatedNotification,
         GetAccountParams, GetAccountRateLimitsResponse, GetAccountResponse, GetAuthStatusParams,
@@ -3590,6 +3774,107 @@ mod tests {
         );
         assert!(serde_json::from_value::<ThreadMemoryModeSetResponse>(json!({})).is_ok());
         assert!(serde_json::from_value::<MemoryResetResponse>(json!({})).is_ok());
+    }
+
+    #[test]
+    fn external_agent_import_matches_the_stable_contract() {
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "externalAgentConfig/detect",
+                id: 13,
+                params: Some(ExternalAgentConfigDetectParams {
+                    cwds: Some(vec!["C:\\work\\codexrs".to_owned()]),
+                    include_home: Some(true),
+                    max_session_age_days: Some(30),
+                    max_sessions: Some(50),
+                    migration_source: Some("cursor".to_owned()),
+                }),
+            }),
+            b"{\"method\":\"externalAgentConfig/detect\",\"id\":13,\"params\":{\"cwds\":[\"C:\\\\work\\\\codexrs\"],\"includeHome\":true,\"maxSessionAgeDays\":30,\"maxSessions\":50,\"migrationSource\":\"cursor\"}}\n"
+        );
+
+        let Ok(detected) = serde_json::from_value::<ExternalAgentConfigDetectResponse>(json!({
+            "items": [{
+                "cwd": "C:\\work\\codexrs",
+                "description": "Recent chats",
+                "details": {
+                    "sessions": [{
+                        "cwd": "C:\\work\\codexrs",
+                        "path": "C:\\fixture\\session.jsonl",
+                        "title": "Import parity"
+                    }]
+                },
+                "itemType": "SESSIONS"
+            }]
+        })) else {
+            panic!("detect response should match the generated schema");
+        };
+        assert_eq!(
+            detected.items[0].item_type,
+            ExternalAgentConfigMigrationItemType::Sessions
+        );
+
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "externalAgentConfig/import",
+                id: 14,
+                params: Some(ExternalAgentConfigImportParams {
+                    migration_items: detected.items,
+                    migration_source: Some("cursor".to_owned()),
+                    provider_id: Some("cursor".to_owned()),
+                    source: Some("settings".to_owned()),
+                }),
+            }),
+            b"{\"method\":\"externalAgentConfig/import\",\"id\":14,\"params\":{\"migrationItems\":[{\"cwd\":\"C:\\\\work\\\\codexrs\",\"description\":\"Recent chats\",\"details\":{\"sessions\":[{\"cwd\":\"C:\\\\work\\\\codexrs\",\"path\":\"C:\\\\fixture\\\\session.jsonl\",\"title\":\"Import parity\"}]},\"itemType\":\"SESSIONS\"}],\"migrationSource\":\"cursor\",\"providerId\":\"cursor\",\"source\":\"settings\"}}\n"
+        );
+        let Ok(response) = serde_json::from_value::<ExternalAgentConfigImportResponse>(json!({
+            "importId": "import-1"
+        })) else {
+            panic!("import response should match the generated schema");
+        };
+        assert_eq!(response.import_id, "import-1");
+
+        let notification = json!({
+            "importId": "import-1",
+            "itemTypeResults": [{
+                "itemType": "SESSIONS",
+                "successes": [{
+                    "itemType": "SESSIONS",
+                    "source": "C:\\fixture\\session.jsonl",
+                    "target": "thread-1"
+                }],
+                "failures": []
+            }]
+        });
+        assert!(
+            serde_json::from_value::<ExternalAgentConfigImportProgressNotification>(
+                notification.clone()
+            )
+            .is_ok()
+        );
+        assert!(
+            serde_json::from_value::<ExternalAgentConfigImportCompletedNotification>(notification)
+                .is_ok()
+        );
+        let Ok(history) =
+            serde_json::from_value::<ExternalAgentConfigImportHistoriesReadResponse>(json!({
+                "data": [{
+                    "importId": "import-1",
+                    "completedAtMs": 1_700_000_000_000_i64,
+                    "successes": [{"itemType": "SESSIONS", "target": "thread-1"}],
+                    "failures": []
+                }],
+                "connectors": [{
+                    "name": "github",
+                    "sessionCount": 1,
+                    "source": "remoteMcpServersConfig"
+                }]
+            }))
+        else {
+            panic!("history response should match the generated schema");
+        };
+        assert_eq!(history.data.len(), 1);
+        assert_eq!(history.connectors.len(), 1);
     }
 
     #[test]
