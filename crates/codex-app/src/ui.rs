@@ -11851,88 +11851,60 @@ impl WorkspaceView {
                     .border_b_1()
                     .border_color(cx.theme().sidebar_border)
                     .child(
-                        h_flex()
-                            .id("new-chat")
+                        Button::new("new-chat")
+                            .label("New chat")
+                            .icon(IconName::Plus)
+                            .tooltip("Start a new chat")
+                            .small()
+                            .ghost()
+                            .w_full()
                             .h(px(34.0))
-                            .px_2()
-                            .gap_2()
-                            .items_center()
-                            .rounded_md()
-                            .when(pointer_cursors_enabled(cx), |element| {
-                                element.cursor_pointer()
-                            })
-                            .hover(|style| style.bg(cx.theme().list_hover))
-                            .child(Icon::new(IconName::Plus).xsmall())
-                            .child(div().text_sm().child("New chat"))
+                            .justify_start()
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.begin_new_chat(window, cx);
                             })),
                     )
                     .child(
-                        h_flex()
-                            .id("nav-repository")
+                        Button::new("nav-repository")
+                            .label("Repository")
+                            .icon(IconName::FolderOpen)
+                            .tooltip("Open branches, worktrees, and changed files")
+                            .small()
+                            .ghost()
+                            .w_full()
                             .h(px(34.0))
-                            .px_2()
-                            .gap_2()
-                            .items_center()
-                            .rounded_md()
-                            .when(pointer_cursors_enabled(cx), |element| {
-                                element.cursor_pointer()
-                            })
-                            .when(route == MainRoute::Repository, |item| {
-                                item.bg(cx.theme().sidebar_accent)
-                            })
-                            .when(route != MainRoute::Repository, |item| {
-                                item.hover(|style| style.bg(cx.theme().list_hover))
-                            })
-                            .child(Icon::new(IconName::FolderOpen).xsmall())
-                            .child(div().text_sm().child("Repository"))
+                            .justify_start()
+                            .selected(route == MainRoute::Repository)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.navigate(MainRoute::Repository, cx);
                             })),
                     )
                     .child(
-                        h_flex()
-                            .id("nav-pull-requests")
+                        Button::new("nav-pull-requests")
+                            .label("Pull requests")
+                            .icon(IconName::GitHub)
+                            .tooltip("Open pull requests")
+                            .small()
+                            .ghost()
+                            .w_full()
                             .h(px(34.0))
-                            .px_2()
-                            .gap_2()
-                            .items_center()
-                            .rounded_md()
-                            .when(pointer_cursors_enabled(cx), |element| {
-                                element.cursor_pointer()
-                            })
-                            .when(route == MainRoute::PullRequests, |item| {
-                                item.bg(cx.theme().sidebar_accent)
-                            })
-                            .when(route != MainRoute::PullRequests, |item| {
-                                item.hover(|style| style.bg(cx.theme().list_hover))
-                            })
-                            .child(Icon::new(IconName::GitHub).xsmall())
-                            .child(div().text_sm().child("Pull requests"))
+                            .justify_start()
+                            .selected(route == MainRoute::PullRequests)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.navigate(MainRoute::PullRequests, cx);
                             })),
                     )
                     .child(
-                        h_flex()
-                            .id("nav-marketplace")
+                        Button::new("nav-marketplace")
+                            .label("Plugins")
+                            .icon(IconName::GalleryVerticalEnd)
+                            .tooltip("Browse the plugins marketplace")
+                            .small()
+                            .ghost()
+                            .w_full()
                             .h(px(34.0))
-                            .px_2()
-                            .gap_2()
-                            .items_center()
-                            .rounded_md()
-                            .when(pointer_cursors_enabled(cx), |element| {
-                                element.cursor_pointer()
-                            })
-                            .when(route == MainRoute::Marketplace, |item| {
-                                item.bg(cx.theme().sidebar_accent)
-                            })
-                            .when(route != MainRoute::Marketplace, |item| {
-                                item.hover(|style| style.bg(cx.theme().list_hover))
-                            })
-                            .child(Icon::new(IconName::GalleryVerticalEnd).xsmall())
-                            .child(div().text_sm().child("Plugins"))
+                            .justify_start()
+                            .selected(route == MainRoute::Marketplace)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.navigate(MainRoute::Marketplace, cx);
                             })),
