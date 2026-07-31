@@ -396,9 +396,9 @@ impl EscapeEdge {
 
 #[cfg(test)]
 mod tests {
-    use super::{ComputerUseInterruptionMonitor, ComputerUseTurnKey, EscapeEdge};
+    use super::{ComputerUseInterruptionMonitor, EscapeEdge};
     #[cfg(windows)]
-    use super::{MONITORED_INPUT_KEYS, PhysicalInputEdge, PhysicalInputSample};
+    use super::{ComputerUseTurnKey, MONITORED_INPUT_KEYS, PhysicalInputEdge, PhysicalInputSample};
 
     #[test]
     fn escape_interrupts_only_on_a_fresh_physical_press() {
