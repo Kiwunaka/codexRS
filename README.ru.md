@@ -25,7 +25,7 @@
 </p>
 
 > [!IMPORTANT]
-> Текущее дерево готовится как `v0.1.0-rc.3`. На Windows уже пройден сквозной
+> Текущее дерево готовится как `v0.1.0-rc.4`. На Windows уже пройден сквозной
 > smoke-тест исходной сборки с точным stable-эталоном. Linux проверяется в
 > нативном CI, но до стабильного релиза нужны тесты на большем числе окружений.
 
@@ -56,9 +56,9 @@ Codex Desktop удобен, но многим нужен более компак
 | Computer Use | Только Windows: поиск окон и управление с разрешением для конкретного приложения, доступом на задачу и allowlist под управлением app-server |
 | Плагины | Нативные вкладки каталога, ограниченная загрузка изображений, управление установленными и источниками, создание, add/remove/upgrade marketplace, установка и удаление через app-server |
 | Хранилище | Отдельный single-writer SQLite для настроек codexRS и ограниченного реестра локальных проектов с именами и закреплением |
-| Платформы | Windows проверен исходной сборкой; в Ubuntu CI собираются и тестируются UI, app-server, Git и PTY; Linux Computer Use недоступен в RC3 |
+| Платформы | Windows проверен исходной сборкой; в Ubuntu CI собираются и тестируются UI, app-server, Git и PTY; Linux Computer Use недоступен в RC4 |
 
-Computer Use в RC3 доступен только на Windows и включается отдельно для каждой
+Computer Use в RC4 доступен только на Windows и включается отдельно для каждой
 задачи. Каждое чтение или действие
 передаёт точный `Window { app, id, title? }` из ограниченного discovery;
 codexRS заново находит непрозрачный ID и проверяет текущего владельца окна.
@@ -129,12 +129,12 @@ codex --version
 ### 2. Скачайте portable preview
 
 Скачивайте только со страницы [GitHub Releases](https://github.com/Kiwunaka/codexRS/releases).
-Артефакты RC3: `codexrs-v0.1.0-rc.3-windows-x86_64.zip` и
-`codexrs-v0.1.0-rc.3-linux-x86_64.tar.gz`; рядом публикуется
+Артефакты RC4: `codexrs-v0.1.0-rc.4-windows-x86_64.zip` и
+`codexrs-v0.1.0-rc.4-linux-x86_64.tar.gz`; рядом публикуется
 `SHA256SUMS.txt`. Проверьте checksum до распаковки: в Linux выполните
-`grep ' \./codexrs-v0.1.0-rc.3-linux-x86_64.tar.gz$' SHA256SUMS.txt | sha256sum -c -`,
+`grep ' \./codexrs-v0.1.0-rc.4-linux-x86_64.tar.gz$' SHA256SUMS.txt | sha256sum -c -`,
 а в Windows сравните
-`(Get-FileHash .\codexrs-v0.1.0-rc.3-windows-x86_64.zip -Algorithm SHA256).Hash`
+`(Get-FileHash .\codexrs-v0.1.0-rc.4-windows-x86_64.zip -Algorithm SHA256).Hash`
 с соответствующей строкой. Checksum помогает заметить повреждение после
 загрузки с доверенной страницы релиза, но не является независимой подписью
 издателя.
@@ -149,7 +149,7 @@ codex --version
 
 Linux-архив не является системным пакетом: он не ставит runtime-зависимости и
 desktop integration. Ubuntu CI собирает и тестирует бинарник, но распакованный
-архив ещё не проходил desktop smoke-тест. Linux Computer Use недоступен в RC3;
+архив ещё не проходил desktop smoke-тест. Linux Computer Use недоступен в RC4;
 поддержка X11/XWayland и pure Wayland остаётся будущей работой.
 
 ### 3. Соберите codexRS
