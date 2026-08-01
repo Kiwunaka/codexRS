@@ -94,7 +94,8 @@ codex --version
 仅从 [GitHub Releases](https://github.com/Kiwunaka/codexRS/releases)
 页面下载。RC2 文件为 `codexrs-v0.1.0-rc.2-windows-x86_64.zip` 和
 `codexrs-v0.1.0-rc.2-linux-x86_64.tar.gz`，并附有 `SHA256SUMS.txt`。
-解压前请校验 checksum：Linux 可运行 `sha256sum --ignore-missing -c SHA256SUMS.txt`；Windows
+解压前请校验 checksum：Linux 可运行
+`grep ' \./codexrs-v0.1.0-rc.2-linux-x86_64.tar.gz$' SHA256SUMS.txt | sha256sum -c -`；Windows
 可将 `(Get-FileHash .\codexrs-v0.1.0-rc.2-windows-x86_64.zip -Algorithm SHA256).Hash`
 与对应条目比较。checksum 只能在从可信 release 页面取得后发现损坏，不能替代
 独立的发布者签名。

@@ -132,7 +132,8 @@ codex --version
 Артефакты RC2: `codexrs-v0.1.0-rc.2-windows-x86_64.zip` и
 `codexrs-v0.1.0-rc.2-linux-x86_64.tar.gz`; рядом публикуется
 `SHA256SUMS.txt`. Проверьте checksum до распаковки: в Linux выполните
-`sha256sum --ignore-missing -c SHA256SUMS.txt`, а в Windows сравните
+`grep ' \./codexrs-v0.1.0-rc.2-linux-x86_64.tar.gz$' SHA256SUMS.txt | sha256sum -c -`,
+а в Windows сравните
 `(Get-FileHash .\codexrs-v0.1.0-rc.2-windows-x86_64.zip -Algorithm SHA256).Hash`
 с соответствующей строкой. Checksum помогает заметить повреждение после
 загрузки с доверенной страницы релиза, но не является независимой подписью
