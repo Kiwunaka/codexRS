@@ -1,4 +1,6 @@
 use std::error::Error;
+#[cfg(any(target_os = "linux", test))]
+use std::ffi::OsStr;
 use std::fmt;
 #[cfg(windows)]
 use std::fs::File;
@@ -26,6 +28,35 @@ pub const MAX_COMPUTER_WINDOWS: usize = 100;
 pub const MAX_COMPUTER_APPLICATIONS: usize = 40;
 pub const MAX_COMPUTER_TEXT_BYTES: usize = 16 * 1024;
 pub const MAX_COMPUTER_CAPTURE_BYTES: usize = 3 * 1024 * 1024;
+
+/// Returns whether the current platform can expose the Computer Use tool namespace.
+///
+/// Linux observation is intentionally limited to X11/XWayland, where an X11
+/// display is available. Pure Wayland requires the separate portal path.
+#[must_use]
+pub fn computer_use_platform_available() -> bool {
+    #[cfg(windows)]
+    {
+        true
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        x11_display_available(std::env::var_os("DISPLAY").as_deref())
+    }
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        false
+    }
+}
+
+/// Pure X11/XWayland availability predicate used by the Linux platform gate.
+#[must_use]
+#[cfg(any(target_os = "linux", test))]
+fn x11_display_available(display: Option<&OsStr>) -> bool {
+    display.is_some_and(|display| !display.is_empty())
+}
 
 const MAX_WINDOW_TEXT_BYTES: usize = 512;
 #[cfg(windows)]
@@ -1157,7 +1188,7 @@ mod tests {
     use super::{
         ComputerUseError, ComputerWindow, MAX_CAPTURE_HEIGHT, MAX_CAPTURE_WIDTH,
         bounded_dimensions, bounded_text, computer_use_target_is_forbidden,
-        normalize_application_id, relative_to_screen,
+        normalize_application_id, relative_to_screen, x11_display_available,
     };
     #[cfg(windows)]
     use super::{
@@ -1211,6 +1242,13 @@ mod tests {
     fn application_ids_are_stable_and_case_insensitive() {
         assert_eq!(normalize_application_id("  MSPaint.EXE "), "mspaint.exe");
         assert!(normalize_application_id(&"x".repeat(513)).is_empty());
+    }
+
+    #[test]
+    fn x11_display_gate_requires_a_nonempty_display_name() {
+        assert!(!x11_display_available(None));
+        assert!(!x11_display_available(Some(std::ffi::OsStr::new(""))));
+        assert!(x11_display_available(Some(std::ffi::OsStr::new(":0"))));
     }
 
     #[test]

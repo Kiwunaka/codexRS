@@ -14,8 +14,10 @@ reports. They are test inputs, not behavior to reproduce.
 
 ## Active release-candidate limitations
 
-- Linux Computer Use is unavailable in RC4: the platform gate fails closed.
-  X11/XWayland and portal-backed pure-Wayland support remain future work.
+- Linux Computer Use is limited to bounded, screenshot-only X11/XWayland
+  observation when `DISPLAY` is set. Pure Wayland, text extraction, input,
+  app launch, persistent approvals, overlays, and interruption monitoring are
+  unavailable; a portal-backed selection path remains future work.
 - Dynamic Computer Use tools are attached at `thread/start`; an existing task
   cannot gain them after creation.
 - Windows ZIP and Linux tar.gz release archives are unsigned portable previews.

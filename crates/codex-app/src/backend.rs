@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[cfg(any(windows, test))]
+use codex_core::MAX_COMPUTER_ALLOWED_APPS;
 use codex_core::{
     AccountCredits, AccountKind, AccountProfile, Action, AgentConfigScope, AgentConfigScopeKind,
     AgentConfigurationMutationKind, AppCard, AppDetailView, AppToolCard, AppearancePalette,
@@ -33,13 +35,12 @@ use codex_core::{
     KeyboardShortcutPreferences, LocalProjectSummary, MAX_APPEARANCE_FONT_FAMILY_BYTES,
     MAX_ATTACHMENT_LABEL_BYTES, MAX_BACKGROUND_TERMINALS, MAX_BROWSER_DOWNLOAD_PATH_BYTES,
     MAX_BROWSER_PERMISSION_ORIGIN_BYTES, MAX_BROWSER_SITE_PERMISSIONS, MAX_COMPOSER_ATTACHMENTS,
-    MAX_COMPUTER_ALLOWED_APPS, MAX_COMPUTER_APP_ID_BYTES, MAX_FUZZY_FILE_PATH_BYTES,
-    MAX_FUZZY_FILE_QUERY_BYTES, MAX_FUZZY_FILE_RESULTS, MAX_FUZZY_FILE_ROOTS,
-    MAX_GIT_BRANCH_PREFIX_BYTES, MAX_GIT_DIFF_BYTES, MAX_GIT_INSTRUCTIONS_BYTES, MAX_GIT_SHA_BYTES,
-    MAX_HOOK_FIELD_BYTES, MAX_HOOK_ISSUES, MAX_HOOK_ITEMS, MAX_HOOK_PROJECTS,
-    MAX_IMPORT_DETAIL_ITEMS, MAX_IMPORT_FIELD_BYTES, MAX_IMPORT_HISTORY_ENTRIES,
-    MAX_IMPORT_MIGRATION_ITEMS, MAX_IMPORT_RESULTS_PER_HISTORY, MAX_IMPORT_SESSION_AGE_DAYS,
-    MAX_IMPORT_SESSIONS, MAX_KEYBOARD_SHORTCUT_ACCELERATOR_BYTES,
+    MAX_COMPUTER_APP_ID_BYTES, MAX_FUZZY_FILE_PATH_BYTES, MAX_FUZZY_FILE_QUERY_BYTES,
+    MAX_FUZZY_FILE_RESULTS, MAX_FUZZY_FILE_ROOTS, MAX_GIT_BRANCH_PREFIX_BYTES, MAX_GIT_DIFF_BYTES,
+    MAX_GIT_INSTRUCTIONS_BYTES, MAX_GIT_SHA_BYTES, MAX_HOOK_FIELD_BYTES, MAX_HOOK_ISSUES,
+    MAX_HOOK_ITEMS, MAX_HOOK_PROJECTS, MAX_IMPORT_DETAIL_ITEMS, MAX_IMPORT_FIELD_BYTES,
+    MAX_IMPORT_HISTORY_ENTRIES, MAX_IMPORT_MIGRATION_ITEMS, MAX_IMPORT_RESULTS_PER_HISTORY,
+    MAX_IMPORT_SESSION_AGE_DAYS, MAX_IMPORT_SESSIONS, MAX_KEYBOARD_SHORTCUT_ACCELERATOR_BYTES,
     MAX_KEYBOARD_SHORTCUTS_PER_COMMAND, MAX_LOCAL_PROJECTS, MAX_MCP_FORM_FIELDS,
     MAX_MCP_FORM_IMAGE_DATA_URL_BYTES, MAX_MCP_FORM_OPTIONS, MAX_MCP_FORM_VALUE_BYTES,
     MAX_MCP_SERVER_FIELD_BYTES, MAX_MCP_SERVER_LIST_ITEMS, MAX_PENDING_APPROVALS,
@@ -93,8 +94,8 @@ use codex_platform::{
     GitHubPullRequestSearchFilters, GitHubPullRequestState, GitHubPullRequestSummary, GitSnapshot,
     RuntimePolicy, TerminalConfig, TerminalEvent, TerminalSession, available_terminal_shells,
     browser_permission_for_url, capture_computer_window, click_computer_window, codexrs_data_dir,
-    commit_diff as git_commit_diff, computer_use_target_is_forbidden,
-    create_branch as git_create_branch,
+    commit_diff as git_commit_diff, computer_use_platform_available,
+    computer_use_target_is_forbidden, create_branch as git_create_branch,
     create_managed_worktree_cancellable as git_create_managed_worktree,
     create_worktree as git_create_worktree, default_browser_download_dir, drag_computer_window,
     git_branch_diff, git_commit, git_commit_message_diff, git_diff, git_pull_request_context,
@@ -178,7 +179,7 @@ use codex_storage::{
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use serde_json::{Value, json};
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 use codex_protocol::{DynamicToolFunction, DynamicToolNamespaceTool, DynamicToolSpec};
 
 const BACKEND_COMMAND_CAPACITY: usize = 64;
@@ -2999,6 +3000,7 @@ fn run_backend(commands: Receiver<BackendCommand>, events: Sender<Action>) {
     let mut retryable_turns = HashMap::new();
     let mut computer_accessibility = ComputerUseAccessibilityClient::new();
     let mut computer_url_policy = ComputerUseUrlPolicy::new();
+    #[cfg(windows)]
     let computer_interruption = match ComputerUseInterruptionMonitor::new() {
         Ok(monitor) => Some(monitor),
         Err(error) => {
@@ -3011,6 +3013,9 @@ fn run_backend(commands: Receiver<BackendCommand>, events: Sender<Action>) {
             None
         }
     };
+    #[cfg(not(windows))]
+    let computer_interruption: Option<ComputerUseInterruptionMonitor> = None;
+    #[cfg(windows)]
     let mut computer_overlay = match ComputerUseSystemOverlay::new() {
         Ok(overlay) => Some(overlay),
         Err(error) => {
@@ -3023,6 +3028,8 @@ fn run_backend(commands: Receiver<BackendCommand>, events: Sender<Action>) {
             None
         }
     };
+    #[cfg(not(windows))]
+    let mut computer_overlay: Option<ComputerUseSystemOverlay> = None;
     let mut interrupted_computer_turns = HashSet::new();
     let mut terminals = HashMap::new();
     let mut browser = None;
@@ -3081,7 +3088,10 @@ fn run_backend(commands: Receiver<BackendCommand>, events: Sender<Action>) {
                             }
                             interrupted_computer_turns.remove(&(turn.thread_id, turn.turn_id));
                         }
-                        let computer_request = computer_tool_request_meta(&event);
+                        let computer_request =
+                            computer_tool_request_meta(&event).filter(|request| {
+                                computer_use_tool_supported_on_platform(&request.tool)
+                            });
                         if computer_request.is_some()
                             && let Some(turn) = computer_interruption
                                 .as_ref()
@@ -4867,6 +4877,7 @@ fn run_effect(
             stop_fuzzy_file_search(app_server, fuzzy_file_search, &session_id);
         }
         Effect::LoadComputerUsePolicy => {
+            #[cfg(windows)]
             match app_server.read_config(ConfigReadParams {
                 include_layers: true,
                 cwd: None,
@@ -4882,6 +4893,12 @@ fn run_effect(
                         "failed to load Computer Use app policy: {error}"
                     )),
                 ),
+            }
+
+            #[cfg(not(windows))]
+            {
+                computer_allowed_app_ids.clear();
+                emit(events, Action::ComputerUsePolicyLoaded(Vec::new()));
             }
         }
         Effect::LoadRemoteControlStatus { generation } => {
@@ -5258,34 +5275,51 @@ fn run_effect(
             app_id,
             remaining_app_ids,
         } => {
-            let result = app_server.batch_write_config(ConfigBatchWriteParams {
-                edits: vec![ConfigEdit {
-                    key_path: "computer_use.windows.always_allowed_app_ids".to_owned(),
-                    value: computer_use_allowed_app_ids_value(&remaining_app_ids),
-                    merge_strategy: ConfigMergeStrategy::Upsert,
-                }],
-                file_path: None,
-                expected_version: None,
-                reload_user_config: true,
-            });
-            match result {
-                Ok(response) => {
-                    *computer_allowed_app_ids = remaining_app_ids.iter().cloned().collect();
-                    emit(
+            #[cfg(windows)]
+            {
+                let result = app_server.batch_write_config(ConfigBatchWriteParams {
+                    edits: vec![ConfigEdit {
+                        key_path: "computer_use.windows.always_allowed_app_ids".to_owned(),
+                        value: computer_use_allowed_app_ids_value(&remaining_app_ids),
+                        merge_strategy: ConfigMergeStrategy::Upsert,
+                    }],
+                    file_path: None,
+                    expected_version: None,
+                    reload_user_config: true,
+                });
+                match result {
+                    Ok(response) => {
+                        *computer_allowed_app_ids = remaining_app_ids.iter().cloned().collect();
+                        emit(
+                            events,
+                            Action::ComputerUseAllowedAppRemoved {
+                                app_id,
+                                overridden: response.status == ConfigWriteStatus::OkOverridden,
+                            },
+                        );
+                    }
+                    Err(error) => emit(
                         events,
-                        Action::ComputerUseAllowedAppRemoved {
+                        Action::ComputerUsePolicyMutationFailed {
                             app_id,
-                            overridden: response.status == ConfigWriteStatus::OkOverridden,
+                            message: format!("failed to update Computer Use app policy: {error}"),
                         },
-                    );
+                    ),
                 }
-                Err(error) => emit(
+            }
+
+            #[cfg(not(windows))]
+            {
+                let _ = remaining_app_ids;
+                emit(
                     events,
                     Action::ComputerUsePolicyMutationFailed {
                         app_id,
-                        message: format!("failed to update Computer Use app policy: {error}"),
+                        message:
+                            "Persistent Computer Use app approval is unavailable on this platform."
+                                .to_owned(),
                     },
-                ),
+                );
             }
         }
         Effect::LoadAgentConfiguration { cwd } => {
@@ -5991,10 +6025,8 @@ fn run_effect(
             memory_preferences,
         } => {
             let runtime_workspace_roots = cwd.clone().map(|path| vec![path]);
-            #[cfg(windows)]
-            let dynamic_tools = Some(computer_use_dynamic_tools());
-            #[cfg(not(windows))]
-            let dynamic_tools = None;
+            let dynamic_tools = computer_use_dynamic_tools_for_platform();
+            let computer_use_attached = dynamic_tools.is_some();
             match app_server.start_thread(ThreadStartParams {
                 model: model.clone(),
                 service_tier: Some(service_tier.clone()),
@@ -6016,8 +6048,9 @@ fn run_effect(
                 Ok(response) => {
                     let task = map_task(response.thread);
                     let task_id = task.id.clone();
-                    #[cfg(windows)]
-                    computer_capable_threads.insert(task_id.clone());
+                    if computer_use_attached {
+                        computer_capable_threads.insert(task_id.clone());
+                    }
                     emit(events, Action::TaskCreated(task));
                     if let Some(preferences) = memory_preferences {
                         emit(
@@ -6028,13 +6061,14 @@ fn run_effect(
                             },
                         );
                     }
-                    #[cfg(windows)]
-                    emit(
-                        events,
-                        Action::ComputerUseAvailable {
-                            task_id: task_id.clone(),
-                        },
-                    );
+                    if computer_use_attached {
+                        emit(
+                            events,
+                            Action::ComputerUseAvailable {
+                                task_id: task_id.clone(),
+                            },
+                        );
+                    }
                     let turn_started = match start_turn(
                         app_server,
                         StartTurnRequest {
@@ -9858,6 +9892,53 @@ fn connect(
     }
 }
 
+fn computer_use_dynamic_tools_for_platform() -> Option<Vec<DynamicToolSpec>> {
+    computer_use_dynamic_tools_for_platform_with_available(computer_use_platform_available())
+}
+
+fn computer_use_dynamic_tools_for_platform_with_available(
+    platform_available: bool,
+) -> Option<Vec<DynamicToolSpec>> {
+    #[cfg(windows)]
+    {
+        let _ = platform_available;
+        Some(computer_use_dynamic_tools())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        platform_available.then(linux_computer_use_dynamic_tools)
+    }
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = platform_available;
+        None
+    }
+}
+
+fn computer_use_tool_supported_on_platform(tool: &str) -> bool {
+    #[cfg(windows)]
+    {
+        let _ = tool;
+        true
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        matches!(
+            tool,
+            "list_windows" | "get_window" | "list_apps" | "get_window_state"
+        )
+    }
+
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = tool;
+        false
+    }
+}
+
 #[cfg(any(windows, test))]
 fn computer_use_dynamic_tools() -> Vec<DynamicToolSpec> {
     vec![DynamicToolSpec::Namespace {
@@ -10053,7 +10134,63 @@ fn computer_use_dynamic_tools() -> Vec<DynamicToolSpec> {
     }]
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(target_os = "linux", test))]
+fn linux_computer_use_dynamic_tools() -> Vec<DynamicToolSpec> {
+    vec![DynamicToolSpec::Namespace {
+        name: "computer_use".to_owned(),
+        description: "List open X11/XWayland desktop windows and capture a bounded screenshot of an exact approved window."
+            .to_owned(),
+        tools: vec![
+            dynamic_tool(
+                "list_windows",
+                "List the bounded set of currently open targetable desktop windows.",
+                json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+            ),
+            dynamic_tool(
+                "get_window",
+                "Rehydrate one currently open window by its opaque id.",
+                json!({
+                    "type": "object",
+                    "required": ["id"],
+                    "properties": {
+                        "id": {"type": "integer", "minimum": 0, "maximum": u32::MAX},
+                        "app": {"type": "string", "minLength": 1, "maxLength": 512}
+                    },
+                    "additionalProperties": false
+                }),
+            ),
+            dynamic_tool(
+                "list_apps",
+                "List running targetable applications and their open windows.",
+                json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+            ),
+            dynamic_tool(
+                "get_window_state",
+                "Capture a bounded screenshot of an exact open X11/XWayland window.",
+                json!({
+                    "type": "object",
+                    "required": ["include_screenshot", "window"],
+                    "properties": {
+                        "include_text": {"enum": [false], "default": false},
+                        "include_screenshot": {"enum": [true]},
+                        "window": computer_window_schema()
+                    },
+                    "additionalProperties": false
+                }),
+            ),
+        ],
+    }]
+}
+
+#[cfg(any(windows, target_os = "linux", test))]
 fn computer_window_schema() -> Value {
     json!({
         "type": "object",
@@ -10067,7 +10204,7 @@ fn computer_window_schema() -> Value {
     })
 }
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 fn dynamic_tool(name: &str, description: &str, input_schema: Value) -> DynamicToolNamespaceTool {
     DynamicToolNamespaceTool::new(DynamicToolFunction {
         name: name.to_owned(),
@@ -10099,6 +10236,14 @@ fn handle_dynamic_tool_call(
     };
     if params.namespace.as_deref() != Some("computer_use") {
         respond_dynamic_tool_failure(app_server, id, "unsupported dynamic tool namespace");
+        return;
+    }
+    if !computer_use_tool_supported_on_platform(&params.tool) {
+        respond_dynamic_tool_failure(
+            app_server,
+            id,
+            "this Computer Use tool is not supported on this platform",
+        );
         return;
     }
     let Some(permission) = permissions.get_mut(&params.thread_id) else {
@@ -10248,9 +10393,7 @@ fn handle_dynamic_tool_call(
             turn_id: Some(params.turn_id),
             kind: ApprovalKind::DynamicTool,
             title: format!("Allow ChatGPT to use “{application_name}”?"),
-            detail: format!(
-                "ChatGPT can see and control “{application_name}” on your computer. Allow once for this task or always allow this app."
-            ),
+            detail: computer_use_approval_detail(&application_name),
             context: ApprovalContext::DynamicTool,
         }),
     );
@@ -10446,6 +10589,22 @@ fn handle_computer_launch_call(
     );
 }
 
+fn computer_use_approval_detail(application_name: &str) -> String {
+    #[cfg(windows)]
+    {
+        format!(
+            "ChatGPT can see and control “{application_name}” on your computer. Allow once for this task or always allow this app."
+        )
+    }
+
+    #[cfg(not(windows))]
+    {
+        format!(
+            "ChatGPT can observe “{application_name}” on your computer. Allow once for this task."
+        )
+    }
+}
+
 fn computer_application_value(application: &ComputerApplication) -> Value {
     let mut value = serde_json::Map::from_iter([
         ("id".to_owned(), Value::String(application.id.clone())),
@@ -10594,6 +10753,7 @@ fn computer_use_policy_contains(
         .any(|configured| computer_app_id_matches(configured, application_id))
 }
 
+#[cfg(any(windows, test))]
 fn computer_use_allowed_app_ids(config: &ConfigReadResponse) -> Vec<String> {
     const MAX_CONFIG_LAYERS: usize = 64;
 
@@ -10633,6 +10793,7 @@ fn computer_use_allowed_app_ids(config: &ConfigReadResponse) -> Vec<String> {
     Vec::new()
 }
 
+#[cfg(any(windows, test))]
 fn computer_use_allowed_app_ids_value(app_ids: &[String]) -> Value {
     Value::Object(
         app_ids
@@ -10644,6 +10805,7 @@ fn computer_use_allowed_app_ids_value(app_ids: &[String]) -> Value {
     )
 }
 
+#[cfg(windows)]
 fn persist_computer_use_allowed_app(
     app_server: &AppServerConnection,
     application_id: &str,
@@ -10713,6 +10875,17 @@ fn run_computer_tool(
     events: &Sender<Action>,
     computer_accessibility: &mut ComputerUseAccessibilityClient,
 ) -> Result<Vec<DynamicToolCallOutputContentItem>, String> {
+    #[cfg(target_os = "linux")]
+    if tool == "get_window_state" {
+        if optional_bool_argument(arguments, "include_text")?.unwrap_or(false) {
+            return Err("Linux Computer Use observation does not support include_text".to_owned());
+        }
+        if optional_bool_argument(arguments, "include_screenshot")? != Some(true) {
+            return Err(
+                "Linux Computer Use observation requires include_screenshot=true".to_owned(),
+            );
+        }
+    }
     if tool != "get_window_state" && computer_accessibility.user_input_requires_refresh(window_id) {
         return Err(COMPUTER_USE_USER_INPUT_STALE_MESSAGE.to_owned());
     }
@@ -12200,6 +12373,8 @@ fn respond_to_approval(
     computer_url_policy: &mut ComputerUseUrlPolicy,
     mut computer_overlay: Option<&mut ComputerUseSystemOverlay>,
 ) {
+    #[cfg(not(windows))]
+    let _ = computer_allowed_app_ids;
     let Some(pending) = pending_approvals.remove(&request_id) else {
         return;
     };
@@ -12434,6 +12609,7 @@ fn respond_to_approval(
                 return;
             }
 
+            #[cfg(windows)]
             let always_allowed = if decision == ApprovalDecision::AlwaysAllow {
                 persist_computer_use_allowed_app(
                     app_server,
@@ -12444,6 +12620,8 @@ fn respond_to_approval(
             } else {
                 computer_use_policy_contains(computer_allowed_app_ids, &application_id)
             };
+            #[cfg(not(windows))]
+            let always_allowed = false;
 
             if let Some(permission) = computer_permissions.get_mut(&params.thread_id) {
                 permission.authorized_application_id = Some(application_id.clone());
@@ -12504,6 +12682,7 @@ fn respond_to_approval(
                 return;
             }
 
+            #[cfg(windows)]
             if decision == ApprovalDecision::AlwaysAllow {
                 persist_computer_use_allowed_app(
                     app_server,
@@ -15814,20 +15993,28 @@ mod tests {
         encode_browser_permissions, encode_git_preferences, encode_keyboard_shortcut_preferences,
         encode_primary_window_placement, forbidden_computer_target_message, handle_notification,
         hook_state_config_value, index_app_logos, initialize_capabilities, is_hidden_timeline_item,
-        map_app_detail, map_app_server_approval, map_apps, map_fuzzy_file_search_results,
-        map_mcp_elicitation, map_mcp_resource_contents, map_mcp_runtime_catalog,
-        map_remote_control_snapshot, map_remote_devices_page, map_timeline_item,
-        map_user_input_request, mcp_elicitation_content_json, mcp_server_config_value,
-        newest_review_mode_from_items, parse_appearance_preferences, parse_appearance_theme,
-        parse_browser_download_preferences, parse_browser_permissions, parse_computer_key_chord,
-        parse_generated_commit_message, parse_generated_commit_pull_request_messages,
-        parse_generated_pull_request_message, parse_git_preferences,
-        parse_keyboard_shortcut_preferences, parse_primary_window_placement,
+        linux_computer_use_dynamic_tools, map_app_detail, map_app_server_approval, map_apps,
+        map_fuzzy_file_search_results, map_mcp_elicitation, map_mcp_resource_contents,
+        map_mcp_runtime_catalog, map_remote_control_snapshot, map_remote_devices_page,
+        map_timeline_item, map_user_input_request, mcp_elicitation_content_json,
+        mcp_server_config_value, newest_review_mode_from_items, parse_appearance_preferences,
+        parse_appearance_theme, parse_browser_download_preferences, parse_browser_permissions,
+        parse_computer_key_chord, parse_generated_commit_message,
+        parse_generated_commit_pull_request_messages, parse_generated_pull_request_message,
+        parse_git_preferences, parse_keyboard_shortcut_preferences, parse_primary_window_placement,
         personalization_snapshot, plugin_directory_includes_marketplace,
         plugin_directory_marketplace_kinds, pull_request_generation_prompt,
         pull_request_output_schema, record_retryable_steer, remote_pairing_status_params,
         restored_browser_download, retryable_submission_inputs, run_computer_tool,
         safety_retry_fork_point, stored_browser_download, user_input_response,
+    };
+
+    #[cfg(any(windows, target_os = "linux"))]
+    use super::computer_use_approval_detail;
+    #[cfg(target_os = "linux")]
+    use super::{
+        computer_use_dynamic_tools_for_platform_with_available,
+        computer_use_tool_supported_on_platform,
     };
 
     #[test]
@@ -18696,6 +18883,123 @@ mod tests {
             Ok((ComputerKey::NumpadEnter, Vec::new()))
         );
         assert!(parse_computer_key_chord("Windows+R").is_err());
+    }
+
+    #[test]
+    fn linux_computer_use_schema_is_screenshot_observation_only() {
+        let Ok(tools) = serde_json::to_value(linux_computer_use_dynamic_tools()) else {
+            panic!("Linux Computer Use tools must serialize");
+        };
+        let Some(tools) = tools.pointer("/0/tools").and_then(Value::as_array) else {
+            panic!("Linux Computer Use namespace must contain tools");
+        };
+        let names = tools
+            .iter()
+            .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            [
+                "list_windows",
+                "get_window",
+                "list_apps",
+                "get_window_state"
+            ]
+        );
+
+        let Some(state) = tools
+            .iter()
+            .find(|tool| tool.get("name") == Some(&json!("get_window_state")))
+        else {
+            panic!("Linux state tool must exist");
+        };
+        assert_eq!(
+            state.pointer("/inputSchema/required"),
+            Some(&json!(["include_screenshot", "window"]))
+        );
+        assert_eq!(
+            state.pointer("/inputSchema/properties/include_text"),
+            Some(&json!({"enum": [false], "default": false}))
+        );
+        assert_eq!(
+            state.pointer("/inputSchema/properties/include_screenshot"),
+            Some(&json!({"enum": [true]}))
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_computer_use_selection_and_router_are_read_only() {
+        assert!(computer_use_dynamic_tools_for_platform_with_available(true).is_some());
+        assert!(computer_use_dynamic_tools_for_platform_with_available(false).is_none());
+        for tool in [
+            "list_windows",
+            "get_window",
+            "list_apps",
+            "get_window_state",
+        ] {
+            assert!(computer_use_tool_supported_on_platform(tool));
+        }
+        for tool in [
+            "launch_app",
+            "click",
+            "press_key",
+            "type_text",
+            "scroll",
+            "set_value",
+            "drag",
+            "perform_secondary_action",
+            "activate_window",
+        ] {
+            assert!(!computer_use_tool_supported_on_platform(tool));
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_window_state_rejects_text_and_non_screenshot_requests() {
+        let (events, _event_rx) = bounded(1);
+        let mut computer_accessibility = ComputerUseAccessibilityClient::new();
+        assert_eq!(
+            run_computer_tool(
+                "get_window_state",
+                &json!({"include_text": true, "include_screenshot": true}),
+                "thread-1",
+                "7",
+                &events,
+                &mut computer_accessibility,
+            ),
+            Err("Linux Computer Use observation does not support include_text".to_owned())
+        );
+        assert_eq!(
+            run_computer_tool(
+                "get_window_state",
+                &json!({"include_screenshot": false}),
+                "thread-1",
+                "7",
+                &events,
+                &mut computer_accessibility,
+            ),
+            Err("Linux Computer Use observation requires include_screenshot=true".to_owned())
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_computer_use_approval_copy_remains_unchanged() {
+        assert_eq!(
+            computer_use_approval_detail("Paint"),
+            "ChatGPT can see and control “Paint” on your computer. Allow once for this task or always allow this app."
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_computer_use_approval_is_task_only_observation() {
+        assert_eq!(
+            computer_use_approval_detail("Terminal"),
+            "ChatGPT can observe “Terminal” on your computer. Allow once for this task."
+        );
     }
 
     #[test]

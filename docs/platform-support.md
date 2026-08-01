@@ -5,8 +5,8 @@
 | Platform | Build | UI and app-server | Git and terminal | Computer Use |
 | --- | --- | --- | --- | --- |
 | Windows 10/11 x64 | Supported; unsigned portable archive | Locally source-build smoke-tested | Native Git and ConPTY; child trees use Job Objects | Supported and smoke-tested |
-| Ubuntu 24.04 x64 | CI; unsigned portable tar.gz | Native UI and app-server build and tests in CI | Native Git and PTY | Unavailable in RC4 |
-| Other Linux distributions | Source | Expected with equivalent native packages | Expected | Unavailable in RC4 |
+| Ubuntu 24.04 x64 | CI; unsigned portable tar.gz | Native UI and app-server build and tests in CI | Native Git and PTY | X11/XWayland screenshot observation when `DISPLAY` is set |
+| Other Linux distributions | Source | Expected with equivalent native packages | Expected | X11/XWayland screenshot observation when `DISPLAY` is set |
 | macOS | Not targeted | Not supported in this release | Not supported | Not supported |
 
 The stable compatibility oracle is Windows Codex Desktop `26.721.3996.0` with
@@ -152,9 +152,12 @@ The published Linux tar.gz is a portable archive, not a system package. It
 does not install runtime dependencies, a desktop entry, or a URI handler, and
 the extracted archive has not yet received a desktop smoke test.
 
-GPUI can run on native Linux desktops, but Linux Computer Use is unavailable in
-RC4 because the platform gate fails closed. X11/XWayland support and a
-portal-backed pure-Wayland selection and input path are future work.
+On Linux, Computer Use attaches only when `DISPLAY` is nonempty and exposes a
+bounded, read-only X11/XWayland observation slice: window/app discovery,
+window rehydration, and screenshot-only window state. It has no accessibility
+text, input, launch, persistent app approvals, overlay, or interruption
+monitoring. Pure Wayland without XWayland remains unavailable; a portal-backed
+selection path is future work.
 
 ## Runtime directories
 
