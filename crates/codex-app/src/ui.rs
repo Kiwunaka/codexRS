@@ -36,28 +36,28 @@ use codex_core::{
     MAX_GIT_COMMIT_MESSAGE_CHARS, MAX_GIT_PULL_REQUEST_BODY_CHARS,
     MAX_GIT_PULL_REQUEST_TITLE_CHARS, MAX_KEYBOARD_SHORTCUT_ACCELERATOR_BYTES,
     MAX_KEYBOARD_SHORTCUTS_PER_COMMAND, MAX_LOCAL_PROJECT_NAME_BYTES,
-    MAX_MCP_FORM_IMAGE_DATA_URL_BYTES, MAX_MCP_FORM_VALUE_BYTES, MAX_TASK_SEARCH_RESULTS,
-    MAX_TIMELINE_ITEMS, MAX_USER_INPUT_VALUE_BYTES, MAX_WORKTREE_ROOT_BYTES, MainRoute,
-    MarketplaceManageTab, MarketplaceSectionFilter, MarketplaceTab, McpAuthStatus,
-    McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
-    McpElicitationContent, McpElicitationDecision, McpElicitationValue, McpFormElicitation,
-    McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpResourceCard,
+    MAX_MCP_FORM_IMAGE_DATA_URL_BYTES, MAX_MCP_FORM_VALUE_BYTES, MAX_PENDING_WORKTREE_FORKS,
+    MAX_TASK_SEARCH_RESULTS, MAX_TIMELINE_ITEMS, MAX_USER_INPUT_VALUE_BYTES,
+    MAX_WORKTREE_ROOT_BYTES, MainRoute, MarketplaceManageTab, MarketplaceSectionFilter,
+    MarketplaceTab, McpAuthStatus, McpBrowserOriginElicitation, McpBrowserResourceElicitation,
+    McpElicitation, McpElicitationContent, McpElicitationDecision, McpElicitationValue,
+    McpFormElicitation, McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpResourceCard,
     McpResourceContentCard, McpResourceTemplateCard, McpServerCard, McpServerDraft,
     McpServerStartupFailureReason, McpServerStartupState, McpToolCard, McpTransportKind,
-    NetworkApprovalProtocol, OutputArtifact, OutputArtifactKind, PendingWorktreeForkPhase,
-    PermissionRequestDetail, Personality, PluginCard, PluginDetailItem, PluginDetailView,
-    PluginDirectoryTab, PluginSkillDetail, PrimaryWindowPlacement, ProcessManagerState,
-    PullRequestActivity, PullRequestActivityKind, PullRequestCheck, PullRequestCheckStatus,
-    PullRequestCiStatus, PullRequestDetail, PullRequestDetailTab, PullRequestLifecycle,
-    PullRequestMergeMethod, PullRequestMutation, PullRequestMutationKind, PullRequestRelationship,
-    PullRequestReviewEvent, PullRequestReviewState, PullRequestState, PullRequestSummary,
-    ReasoningEffortOption, ReducedMotionPreference, RemoteControlRuntimeStatus, ReviewDelivery,
-    ReviewTarget, STANDARD_SERVICE_TIER_ID, ServiceTierOption, SkillCard, SkillScope,
-    TaskRunStatus, TaskSearchResult, TaskSummary, TerminalDockLocation, TerminalTabState,
-    ThreadGoalStatus, TimelineCitation, TimelineItem, TimelineKind, UsageLimitWindow,
-    UserInputAnswer, UserInputAnswers, UserInputRequest, appearance_code_theme_supports_variant,
-    composer_plugin_display_name, composer_plugin_is_mentionable, is_appearance_code_theme_id,
-    reduce, validate_mcp_form_content,
+    NetworkApprovalProtocol, OutputArtifact, OutputArtifactKind, PendingWorktreeFork,
+    PendingWorktreeForkPhase, PermissionRequestDetail, Personality, PluginCard, PluginDetailItem,
+    PluginDetailView, PluginDirectoryTab, PluginSkillDetail, PrimaryWindowPlacement,
+    ProcessManagerState, PullRequestActivity, PullRequestActivityKind, PullRequestCheck,
+    PullRequestCheckStatus, PullRequestCiStatus, PullRequestDetail, PullRequestDetailTab,
+    PullRequestLifecycle, PullRequestMergeMethod, PullRequestMutation, PullRequestMutationKind,
+    PullRequestRelationship, PullRequestReviewEvent, PullRequestReviewState, PullRequestState,
+    PullRequestSummary, ReasoningEffortOption, ReducedMotionPreference, RemoteControlRuntimeStatus,
+    ReviewDelivery, ReviewTarget, STANDARD_SERVICE_TIER_ID, ServiceTierOption, SkillCard,
+    SkillScope, TaskRunStatus, TaskSearchResult, TaskSummary, TerminalDockLocation,
+    TerminalTabState, ThreadGoalStatus, TimelineCitation, TimelineItem, TimelineKind,
+    UsageLimitWindow, UserInputAnswer, UserInputAnswers, UserInputRequest,
+    appearance_code_theme_supports_variant, composer_plugin_display_name,
+    composer_plugin_is_mentionable, is_appearance_code_theme_id, reduce, validate_mcp_form_content,
 };
 use codex_platform::{
     default_browser_download_dir, desktop_work_areas, normalize_browser_origin, read_artifact_image,
@@ -2452,7 +2452,7 @@ struct TaskActionMenuTarget {
     title: String,
     cwd: PathBuf,
     is_pinned: bool,
-    worktree_fork_pending: bool,
+    worktree_fork_queue_full: bool,
 }
 
 #[derive(Clone)]
@@ -6145,20 +6145,19 @@ impl WorkspaceView {
             }
             _ => {}
         }
-        let pending_worktree_opened = matches!(
+        let pending_worktree_changed = matches!(
             &action,
             Action::ForkSelectedTaskIntoWorktree
                 | Action::ForkTaskIntoWorktree(_)
                 | Action::PendingWorktreeForkReady { .. }
-                | Action::PendingWorktreeForkCreationFailed(_)
-                | Action::PendingWorktreeForkConversationFailed(_)
-                | Action::RetryPendingWorktreeFork
-        );
-        let pending_worktree_closed = matches!(
-            &action,
-            Action::PendingWorktreeForkCompleted
-                | Action::CancelPendingWorktreeFork
-                | Action::DismissPendingWorktreeFork
+                | Action::PendingWorktreeForkCreationFailed { .. }
+                | Action::PendingWorktreeForkConversationFailed { .. }
+                | Action::PendingWorktreeForkCompleted { .. }
+                | Action::PendingWorktreeForkCancelled { .. }
+                | Action::PendingWorktreeForkCancelFailed { .. }
+                | Action::CancelPendingWorktreeFork { .. }
+                | Action::RetryPendingWorktreeFork { .. }
+                | Action::DismissPendingWorktreeFork { .. }
         );
         match &action {
             Action::ShowInspector(InspectorPane::Terminal) | Action::ToggleReviewPanel => {
@@ -6183,16 +6182,17 @@ impl WorkspaceView {
         if reset_diff_file_sections {
             self.collapsed_diff_file_sections.clear();
         }
-        if pending_worktree_opened && self.state.pending_worktree_fork.is_some() {
-            self.workspace_modal = Some(WorkspaceModal::PendingWorktreeFork);
-        } else if pending_worktree_closed
-            && self.state.pending_worktree_fork.is_none()
-            && matches!(
+        if pending_worktree_changed {
+            if self.state.pending_worktree_fork.is_some()
+                || !self.state.queued_worktree_forks.is_empty()
+            {
+                self.workspace_modal = Some(WorkspaceModal::PendingWorktreeFork);
+            } else if matches!(
                 self.workspace_modal,
                 Some(WorkspaceModal::PendingWorktreeFork)
-            )
-        {
-            self.workspace_modal = None;
+            ) {
+                self.workspace_modal = None;
+            }
         }
         if remote_pairing_started && self.state.remote_control.pairing.is_some() {
             self.workspace_modal = Some(WorkspaceModal::RemotePairing);
@@ -6229,8 +6229,9 @@ impl WorkspaceView {
         }
         for effect in effects {
             let pending_worktree_failure = match &effect {
-                Effect::ForkTaskIntoWorktree { .. } => Some(true),
-                Effect::RetryPendingWorktreeFork { .. } => Some(false),
+                Effect::ForkTaskIntoWorktree { request_id, .. } => Some((*request_id, 0_u8)),
+                Effect::RetryPendingWorktreeFork { request_id, .. } => Some((*request_id, 1_u8)),
+                Effect::CancelPendingWorktreeFork { request_id } => Some((*request_id, 2_u8)),
                 _ => None,
             };
             let result = self
@@ -6240,8 +6241,19 @@ impl WorkspaceView {
                 .and_then(|backend| backend.send(effect));
             if let Err(error) = result {
                 let action = match pending_worktree_failure {
-                    Some(true) => Action::PendingWorktreeForkCreationFailed(error.to_owned()),
-                    Some(false) => Action::PendingWorktreeForkConversationFailed(error.to_owned()),
+                    Some((request_id, 0)) => Action::PendingWorktreeForkCreationFailed {
+                        request_id,
+                        message: error.to_owned(),
+                    },
+                    Some((request_id, 1)) => Action::PendingWorktreeForkConversationFailed {
+                        request_id,
+                        message: error.to_owned(),
+                    },
+                    Some((request_id, 2)) => Action::PendingWorktreeForkCancelFailed {
+                        request_id,
+                        message: format!("Could not cancel worktree: {error}"),
+                    },
+                    Some(_) => unreachable!("worktree effect kind is bounded"),
                     None => Action::SetStatus(error.to_owned()),
                 };
                 let _ = reduce(&mut self.state, action);
@@ -6559,9 +6571,7 @@ impl WorkspaceView {
             if self.composer_fork_picker_open {
                 let new_worktree =
                     self.has_local_workspace() && !self.selected_workspace_is_linked_worktree();
-                if !new_worktree || self.state.pending_worktree_fork.is_none() {
-                    self.select_fork_slash_destination(new_worktree, window, cx);
-                }
+                self.select_fork_slash_destination(new_worktree, window, cx);
             } else {
                 self.open_fork_slash_picker(window, cx);
             }
@@ -9318,9 +9328,16 @@ impl WorkspaceView {
                 return;
             };
             if !pending.phase.failed() {
+                self.workspace_modal = None;
+                cx.notify();
                 return;
             }
-            self.dispatch(Action::DismissPendingWorktreeFork, cx);
+            self.dispatch(
+                Action::DismissPendingWorktreeFork {
+                    request_id: pending.request_id,
+                },
+                cx,
+            );
             return;
         }
         if matches!(self.workspace_modal, Some(WorkspaceModal::Commit))
@@ -9855,7 +9872,7 @@ impl WorkspaceView {
             title,
             cwd,
             is_pinned,
-            worktree_fork_pending,
+            worktree_fork_queue_full,
         } = target;
         let pin_view = view.clone();
         let pin_task_id = task_id.clone();
@@ -9911,7 +9928,7 @@ impl WorkspaceView {
             .item(
                 PopupMenuItem::new("Continue in new worktree")
                     .icon(IconName::FolderOpen)
-                    .disabled(!worktree_available || worktree_fork_pending)
+                    .disabled(!worktree_available || worktree_fork_queue_full)
                     .on_click(move |_, _, cx| {
                         let task_id = worktree_task_id.clone();
                         let _ = worktree_view.update(cx, |this, cx| {
@@ -12410,7 +12427,7 @@ impl WorkspaceView {
             .pinned_task_ids
             .iter()
             .any(|pinned_task_id| pinned_task_id == &task.id);
-        let worktree_fork_pending = self.state.pending_worktree_fork.is_some();
+        let worktree_fork_queue_full = worktree_fork_queue_full(&self.state);
         let (status_icon, status_color) = task_status_icon(task.status, cx);
         let updated_at = relative_time(task.updated_at);
         let forked = task.forked_from_id.is_some();
@@ -12469,7 +12486,7 @@ impl WorkspaceView {
                         title: menu_title.clone(),
                         cwd: menu_cwd.clone(),
                         is_pinned,
-                        worktree_fork_pending,
+                        worktree_fork_queue_full,
                     },
                     false,
                     window,
@@ -15185,7 +15202,7 @@ impl WorkspaceView {
             title: title.clone(),
             cwd: task_cwd,
             is_pinned: task_actions_is_pinned,
-            worktree_fork_pending: self.state.pending_worktree_fork.is_some(),
+            worktree_fork_queue_full: worktree_fork_queue_full(&self.state),
         };
         let compact_task_actions_target = task_actions_target.clone();
         let compact_task_header = self.shell_width_class != Some(ShellWidthClass::Wide);
@@ -19666,7 +19683,7 @@ impl WorkspaceView {
         new_worktree: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let disabled = new_worktree && self.state.pending_worktree_fork.is_some();
+        let disabled = new_worktree && worktree_fork_queue_full(&self.state);
         h_flex()
             .id(id)
             .w_full()
@@ -19688,8 +19705,7 @@ impl WorkspaceView {
                 element
                     .bg(cx.theme().muted.opacity(0.35))
                     .tooltip(|window, cx| {
-                        Tooltip::new("Finish the current handoff before starting another")
-                            .build(window, cx)
+                        Tooltip::new("The worktree queue is full").build(window, cx)
                     })
             })
             .child(
@@ -21081,7 +21097,7 @@ impl WorkspaceView {
             .branch
             .clone()
             .unwrap_or_else(|| "Branch".to_owned());
-        let new_worktree_pending = self.state.pending_worktree_fork.is_some();
+        let new_worktree_queue_full = worktree_fork_queue_full(&self.state);
         let show_work_location_picker =
             self.state.selected_task_id.is_some() && self.state.git.repository_root.is_some();
         let attachments = self
@@ -21658,7 +21674,7 @@ impl WorkspaceView {
                                                     )
                                             })
                                                 .icon(IconName::FolderOpen)
-                                                .disabled(new_worktree_pending)
+                                                .disabled(new_worktree_queue_full)
                                                 .on_click(move |_, _, cx| {
                                                     let _ = new_worktree_view.update(cx, |this, cx| {
                                                         this.dispatch(
@@ -36905,48 +36921,17 @@ impl WorkspaceView {
     }
 
     fn render_pending_worktree_fork_modal(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(pending) = self.state.pending_worktree_fork.as_ref() else {
+        let Some(active) = self.state.pending_worktree_fork.clone() else {
             return div().into_any_element();
         };
-        let phase = pending.phase;
-        let (worktree_icon, worktree_color, worktree_label) = match phase {
-            PendingWorktreeForkPhase::CreatingWorktree => (
-                IconName::LoaderCircle,
-                cx.theme().muted_foreground,
-                "Creating a worktree",
-            ),
-            PendingWorktreeForkPhase::FailedCreatingWorktree => (
-                IconName::CircleX,
-                cx.theme().danger,
-                "Failed to create worktree",
-            ),
-            PendingWorktreeForkPhase::StartingConversation
-            | PendingWorktreeForkPhase::FailedStartingConversation => (
-                IconName::CircleCheck,
-                cx.theme().success,
-                "Worktree created",
-            ),
-        };
-        let conversation = match phase {
-            PendingWorktreeForkPhase::StartingConversation => Some((
-                IconName::LoaderCircle,
-                cx.theme().muted_foreground,
-                "Starting the conversation",
-            )),
-            PendingWorktreeForkPhase::FailedStartingConversation => Some((
-                IconName::CircleX,
-                cx.theme().danger,
-                "Failed to start the conversation",
-            )),
-            PendingWorktreeForkPhase::CreatingWorktree
-            | PendingWorktreeForkPhase::FailedCreatingWorktree => None,
-        };
-        let error_message = pending.error_message.clone();
-        let git_root = pending
-            .git_root
-            .as_ref()
-            .map(|root| root.display().to_string());
-        let failed = phase.failed();
+        let queued = self
+            .state
+            .queued_worktree_forks
+            .iter()
+            .take(MAX_PENDING_WORKTREE_FORKS.saturating_sub(1))
+            .cloned()
+            .collect::<Vec<_>>();
+        let active_failed = active.phase.failed();
 
         v_flex()
             .w(px(modal_surface_width(self.shell_viewport_width, 560.0)))
@@ -36965,99 +36950,221 @@ impl WorkspaceView {
                 v_flex()
                     .gap_1()
                     .child(
-                        div()
-                            .text_lg()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child("New chat"),
+                        h_flex()
+                            .justify_between()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .text_lg()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child("New worktree chats"),
+                            )
+                            .when(!active_failed, |header| {
+                                header.child(
+                                    Button::new("hide-pending-worktree-forks")
+                                        .label("Hide")
+                                        .ghost()
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.close_workspace_modal(cx);
+                                        })),
+                                )
+                            }),
                     )
                     .child(
                         div()
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child("Continue this task in a new worktree"),
+                            .child(format!(
+                                "Up to {MAX_PENDING_WORKTREE_FORKS} worktree chats run in order"
+                            )),
                     ),
             )
             .child(
                 v_flex()
+                    .max_h(px(320.0))
                     .gap_3()
-                    .child(
-                        h_flex()
-                            .items_start()
-                            .gap_3()
-                            .child(Icon::new(worktree_icon).small().text_color(worktree_color))
-                            .child(
-                                v_flex()
-                                    .min_w_0()
-                                    .gap_1()
-                                    .child(div().text_sm().child(worktree_label))
-                                    .when_some(git_root, |row, root| {
-                                        row.child(
-                                            div()
-                                                .text_xs()
-                                                .line_clamp(1)
-                                                .font_family(cx.theme().mono_font_family.clone())
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child(root),
-                                        )
-                                    }),
-                            ),
-                    )
-                    .when_some(conversation, |activities, (icon, color, label)| {
-                        activities.child(
-                            h_flex()
-                                .items_center()
-                                .gap_3()
-                                .child(Icon::new(icon).small().text_color(color))
-                                .child(div().text_sm().child(label)),
-                        )
-                    }),
+                    .overflow_y_scrollbar()
+                    .child(self.render_worktree_fork_queue_item(active, 0, true, cx))
+                    .children(queued.into_iter().enumerate().map(|(index, pending)| {
+                        self.render_worktree_fork_queue_item(pending, index + 1, false, cx)
+                    })),
             )
-            .when_some(error_message, |panel, message| {
-                panel.child(
+            .into_any_element()
+    }
+
+    fn render_worktree_fork_queue_item(
+        &self,
+        pending: PendingWorktreeFork,
+        position: usize,
+        active: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (icon, color, phase_label) = match pending.phase {
+            PendingWorktreeForkPhase::QueuedWorktree => (
+                IconName::LoaderCircle,
+                cx.theme().muted_foreground,
+                "Queued",
+            ),
+            PendingWorktreeForkPhase::CreatingWorktree => (
+                IconName::LoaderCircle,
+                cx.theme().muted_foreground,
+                "Creating a worktree",
+            ),
+            PendingWorktreeForkPhase::CancellingWorktree => {
+                (IconName::LoaderCircle, cx.theme().warning, "Cancelling")
+            }
+            PendingWorktreeForkPhase::StartingConversation => (
+                IconName::CircleCheck,
+                cx.theme().success,
+                "Starting the conversation",
+            ),
+            PendingWorktreeForkPhase::FailedCreatingWorktree => (
+                IconName::CircleX,
+                cx.theme().danger,
+                "Failed to create worktree",
+            ),
+            PendingWorktreeForkPhase::FailedStartingConversation => (
+                IconName::CircleX,
+                cx.theme().danger,
+                "Failed to start the conversation",
+            ),
+        };
+        let queue_position = if active {
+            "Active".to_owned()
+        } else {
+            format!("Queued · position {position}")
+        };
+        let request_id = pending.request_id;
+        let can_cancel_active =
+            active && pending.phase == PendingWorktreeForkPhase::CreatingWorktree;
+        let cancelling = active && pending.phase == PendingWorktreeForkPhase::CancellingWorktree;
+        let failed = active && pending.phase.failed();
+        let error_message = pending.error_message.clone();
+        let git_root = pending
+            .git_root
+            .as_ref()
+            .map(|root| root.display().to_string());
+
+        v_flex()
+            .min_w_0()
+            .p_3()
+            .gap_2()
+            .rounded_lg()
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().background)
+            .child(
+                h_flex()
+                    .items_start()
+                    .gap_2()
+                    .child(Icon::new(icon).small().text_color(color))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_1()
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_sm()
+                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                            .child(pending.source_title),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(queue_position),
+                                    ),
+                            )
+                            .child(div().text_xs().text_color(color).child(phase_label))
+                            .when_some(git_root, |row, root| {
+                                row.child(
+                                    div()
+                                        .text_xs()
+                                        .truncate()
+                                        .font_family(cx.theme().mono_font_family.clone())
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(root),
+                                )
+                            }),
+                    ),
+            )
+            .when_some(error_message, |card, message| {
+                card.child(
                     div()
-                        .p_3()
-                        .rounded_lg()
-                        .border_1()
-                        .border_color(cx.theme().danger)
-                        .text_sm()
+                        .p_2()
+                        .rounded_md()
+                        .bg(cx.theme().danger.opacity(0.10))
+                        .text_xs()
                         .text_color(cx.theme().danger)
                         .child(message),
                 )
             })
-            .when(
-                phase == PendingWorktreeForkPhase::CreatingWorktree,
-                |panel| {
-                    panel.child(
-                        h_flex().justify_end().child(
-                            Button::new("cancel-pending-worktree-fork")
-                                .label("Cancel")
-                                .ghost()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.dispatch(Action::CancelPendingWorktreeFork, cx);
-                                })),
-                        ),
-                    )
-                },
-            )
-            .when(failed, |panel| {
-                panel.child(
+            .when(can_cancel_active, |card| {
+                card.child(
+                    h_flex().justify_end().child(
+                        Button::new(("cancel-active-worktree-fork", request_id))
+                            .label("Cancel")
+                            .ghost()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.dispatch(Action::CancelPendingWorktreeFork { request_id }, cx);
+                            })),
+                    ),
+                )
+            })
+            .when(cancelling, |card| {
+                card.child(
+                    h_flex().justify_end().child(
+                        Button::new(("cancelling-active-worktree-fork", request_id))
+                            .label("Cancelling")
+                            .ghost()
+                            .disabled(true),
+                    ),
+                )
+            })
+            .when(!active, |card| {
+                card.child(
+                    h_flex().justify_end().child(
+                        Button::new(("cancel-queued-worktree-fork", request_id))
+                            .label("Cancel")
+                            .ghost()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.dispatch(Action::CancelPendingWorktreeFork { request_id }, cx);
+                            })),
+                    ),
+                )
+            })
+            .when(failed, |card| {
+                card.child(
                     h_flex()
                         .justify_end()
                         .gap_2()
                         .child(
-                            Button::new("dismiss-pending-worktree-fork")
+                            Button::new(("dismiss-active-worktree-fork", request_id))
                                 .label("Dismiss")
                                 .ghost()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.close_workspace_modal(cx);
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.dispatch(
+                                        Action::DismissPendingWorktreeFork { request_id },
+                                        cx,
+                                    );
                                 })),
                         )
                         .child(
-                            Button::new("retry-pending-worktree-fork")
+                            Button::new(("retry-active-worktree-fork", request_id))
                                 .label("Retry")
                                 .primary()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.dispatch(Action::RetryPendingWorktreeFork, cx);
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.dispatch(
+                                        Action::RetryPendingWorktreeFork { request_id },
+                                        cx,
+                                    );
                                 })),
                         ),
                 )
@@ -37497,13 +37604,8 @@ impl WorkspaceView {
     ) -> AnyElement {
         match modal {
             WorkspaceModal::PendingWorktreeFork => {
-                let dismiss_on_overlay = self
-                    .state
-                    .pending_worktree_fork
-                    .as_ref()
-                    .is_some_and(|pending| pending.phase.failed());
                 let panel = self.render_pending_worktree_fork_modal(cx);
-                self.render_workspace_modal_overlay(panel, dismiss_on_overlay, cx)
+                self.render_workspace_modal_overlay(panel, true, cx)
             }
             WorkspaceModal::KeyboardShortcuts => {
                 let panel = self.render_keyboard_shortcuts_modal(cx);
@@ -41239,6 +41341,11 @@ fn default_worktree_path(root: &Path, branch: &str) -> PathBuf {
         .join(format!("{repository}-{slug}"))
 }
 
+fn worktree_fork_queue_full(state: &AppState) -> bool {
+    usize::from(state.pending_worktree_fork.is_some()) + state.queued_worktree_forks.len()
+        >= MAX_PENDING_WORKTREE_FORKS
+}
+
 fn display_path(path: &Path) -> String {
     let rendered = path.display().to_string();
     #[cfg(windows)]
@@ -42845,12 +42952,14 @@ mod tests {
         sidebar_layout_width, split_diff_rows, status_context_total_label, status_rate_limit_label,
         status_rate_limit_reset_metadata_at, task_slot_id, terminal_tab_label,
         timeline_activity_content, turn_diff_update_is_accepted, validate_plugin_logo_dimensions,
+        worktree_fork_queue_full,
     };
     use codex_core::{
         AppCard, AppState, AppearancePalette, AppearanceVariant, ApprovalContext, ApprovalKind,
         ApprovalRequest, ComposerAttachment, ComposerAttachmentKind, ComputerApplicationState,
         GitPullRequestState, IntegratedTerminalShell, KEYBOARD_SHORTCUT_COMMAND_IDS, LoadStatus,
-        MainRoute, McpAuthStatus, PluginCard, ProcessManagerState, PullRequestCiStatus,
+        MAX_PENDING_WORKTREE_FORKS, MainRoute, McpAuthStatus, PendingWorktreeFork,
+        PendingWorktreeForkPhase, PluginCard, ProcessManagerState, PullRequestCiStatus,
         PullRequestDetail, PullRequestIdentity, PullRequestMutationKind, PullRequestState,
         PullRequestSummary, ReasoningEffortOption, RemoteControlRuntimeStatus, ServiceTierOption,
         SkillCard, SkillScope, TaskRunStatus, TaskSummary, TerminalTabState, TimelineItem,
@@ -45200,6 +45309,36 @@ mod tests {
         });
         assert!(!turn_diff_update_is_accepted(&state, "task", "turn-1"));
         assert!(turn_diff_update_is_accepted(&state, "task", "turn-2"));
+    }
+
+    #[test]
+    fn worktree_fork_queue_reaches_the_shared_capacity_before_disabling_entry_points() {
+        let pending = |request_id, phase| PendingWorktreeFork {
+            request_id,
+            source_task_id: "task".to_owned(),
+            source_cwd: PathBuf::from(r"C:\repo"),
+            source_title: "Task".to_owned(),
+            worktrees_root: None,
+            workspace_root: None,
+            git_root: None,
+            phase,
+            error_message: None,
+            attempt: 1,
+        };
+        let mut state = AppState::default();
+        assert!(!worktree_fork_queue_full(&state));
+
+        state.pending_worktree_fork = Some(pending(1, PendingWorktreeForkPhase::CreatingWorktree));
+        for request_id in 2..=MAX_PENDING_WORKTREE_FORKS as u64 {
+            state.queued_worktree_forks.push_back(pending(
+                request_id,
+                PendingWorktreeForkPhase::QueuedWorktree,
+            ));
+        }
+
+        assert!(worktree_fork_queue_full(&state));
+        state.queued_worktree_forks.pop_back();
+        assert!(!worktree_fork_queue_full(&state));
     }
 
     #[test]
