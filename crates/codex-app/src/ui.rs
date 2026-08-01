@@ -4466,6 +4466,21 @@ fn initial_app_state(backend_error: Option<String>) -> AppState {
     state
 }
 
+fn first_run_sign_in_visible(state: &AppState) -> bool {
+    state.connection == ConnectionStatus::Online
+        && state.account.status == LoadStatus::Ready
+        && state.account.profile.is_none()
+        && state.account.requires_openai_auth
+}
+
+fn first_run_account_load_error(state: &AppState) -> Option<&str> {
+    if state.connection == ConnectionStatus::Online && state.account.status == LoadStatus::Failed {
+        state.account.error.as_deref()
+    } else {
+        None
+    }
+}
+
 fn connection_send_failure(error: &str) -> (Action, bool) {
     (
         Action::ConnectionFailed(error.to_owned()),
@@ -15203,6 +15218,11 @@ impl WorkspaceView {
         let Some(task_id) = self.state.selected_task_id.clone() else {
             let new_chat_cwd = self.state.new_chat_cwd.clone();
             let recovery = startup_recovery_card(&self.state.connection, self.backend.is_some());
+            let first_run_sign_in = first_run_sign_in_visible(&self.state);
+            let account_auth_operation = self.state.account.auth_operation;
+            let account_auth_error = self.state.account.auth_error.clone();
+            let first_run_account_error =
+                first_run_account_load_error(&self.state).map(str::to_owned);
             return v_flex()
                 .flex_1()
                 .min_w_0()
@@ -15278,6 +15298,115 @@ impl WorkspaceView {
                                                 })),
                                         )
                                     }),
+                            )
+                        })
+                        .when(first_run_sign_in, |empty| {
+                            let (instruction, action) = match account_auth_operation {
+                                AccountAuthOperation::Idle | AccountAuthOperation::LoggingOut => (
+                                    "Sign in with your ChatGPT account to start using Codex.",
+                                    Button::new("first-run-account-login")
+                                        .label("Sign in with ChatGPT")
+                                        .small()
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.dispatch(Action::StartAccountLogin, cx);
+                                        }))
+                                        .into_any_element(),
+                                ),
+                                AccountAuthOperation::StartingLogin => (
+                                    "Opening ChatGPT sign-in…",
+                                    Button::new("first-run-account-login-starting")
+                                        .label("Starting…")
+                                        .small()
+                                        .disabled(true)
+                                        .into_any_element(),
+                                ),
+                                AccountAuthOperation::AwaitingLogin => (
+                                    "Finish signing in in your browser.",
+                                    Button::new("first-run-account-login-cancel")
+                                        .label("Cancel sign-in")
+                                        .small()
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.dispatch(Action::CancelAccountLogin, cx);
+                                        }))
+                                        .into_any_element(),
+                                ),
+                                AccountAuthOperation::CancelingLogin => (
+                                    "Canceling ChatGPT sign-in…",
+                                    Button::new("first-run-account-login-canceling")
+                                        .label("Canceling…")
+                                        .small()
+                                        .disabled(true)
+                                        .into_any_element(),
+                                ),
+                            };
+                            empty.child(
+                                v_flex()
+                                    .mt_4()
+                                    .w_full()
+                                    .min_w_0()
+                                    .max_w(px(520.0))
+                                    .p_4()
+                                    .gap_2()
+                                    .rounded_lg()
+                                    .border_1()
+                                    .border_color(cx.theme().border)
+                                    .bg(cx.theme().sidebar)
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .child("Sign in to get started"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(instruction),
+                                    )
+                                    .when_some(account_auth_error, |card, error| {
+                                        card.child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(cx.theme().danger)
+                                                .child(error),
+                                        )
+                                    })
+                                    .child(action),
+                            )
+                        })
+                        .when_some(first_run_account_error, |empty, error| {
+                            empty.child(
+                                v_flex()
+                                    .mt_4()
+                                    .w_full()
+                                    .min_w_0()
+                                    .max_w(px(520.0))
+                                    .p_4()
+                                    .gap_2()
+                                    .rounded_lg()
+                                    .border_1()
+                                    .border_color(cx.theme().warning.opacity(0.5))
+                                    .bg(cx.theme().sidebar)
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .child("Could not load account details"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(error),
+                                    )
+                                    .child(
+                                        Button::new("retry-first-run-account")
+                                            .label("Retry")
+                                            .small()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.dispatch(Action::RefreshAccount, cx);
+                                            })),
+                                    ),
                             )
                         })
                         .when_some(new_chat_cwd, |empty, cwd| {
@@ -43406,17 +43535,18 @@ mod tests {
         composer_slash_command_for_prefix, connection_send_failure, decode_mcp_form_image_data_url,
         default_branch_name, diff_file_review_rows, diff_file_sections,
         extract_code_comment_findings, fetch_plugin_logo_blocking, find_timeline_matches,
-        format_decimal_grouped, initial_app_state, input_position_for_offset,
-        integrated_terminal_shell_label, is_navigation_back_key, is_navigation_forward_key,
-        is_next_chat_bracket_key, is_previous_chat_bracket_key, is_settings_shortcut_key,
-        is_stable_composer_photo, is_supported_external_url, is_supported_plugin_logo_url,
-        is_terminal_shortcut_key, keyboard_shortcut_search_matches,
-        keyboard_shortcut_settings_matches, keyboard_shortcut_stable_order,
-        linked_pull_request_merge_command_enabled, mcp_auth_status_label, modal_surface_max_height,
-        modal_surface_width, normalized_accelerator, output_artifact_type_label,
-        parse_appearance_theme_share_string, parse_mcp_list, parse_mcp_record, parse_unified_diff,
-        plugin_logo_format, process_manager_auto_refresh_allowed, project_trigger_matches,
-        project_workspace_options, pull_request_merge_submission_enabled, reasoning_effort_target,
+        first_run_account_load_error, first_run_sign_in_visible, format_decimal_grouped,
+        initial_app_state, input_position_for_offset, integrated_terminal_shell_label,
+        is_navigation_back_key, is_navigation_forward_key, is_next_chat_bracket_key,
+        is_previous_chat_bracket_key, is_settings_shortcut_key, is_stable_composer_photo,
+        is_supported_external_url, is_supported_plugin_logo_url, is_terminal_shortcut_key,
+        keyboard_shortcut_search_matches, keyboard_shortcut_settings_matches,
+        keyboard_shortcut_stable_order, linked_pull_request_merge_command_enabled,
+        mcp_auth_status_label, modal_surface_max_height, modal_surface_width,
+        normalized_accelerator, output_artifact_type_label, parse_appearance_theme_share_string,
+        parse_mcp_list, parse_mcp_record, parse_unified_diff, plugin_logo_format,
+        process_manager_auto_refresh_allowed, project_trigger_matches, project_workspace_options,
+        pull_request_merge_submission_enabled, reasoning_effort_target,
         remote_control_status_label, render_conversation_markdown, replace_composer_file_query,
         reserve_thread_find_history_page, sanitize_assistant_markdown, selected_approval_request,
         selected_task_copy_value, settings_section_matches, settings_section_refreshes_account,
@@ -43426,15 +43556,16 @@ mod tests {
         validate_plugin_logo_dimensions, worktree_fork_queue_full,
     };
     use codex_core::{
-        AppCard, AppState, AppearancePalette, AppearanceVariant, ApprovalContext, ApprovalKind,
-        ApprovalRequest, ComposerAttachment, ComposerAttachmentKind, ComputerApplicationState,
-        ConnectionStatus, GitPullRequestState, IntegratedTerminalShell,
-        KEYBOARD_SHORTCUT_COMMAND_IDS, LoadStatus, MAX_PENDING_WORKTREE_FORKS, MainRoute,
-        McpAuthStatus, PendingWorktreeFork, PendingWorktreeForkPhase, PluginCard,
-        ProcessManagerState, PullRequestCiStatus, PullRequestDetail, PullRequestIdentity,
-        PullRequestMutationKind, PullRequestState, PullRequestSummary, ReasoningEffortOption,
-        RemoteControlRuntimeStatus, ServiceTierOption, SkillCard, SkillScope, TaskRunStatus,
-        TaskSummary, TerminalTabState, TimelineItem, TimelineKind, TurnDiffState,
+        AccountKind, AccountProfile, AccountState, AppCard, AppState, AppearancePalette,
+        AppearanceVariant, ApprovalContext, ApprovalKind, ApprovalRequest, ComposerAttachment,
+        ComposerAttachmentKind, ComputerApplicationState, ConnectionStatus, GitPullRequestState,
+        IntegratedTerminalShell, KEYBOARD_SHORTCUT_COMMAND_IDS, LoadStatus,
+        MAX_PENDING_WORKTREE_FORKS, MainRoute, McpAuthStatus, PendingWorktreeFork,
+        PendingWorktreeForkPhase, PluginCard, ProcessManagerState, PullRequestCiStatus,
+        PullRequestDetail, PullRequestIdentity, PullRequestMutationKind, PullRequestState,
+        PullRequestSummary, ReasoningEffortOption, RemoteControlRuntimeStatus, ServiceTierOption,
+        SkillCard, SkillScope, TaskRunStatus, TaskSummary, TerminalTabState, TimelineItem,
+        TimelineKind, TurnDiffState,
     };
 
     fn task(id: &str, cwd: &str) -> TaskSummary {
@@ -43480,6 +43611,46 @@ mod tests {
             state.connection,
             ConnectionStatus::Failed("backend unavailable".to_owned())
         );
+    }
+
+    #[test]
+    fn first_run_sign_in_requires_a_ready_online_unauthed_account() {
+        let mut state = AppState {
+            connection: ConnectionStatus::Online,
+            account: AccountState {
+                status: LoadStatus::Ready,
+                requires_openai_auth: true,
+                ..AccountState::default()
+            },
+            ..AppState::default()
+        };
+
+        assert!(first_run_sign_in_visible(&state));
+
+        state.account.status = LoadStatus::Loading;
+        assert!(!first_run_sign_in_visible(&state));
+
+        state.account.status = LoadStatus::Ready;
+        state.account.profile = Some(AccountProfile {
+            kind: AccountKind::ChatGpt,
+            email: None,
+            plan: None,
+        });
+        assert!(!first_run_sign_in_visible(&state));
+
+        state.account.profile = None;
+        state.connection = ConnectionStatus::Offline;
+        assert!(!first_run_sign_in_visible(&state));
+
+        state.connection = ConnectionStatus::Online;
+        state.account.status = LoadStatus::Failed;
+        state.account.error = Some("Could not load account details.".to_owned());
+        assert_eq!(
+            first_run_account_load_error(&state),
+            Some("Could not load account details.")
+        );
+        state.connection = ConnectionStatus::Offline;
+        assert!(first_run_account_load_error(&state).is_none());
     }
 
     #[test]
