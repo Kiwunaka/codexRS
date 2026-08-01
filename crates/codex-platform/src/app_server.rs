@@ -21,9 +21,10 @@ use codex_protocol::{
     ExternalAgentConfigDetectResponse, ExternalAgentConfigImportHistoriesReadResponse,
     ExternalAgentConfigImportParams, ExternalAgentConfigImportResponse, FeedbackUploadParams,
     FeedbackUploadResponse, GetAccountParams, GetAccountRateLimitsResponse, GetAccountResponse,
-    GetAuthStatusParams, GetAuthStatusResponse, GitDiffToRemoteParams, GitDiffToRemoteResponse,
-    HooksListParams, HooksListResponse, IncomingMessage, InitializeCapabilities, InitializeParams,
-    InitializeResponse, ListMcpServerStatusParams, ListMcpServerStatusResponse, LoginAccountParams,
+    GetAccountTokenUsageResponse, GetAuthStatusParams, GetAuthStatusResponse,
+    GitDiffToRemoteParams, GitDiffToRemoteResponse, HooksListParams, HooksListResponse,
+    IncomingMessage, InitializeCapabilities, InitializeParams, InitializeResponse,
+    ListMcpServerStatusParams, ListMcpServerStatusResponse, LoginAccountParams,
     LoginAccountResponse, LogoutAccountResponse, MAX_INTERLEAVED_MESSAGES_PER_REQUEST,
     MAX_PENDING_REQUESTS, MarketplaceAddParams, MarketplaceAddResponse, MarketplaceRemoveParams,
     MarketplaceRemoveResponse, MarketplaceUpgradeParams, MarketplaceUpgradeResponse,
@@ -1321,6 +1322,11 @@ impl AppServerConnection {
     pub fn read_account_rate_limits(&self) -> Result<GetAccountRateLimitsResponse, AppServerError> {
         self.require_initialized()?;
         self.request_without_params("account/rateLimits/read")
+    }
+
+    pub fn read_account_token_usage(&self) -> Result<GetAccountTokenUsageResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request_without_params("account/usage/read")
     }
 
     pub fn get_auth_status(
