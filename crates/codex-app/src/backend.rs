@@ -2091,6 +2091,7 @@ struct BrowserRuntime {
 }
 
 struct PendingWorktreeRuntime {
+    request_id: u64,
     cancellation: Arc<AtomicBool>,
     thread: JoinHandle<()>,
 }
@@ -3358,6 +3359,23 @@ fn reap_pending_worktree_runtime(runtime: &mut Option<PendingWorktreeRuntime>) {
     }
 }
 
+fn join_pending_worktree_runtime(runtime: &mut Option<PendingWorktreeRuntime>) {
+    if let Some(runtime) = runtime.take() {
+        let _ = runtime.thread.join();
+    }
+}
+
+fn cancel_pending_worktree_runtime(runtime: &mut Option<PendingWorktreeRuntime>, request_id: u64) {
+    if runtime
+        .as_ref()
+        .is_some_and(|runtime| runtime.request_id == request_id)
+        && let Some(runtime) = runtime.take()
+    {
+        runtime.cancellation.store(true, Ordering::Release);
+        let _ = runtime.thread.join();
+    }
+}
+
 fn computer_tool_request_meta(event: &AppServerEvent) -> Option<ComputerToolRequestMeta> {
     let AppServerEvent::Request { id, method, params } = event else {
         return None;
@@ -3544,10 +3562,14 @@ fn run_effect(
     pending_worktree_runtime: &mut Option<PendingWorktreeRuntime>,
     retryable_turns: &mut HashMap<(String, String), RetryableTurnSubmission>,
 ) {
-    if effect == Effect::CancelPendingWorktreeFork {
-        if let Some(runtime) = pending_worktree_runtime.as_ref() {
-            runtime.cancellation.store(true, Ordering::Release);
-        }
+    if let Effect::CancelPendingWorktreeFork { request_id } = &effect {
+        cancel_pending_worktree_runtime(pending_worktree_runtime, *request_id);
+        emit(
+            events,
+            Action::PendingWorktreeForkCancelled {
+                request_id: *request_id,
+            },
+        );
         return;
     }
 
@@ -3562,21 +3584,13 @@ fn run_effect(
     }
 
     if let Effect::ForkTaskIntoWorktree {
+        request_id,
         cwd,
         worktrees_root,
         ..
     } = &effect
     {
-        reap_pending_worktree_runtime(pending_worktree_runtime);
-        if pending_worktree_runtime.is_some() {
-            emit(
-                events,
-                Action::PendingWorktreeForkCreationFailed(
-                    "A worktree is already being created".to_owned(),
-                ),
-            );
-            return;
-        }
+        join_pending_worktree_runtime(pending_worktree_runtime);
         let worktrees_root = match worktrees_root.clone() {
             Some(path) => path,
             None => match codexrs_data_dir() {
@@ -3584,9 +3598,10 @@ fn run_effect(
                 Err(error) => {
                     emit(
                         events,
-                        Action::PendingWorktreeForkCreationFailed(format!(
-                            "Failed to create worktree: {error}"
-                        )),
+                        Action::PendingWorktreeForkCreationFailed {
+                            request_id: *request_id,
+                            message: format!("Failed to create worktree: {error}"),
+                        },
                     );
                     return;
                 }
@@ -3596,6 +3611,7 @@ fn run_effect(
         let worker_cancellation = Arc::clone(&cancellation);
         let worker_events = events.clone();
         let worker_cwd = cwd.clone();
+        let worker_request_id = *request_id;
         let thread = match thread::Builder::new()
             .name("codex-rs-worktree-create".to_owned())
             .spawn(move || {
@@ -3604,25 +3620,29 @@ fn run_effect(
                     &worktrees_root,
                     &worker_cancellation,
                 ) {
-                    Ok(worktree) if !worker_cancellation.load(Ordering::Acquire) => emit(
+                    Ok(worktree) => emit(
                         &worker_events,
                         Action::PendingWorktreeForkReady {
+                            request_id: worker_request_id,
                             workspace_root: worktree.workspace_root,
                             git_root: worktree.git_root,
                         },
                     ),
-                    Ok(_) | Err(GitError::Cancelled) => {}
+                    Err(GitError::Cancelled) => {}
                     Err(GitError::InvalidRepository) => emit(
                         &worker_events,
-                        Action::PendingWorktreeForkCreationFailed(
-                            "A Git repository is required to continue in a new worktree".to_owned(),
-                        ),
+                        Action::PendingWorktreeForkCreationFailed {
+                            request_id: worker_request_id,
+                            message: "A Git repository is required to continue in a new worktree"
+                                .to_owned(),
+                        },
                     ),
                     Err(error) => emit(
                         &worker_events,
-                        Action::PendingWorktreeForkCreationFailed(format!(
-                            "Failed to create worktree: {error}"
-                        )),
+                        Action::PendingWorktreeForkCreationFailed {
+                            request_id: worker_request_id,
+                            message: format!("Failed to create worktree: {error}"),
+                        },
                     ),
                 }
             }) {
@@ -3630,14 +3650,16 @@ fn run_effect(
             Err(error) => {
                 emit(
                     events,
-                    Action::PendingWorktreeForkCreationFailed(format!(
-                        "Failed to create worktree: {error}"
-                    )),
+                    Action::PendingWorktreeForkCreationFailed {
+                        request_id: *request_id,
+                        message: format!("Failed to create worktree: {error}"),
+                    },
                 );
                 return;
             }
         };
         *pending_worktree_runtime = Some(PendingWorktreeRuntime {
+            request_id: *request_id,
             cancellation,
             thread,
         });
@@ -4811,11 +4833,12 @@ fn run_effect(
                     message: "App server is unavailable.".to_owned(),
                 },
             ),
-            Effect::RetryPendingWorktreeFork { .. } => emit(
+            Effect::RetryPendingWorktreeFork { request_id, .. } => emit(
                 events,
-                Action::PendingWorktreeForkConversationFailed(
-                    "app-server is unavailable".to_owned(),
-                ),
+                Action::PendingWorktreeForkConversationFailed {
+                    request_id,
+                    message: "app-server is unavailable".to_owned(),
+                },
             ),
             _ => emit(events, Action::ConnectionLost),
         }
@@ -6092,8 +6115,9 @@ fn run_effect(
                 );
             }
         }
-        Effect::ForkTaskIntoWorktree { .. } | Effect::CancelPendingWorktreeFork => {}
+        Effect::ForkTaskIntoWorktree { .. } | Effect::CancelPendingWorktreeFork { .. } => {}
         Effect::RetryPendingWorktreeFork {
+            request_id,
             task_id,
             cwd,
             title,
@@ -6108,13 +6132,13 @@ fn run_effect(
             ) {
                 emit(
                     events,
-                    Action::PendingWorktreeForkConversationFailed(bounded(
-                        error.to_string(),
-                        MAX_STATUS_BYTES,
-                    )),
+                    Action::PendingWorktreeForkConversationFailed {
+                        request_id,
+                        message: bounded(error.to_string(), MAX_STATUS_BYTES),
+                    },
                 );
             } else {
-                emit(events, Action::PendingWorktreeForkCompleted);
+                emit(events, Action::PendingWorktreeForkCompleted { request_id });
             }
         }
         Effect::ArchiveTask { task_id } => {
@@ -15735,6 +15759,11 @@ fn emit(events: &Sender<Action>, action: Action) {
 mod tests {
     use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use std::thread;
     use std::time::{Duration, Instant};
 
     use codex_core::{
@@ -15769,11 +15798,12 @@ mod tests {
         COMPUTER_USE_USER_INPUT_STALE_MESSAGE, ComputerUseAccessibilityClient,
         ComputerUsePermission, GOAL_CONTINUATION_DELAY, GitRefreshDebouncer,
         GoalContinuationScheduler, MAX_ITEM_TEXT_BYTES, McpElicitationMapError, PendingApproval,
-        STABLE_OPT_OUT_NOTIFICATION_METHODS, TASK_SEARCH_DEBOUNCE, TRUSTED_ACCESS_FOR_CYBER_URL,
-        TRUSTED_ACCESS_FOR_CYBER_WARNING, TaskSearchDebouncer, TerminalParserCallbacks,
-        agent_configuration_snapshot, appearance_theme_key, bounded_remote_identifier,
-        browser_origin_auto_decision, browser_origin_elicitation_response, browser_policy_target,
-        browser_resource_auto_decision, browser_resource_elicitation_response,
+        PendingWorktreeRuntime, STABLE_OPT_OUT_NOTIFICATION_METHODS, TASK_SEARCH_DEBOUNCE,
+        TRUSTED_ACCESS_FOR_CYBER_URL, TRUSTED_ACCESS_FOR_CYBER_WARNING, TaskSearchDebouncer,
+        TerminalParserCallbacks, agent_configuration_snapshot, appearance_theme_key,
+        bounded_remote_identifier, browser_origin_auto_decision,
+        browser_origin_elicitation_response, browser_policy_target, browser_resource_auto_decision,
+        browser_resource_elicitation_response, cancel_pending_worktree_runtime,
         combined_git_generation_prompt, combined_git_output_schema, commit_generation_prompt,
         commit_message_output_schema, composer_config_key, composer_inputs,
         computer_application_value, computer_tool_request_meta,
@@ -15799,6 +15829,21 @@ mod tests {
         restored_browser_download, retryable_submission_inputs, run_computer_tool,
         safety_retry_fork_point, stored_browser_download, user_input_response,
     };
+
+    #[test]
+    fn cancelling_worktree_runtime_joins_it_before_acknowledgement() {
+        let cancellation = Arc::new(AtomicBool::new(false));
+        let mut runtime = Some(PendingWorktreeRuntime {
+            request_id: 7,
+            cancellation: Arc::clone(&cancellation),
+            thread: thread::spawn(|| {}),
+        });
+
+        cancel_pending_worktree_runtime(&mut runtime, 7);
+
+        assert!(runtime.is_none());
+        assert!(cancellation.load(Ordering::Acquire));
+    }
 
     #[test]
     fn resumed_turn_uses_the_latest_review_mode_marker() {

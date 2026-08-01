@@ -91,6 +91,7 @@ pub const MAX_PINNED_TASK_ID_BYTES: usize = 256;
 pub const MAX_LOCAL_PROJECTS: usize = 64;
 pub const MAX_LOCAL_PROJECT_NAME_BYTES: usize = 256;
 pub const MAX_PENDING_WORKTREE_FORK_ERROR_BYTES: usize = 16 * 1024;
+pub const MAX_PENDING_WORKTREE_FORKS: usize = 3;
 pub const MAX_GOAL_OBJECTIVE_BYTES: usize = 16 * 1024;
 pub const MAX_ACCOUNT_FIELD_BYTES: usize = 512;
 pub const MAX_USAGE_LIMIT_WINDOWS: usize = 2;
@@ -887,7 +888,9 @@ pub struct LocalProjectSummary {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PendingWorktreeForkPhase {
+    QueuedWorktree,
     CreatingWorktree,
+    CancellingWorktree,
     StartingConversation,
     FailedCreatingWorktree,
     FailedStartingConversation,
@@ -905,9 +908,11 @@ impl PendingWorktreeForkPhase {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingWorktreeFork {
+    pub request_id: u64,
     pub source_task_id: String,
     pub source_cwd: PathBuf,
     pub source_title: String,
+    pub worktrees_root: Option<PathBuf>,
     pub workspace_root: Option<PathBuf>,
     pub git_root: Option<PathBuf>,
     pub phase: PendingWorktreeForkPhase,
@@ -4102,6 +4107,8 @@ pub struct AppState {
     pub next_task_cursor: Option<String>,
     pub task_search: TaskSearchState,
     pub pending_worktree_fork: Option<PendingWorktreeFork>,
+    pub queued_worktree_forks: VecDeque<PendingWorktreeFork>,
+    pub next_worktree_fork_request_id: u64,
     pub archived_tasks: ArchivedTasksState,
     pub pinned_task_ids: Vec<String>,
     pub local_projects: Vec<LocalProjectSummary>,
@@ -4164,6 +4171,8 @@ impl Default for AppState {
             next_task_cursor: None,
             task_search: TaskSearchState::default(),
             pending_worktree_fork: None,
+            queued_worktree_forks: VecDeque::new(),
+            next_worktree_fork_request_id: 1,
             archived_tasks: ArchivedTasksState::default(),
             pinned_task_ids: Vec::new(),
             local_projects: Vec::new(),
@@ -4341,15 +4350,37 @@ pub enum Action {
     ForkTaskInCurrentWorkspace(String),
     ForkTaskIntoWorktree(String),
     PendingWorktreeForkReady {
+        request_id: u64,
         workspace_root: PathBuf,
         git_root: PathBuf,
     },
-    PendingWorktreeForkCreationFailed(String),
-    PendingWorktreeForkConversationFailed(String),
-    PendingWorktreeForkCompleted,
-    CancelPendingWorktreeFork,
-    RetryPendingWorktreeFork,
-    DismissPendingWorktreeFork,
+    PendingWorktreeForkCreationFailed {
+        request_id: u64,
+        message: String,
+    },
+    PendingWorktreeForkConversationFailed {
+        request_id: u64,
+        message: String,
+    },
+    PendingWorktreeForkCompleted {
+        request_id: u64,
+    },
+    PendingWorktreeForkCancelled {
+        request_id: u64,
+    },
+    PendingWorktreeForkCancelFailed {
+        request_id: u64,
+        message: String,
+    },
+    CancelPendingWorktreeFork {
+        request_id: u64,
+    },
+    RetryPendingWorktreeFork {
+        request_id: u64,
+    },
+    DismissPendingWorktreeFork {
+        request_id: u64,
+    },
     ArchiveTask(String),
     TaskArchived(String),
     RenameTask {
@@ -5530,17 +5561,21 @@ pub enum Effect {
         title: String,
     },
     ForkTaskIntoWorktree {
+        request_id: u64,
         task_id: String,
         cwd: PathBuf,
         title: String,
         worktrees_root: Option<PathBuf>,
     },
     RetryPendingWorktreeFork {
+        request_id: u64,
         task_id: String,
         cwd: PathBuf,
         title: String,
     },
-    CancelPendingWorktreeFork,
+    CancelPendingWorktreeFork {
+        request_id: u64,
+    },
     ArchiveTask {
         task_id: String,
     },
@@ -6676,31 +6711,44 @@ fn fork_task(state: &mut AppState, task_id: &str, new_worktree: bool) -> Vec<Eff
     let cwd = task.cwd.is_absolute().then(|| task.cwd.clone());
     let title = task.title.clone();
     if new_worktree {
-        if state.pending_worktree_fork.is_some() {
-            return Vec::new();
-        }
         let Some(cwd) = cwd else {
             state.status_message =
                 Some("A Git repository is required to continue in a new worktree".to_owned());
             return Vec::new();
         };
-        state.pending_worktree_fork = Some(PendingWorktreeFork {
+        if state.pending_worktree_fork.is_some()
+            && state.queued_worktree_forks.len() + 1 >= MAX_PENDING_WORKTREE_FORKS
+        {
+            state.status_message = Some(format!(
+                "Worktree queue is full ({MAX_PENDING_WORKTREE_FORKS} items)."
+            ));
+            return Vec::new();
+        }
+        let request_id = state.next_worktree_fork_request_id;
+        state.next_worktree_fork_request_id = request_id.checked_add(1).unwrap_or(1);
+        let pending = PendingWorktreeFork {
+            request_id,
             source_task_id: task_id.to_owned(),
             source_cwd: cwd.clone(),
             source_title: title.clone(),
+            worktrees_root: state.git_preferences.worktree_root.clone(),
             workspace_root: None,
             git_root: None,
-            phase: PendingWorktreeForkPhase::CreatingWorktree,
+            phase: PendingWorktreeForkPhase::QueuedWorktree,
             error_message: None,
             attempt: 1,
-        });
-        state.status_message = Some("Creating worktree…".to_owned());
-        vec![Effect::ForkTaskIntoWorktree {
-            task_id: task_id.to_owned(),
-            cwd,
-            title,
-            worktrees_root: state.git_preferences.worktree_root.clone(),
-        }]
+        };
+        if state.pending_worktree_fork.is_none() {
+            state.pending_worktree_fork = Some(pending);
+            start_next_worktree_fork(state)
+        } else {
+            state.queued_worktree_forks.push_back(pending);
+            let count = state.queued_worktree_forks.len() + 1;
+            state.status_message = Some(format!(
+                "Worktree queued ({count} of {MAX_PENDING_WORKTREE_FORKS})."
+            ));
+            Vec::new()
+        }
     } else {
         state.status_message = Some("Creating chat…".to_owned());
         vec![Effect::ForkTask {
@@ -6709,6 +6757,28 @@ fn fork_task(state: &mut AppState, task_id: &str, new_worktree: bool) -> Vec<Eff
             title,
         }]
     }
+}
+
+fn start_next_worktree_fork(state: &mut AppState) -> Vec<Effect> {
+    if state.pending_worktree_fork.is_none() {
+        state.pending_worktree_fork = state.queued_worktree_forks.pop_front();
+    }
+    let Some(pending) = state.pending_worktree_fork.as_mut() else {
+        return Vec::new();
+    };
+    if pending.phase != PendingWorktreeForkPhase::QueuedWorktree {
+        return Vec::new();
+    }
+    pending.phase = PendingWorktreeForkPhase::CreatingWorktree;
+    pending.error_message = None;
+    state.status_message = Some("Creating worktree…".to_owned());
+    vec![Effect::ForkTaskIntoWorktree {
+        request_id: pending.request_id,
+        task_id: pending.source_task_id.clone(),
+        cwd: pending.source_cwd.clone(),
+        title: pending.source_title.clone(),
+        worktrees_root: pending.worktrees_root.clone(),
+    }]
 }
 
 fn marketplace_section_exists(
@@ -8368,13 +8438,20 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         Action::ForkTaskInCurrentWorkspace(task_id) => fork_task(state, &task_id, false),
         Action::ForkTaskIntoWorktree(task_id) => fork_task(state, &task_id, true),
         Action::PendingWorktreeForkReady {
+            request_id,
             workspace_root,
             git_root,
         } => {
             let Some(pending) = state.pending_worktree_fork.as_mut() else {
                 return Vec::new();
             };
-            if pending.phase != PendingWorktreeForkPhase::CreatingWorktree {
+            if pending.request_id != request_id
+                || !matches!(
+                    pending.phase,
+                    PendingWorktreeForkPhase::CreatingWorktree
+                        | PendingWorktreeForkPhase::CancellingWorktree
+                )
+            {
                 return Vec::new();
             }
             pending.workspace_root = Some(workspace_root.clone());
@@ -8383,16 +8460,22 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             pending.error_message = None;
             state.status_message = Some("Starting the conversation…".to_owned());
             vec![Effect::RetryPendingWorktreeFork {
+                request_id,
                 task_id: pending.source_task_id.clone(),
                 cwd: workspace_root,
                 title: pending.source_title.clone(),
             }]
         }
-        Action::PendingWorktreeForkCreationFailed(message) => {
+        Action::PendingWorktreeForkCreationFailed {
+            request_id,
+            message,
+        } => {
             let Some(pending) = state.pending_worktree_fork.as_mut() else {
                 return Vec::new();
             };
-            if pending.phase != PendingWorktreeForkPhase::CreatingWorktree {
+            if pending.request_id != request_id
+                || pending.phase != PendingWorktreeForkPhase::CreatingWorktree
+            {
                 return Vec::new();
             }
             let message = bounded_string(message, MAX_PENDING_WORKTREE_FORK_ERROR_BYTES);
@@ -8401,11 +8484,16 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.status_message = Some(message);
             Vec::new()
         }
-        Action::PendingWorktreeForkConversationFailed(message) => {
+        Action::PendingWorktreeForkConversationFailed {
+            request_id,
+            message,
+        } => {
             let Some(pending) = state.pending_worktree_fork.as_mut() else {
                 return Vec::new();
             };
-            if pending.phase != PendingWorktreeForkPhase::StartingConversation {
+            if pending.request_id != request_id
+                || pending.phase != PendingWorktreeForkPhase::StartingConversation
+            {
                 return Vec::new();
             }
             let message = bounded_string(message, MAX_PENDING_WORKTREE_FORK_ERROR_BYTES);
@@ -8417,26 +8505,71 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             ));
             Vec::new()
         }
-        Action::PendingWorktreeForkCompleted => {
-            state.pending_worktree_fork = None;
-            Vec::new()
-        }
-        Action::CancelPendingWorktreeFork => {
-            let Some(pending) = state.pending_worktree_fork.as_ref() else {
+        Action::PendingWorktreeForkCompleted { request_id } => {
+            if state.pending_worktree_fork.as_ref().is_none_or(|pending| {
+                pending.request_id != request_id
+                    || pending.phase != PendingWorktreeForkPhase::StartingConversation
+            }) {
                 return Vec::new();
-            };
-            if pending.phase != PendingWorktreeForkPhase::CreatingWorktree {
+            }
+            state.pending_worktree_fork = None;
+            start_next_worktree_fork(state)
+        }
+        Action::PendingWorktreeForkCancelled { request_id } => {
+            if state.pending_worktree_fork.as_ref().is_none_or(|pending| {
+                pending.request_id != request_id
+                    || pending.phase != PendingWorktreeForkPhase::CancellingWorktree
+            }) {
                 return Vec::new();
             }
             state.pending_worktree_fork = None;
             state.status_message = None;
-            vec![Effect::CancelPendingWorktreeFork]
+            start_next_worktree_fork(state)
         }
-        Action::RetryPendingWorktreeFork => {
+        Action::PendingWorktreeForkCancelFailed {
+            request_id,
+            message,
+        } => {
             let Some(pending) = state.pending_worktree_fork.as_mut() else {
                 return Vec::new();
             };
-            if !pending.phase.failed() {
+            if pending.request_id != request_id
+                || pending.phase != PendingWorktreeForkPhase::CancellingWorktree
+            {
+                return Vec::new();
+            }
+            let message = bounded_string(message, MAX_PENDING_WORKTREE_FORK_ERROR_BYTES);
+            pending.phase = PendingWorktreeForkPhase::CreatingWorktree;
+            pending.error_message = Some(message.clone());
+            state.status_message = Some(message);
+            Vec::new()
+        }
+        Action::CancelPendingWorktreeFork { request_id } => {
+            if let Some(index) = state
+                .queued_worktree_forks
+                .iter()
+                .position(|pending| pending.request_id == request_id)
+            {
+                state.queued_worktree_forks.remove(index);
+                return Vec::new();
+            }
+            let Some(pending) = state.pending_worktree_fork.as_mut() else {
+                return Vec::new();
+            };
+            if pending.request_id != request_id
+                || pending.phase != PendingWorktreeForkPhase::CreatingWorktree
+            {
+                return Vec::new();
+            }
+            pending.phase = PendingWorktreeForkPhase::CancellingWorktree;
+            state.status_message = Some("Cancelling worktree…".to_owned());
+            vec![Effect::CancelPendingWorktreeFork { request_id }]
+        }
+        Action::RetryPendingWorktreeFork { request_id } => {
+            let Some(pending) = state.pending_worktree_fork.as_mut() else {
+                return Vec::new();
+            };
+            if pending.request_id != request_id || !pending.phase.failed() {
                 return Vec::new();
             }
             pending.attempt = pending.attempt.saturating_add(1);
@@ -8445,6 +8578,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 pending.phase = PendingWorktreeForkPhase::StartingConversation;
                 state.status_message = Some("Starting the conversation…".to_owned());
                 vec![Effect::RetryPendingWorktreeFork {
+                    request_id,
                     task_id: pending.source_task_id.clone(),
                     cwd,
                     title: pending.source_title.clone(),
@@ -8454,18 +8588,19 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 pending.git_root = None;
                 state.status_message = Some("Creating worktree…".to_owned());
                 vec![Effect::ForkTaskIntoWorktree {
+                    request_id,
                     task_id: pending.source_task_id.clone(),
                     cwd: pending.source_cwd.clone(),
                     title: pending.source_title.clone(),
-                    worktrees_root: state.git_preferences.worktree_root.clone(),
+                    worktrees_root: pending.worktrees_root.clone(),
                 }]
             }
         }
-        Action::DismissPendingWorktreeFork => {
+        Action::DismissPendingWorktreeFork { request_id } => {
             let Some(pending) = state.pending_worktree_fork.as_ref() else {
                 return Vec::new();
             };
-            if !pending.phase.failed() {
+            if pending.request_id != request_id || !pending.phase.failed() {
                 return Vec::new();
             }
             let kept_worktree = pending.git_root.clone();
@@ -8476,7 +8611,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     MAX_PENDING_WORKTREE_FORK_ERROR_BYTES,
                 )
             });
-            Vec::new()
+            start_next_worktree_fork(state)
         }
         Action::ArchiveTask(task_id) => {
             if state.tasks.iter().any(|task| task.id == task_id) {
@@ -20347,6 +20482,7 @@ mod tests {
         assert_eq!(
             reduce(&mut state, Action::ForkSelectedTaskIntoWorktree),
             [Effect::ForkTaskIntoWorktree {
+                request_id: 1,
                 task_id: "t1".to_owned(),
                 cwd: repository.clone(),
                 title: "Task".to_owned(),
@@ -20387,11 +20523,13 @@ mod tests {
             reduce(
                 &mut state,
                 Action::PendingWorktreeForkReady {
+                    request_id: 1,
                     workspace_root: managed_workspace.clone(),
                     git_root: managed_git_root.clone(),
                 },
             ),
             [Effect::RetryPendingWorktreeFork {
+                request_id: 1,
                 task_id: "t1".to_owned(),
                 cwd: managed_workspace.clone(),
                 title: "Task".to_owned(),
@@ -20399,7 +20537,10 @@ mod tests {
         );
         reduce(
             &mut state,
-            Action::PendingWorktreeForkConversationFailed("request rejected".to_owned()),
+            Action::PendingWorktreeForkConversationFailed {
+                request_id: 1,
+                message: "request rejected".to_owned(),
+            },
         );
 
         assert_eq!(
@@ -20410,8 +20551,12 @@ mod tests {
             Some(PendingWorktreeForkPhase::FailedStartingConversation)
         );
         assert_eq!(
-            reduce(&mut state, Action::RetryPendingWorktreeFork),
+            reduce(
+                &mut state,
+                Action::RetryPendingWorktreeFork { request_id: 1 },
+            ),
             [Effect::RetryPendingWorktreeFork {
+                request_id: 1,
                 task_id: "t1".to_owned(),
                 cwd: managed_workspace,
                 title: "Task".to_owned(),
@@ -20432,9 +20577,15 @@ mod tests {
 
         reduce(
             &mut state,
-            Action::PendingWorktreeForkConversationFailed("still unavailable".to_owned()),
+            Action::PendingWorktreeForkConversationFailed {
+                request_id: 1,
+                message: "still unavailable".to_owned(),
+            },
         );
-        reduce(&mut state, Action::DismissPendingWorktreeFork);
+        reduce(
+            &mut state,
+            Action::DismissPendingWorktreeFork { request_id: 1 },
+        );
         assert!(state.pending_worktree_fork.is_none());
         assert_eq!(
             state.status_message.as_deref(),
@@ -20443,29 +20594,264 @@ mod tests {
     }
 
     #[test]
-    fn cancelling_pending_worktree_ignores_a_stale_ready_event() {
+    fn completed_worktree_creation_wins_a_late_cancel_without_orphaning_the_checkout() {
         let mut state = AppState::default();
         reduce(&mut state, Action::TaskCreated(task_in_repository("t1")));
         reduce(&mut state, Action::ForkSelectedTaskIntoWorktree);
-        let stale_worktree = repository_path().with_file_name("stale-worktree");
+        let managed_workspace = repository_path().with_file_name("managed-workspace");
+        let managed_git_root = repository_path().with_file_name("managed-git-root");
 
         assert_eq!(
-            reduce(&mut state, Action::CancelPendingWorktreeFork),
-            [Effect::CancelPendingWorktreeFork]
+            reduce(
+                &mut state,
+                Action::CancelPendingWorktreeFork { request_id: 1 },
+            ),
+            [Effect::CancelPendingWorktreeFork { request_id: 1 }]
         );
-        assert!(state.pending_worktree_fork.is_none());
-        assert!(state.status_message.is_none());
+        assert_eq!(
+            state
+                .pending_worktree_fork
+                .as_ref()
+                .map(|pending| pending.phase),
+            Some(PendingWorktreeForkPhase::CancellingWorktree)
+        );
         assert!(
             reduce(
                 &mut state,
                 Action::PendingWorktreeForkReady {
-                    workspace_root: stale_worktree.clone(),
-                    git_root: stale_worktree,
+                    request_id: 999,
+                    workspace_root: managed_workspace.clone(),
+                    git_root: managed_git_root.clone(),
                 },
             )
             .is_empty()
         );
-        assert!(state.pending_worktree_fork.is_none());
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::PendingWorktreeForkReady {
+                    request_id: 1,
+                    workspace_root: managed_workspace.clone(),
+                    git_root: managed_git_root,
+                },
+            ),
+            [Effect::RetryPendingWorktreeFork {
+                request_id: 1,
+                task_id: "t1".to_owned(),
+                cwd: managed_workspace,
+                title: "Task".to_owned(),
+            }]
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::PendingWorktreeForkCancelled { request_id: 1 },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state
+                .pending_worktree_fork
+                .as_ref()
+                .map(|pending| pending.phase),
+            Some(PendingWorktreeForkPhase::StartingConversation)
+        );
+    }
+
+    #[test]
+    fn managed_worktree_forks_queue_fifo_and_cancelled_worker_starts_the_next_item() {
+        let mut state = AppState::default();
+        let repository = repository_path();
+        for task_id in ["t1", "t2", "t3", "t4"] {
+            reduce(&mut state, Action::TaskCreated(task_in_repository(task_id)));
+        }
+        let first_root = repository.with_file_name("worktrees-one");
+        let second_root = repository.with_file_name("worktrees-two");
+        let third_root = repository.with_file_name("worktrees-three");
+
+        state.git_preferences.worktree_root = Some(first_root.clone());
+        assert_eq!(
+            reduce(&mut state, Action::ForkTaskIntoWorktree("t1".to_owned()),),
+            [Effect::ForkTaskIntoWorktree {
+                request_id: 1,
+                task_id: "t1".to_owned(),
+                cwd: repository.clone(),
+                title: "Task".to_owned(),
+                worktrees_root: Some(first_root),
+            }]
+        );
+
+        state.git_preferences.worktree_root = Some(second_root.clone());
+        assert!(reduce(&mut state, Action::ForkTaskIntoWorktree("t2".to_owned()),).is_empty());
+        state.git_preferences.worktree_root = Some(third_root.clone());
+        assert!(reduce(&mut state, Action::ForkTaskIntoWorktree("t3".to_owned()),).is_empty());
+        assert!(reduce(&mut state, Action::ForkTaskIntoWorktree("t4".to_owned()),).is_empty());
+        assert_eq!(
+            state.status_message.as_deref(),
+            Some("Worktree queue is full (3 items).")
+        );
+        assert_eq!(state.queued_worktree_forks.len(), 2);
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::CancelPendingWorktreeFork { request_id: 2 },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state
+                .queued_worktree_forks
+                .front()
+                .map(|pending| pending.request_id),
+            Some(3)
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::CancelPendingWorktreeFork { request_id: 1 },
+            ),
+            [Effect::CancelPendingWorktreeFork { request_id: 1 }]
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::PendingWorktreeForkCancelFailed {
+                    request_id: 1,
+                    message: "backend unavailable".to_owned(),
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state
+                .pending_worktree_fork
+                .as_ref()
+                .map(|pending| pending.phase),
+            Some(PendingWorktreeForkPhase::CreatingWorktree)
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::CancelPendingWorktreeFork { request_id: 1 },
+            ),
+            [Effect::CancelPendingWorktreeFork { request_id: 1 }]
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::PendingWorktreeForkCreationFailed {
+                    request_id: 1,
+                    message: "stale".to_owned(),
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::PendingWorktreeForkCancelled { request_id: 1 },
+            ),
+            [Effect::ForkTaskIntoWorktree {
+                request_id: 3,
+                task_id: "t3".to_owned(),
+                cwd: repository.clone(),
+                title: "Task".to_owned(),
+                worktrees_root: Some(third_root.clone()),
+            }]
+        );
+
+        assert!(reduce(&mut state, Action::ForkTaskIntoWorktree("t4".to_owned())).is_empty());
+        let third_workspace = repository.with_file_name("managed-three");
+        let third_git_root = repository.with_file_name("managed-three-git");
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::PendingWorktreeForkReady {
+                    request_id: 3,
+                    workspace_root: third_workspace.clone(),
+                    git_root: third_git_root,
+                },
+            ),
+            [Effect::RetryPendingWorktreeFork {
+                request_id: 3,
+                task_id: "t3".to_owned(),
+                cwd: third_workspace,
+                title: "Task".to_owned(),
+            }]
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::PendingWorktreeForkCompleted { request_id: 3 },
+            ),
+            [Effect::ForkTaskIntoWorktree {
+                request_id: 4,
+                task_id: "t4".to_owned(),
+                cwd: repository,
+                title: "Task".to_owned(),
+                worktrees_root: Some(third_root),
+            }]
+        );
+    }
+
+    #[test]
+    fn failed_worktree_creation_blocks_the_queue_and_retries_with_its_saved_root() {
+        let mut state = AppState::default();
+        let repository = repository_path();
+        reduce(&mut state, Action::TaskCreated(task_in_repository("t1")));
+        reduce(&mut state, Action::TaskCreated(task_in_repository("t2")));
+        let saved_root = repository.with_file_name("saved-worktrees");
+        let changed_root = repository.with_file_name("changed-worktrees");
+        state.git_preferences.worktree_root = Some(saved_root.clone());
+        reduce(&mut state, Action::ForkTaskIntoWorktree("t1".to_owned()));
+        state.git_preferences.worktree_root = Some(changed_root.clone());
+        reduce(&mut state, Action::ForkTaskIntoWorktree("t2".to_owned()));
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::PendingWorktreeForkCreationFailed {
+                    request_id: 1,
+                    message: "not available".to_owned(),
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(state.queued_worktree_forks.len(), 1);
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::RetryPendingWorktreeFork { request_id: 1 },
+            ),
+            [Effect::ForkTaskIntoWorktree {
+                request_id: 1,
+                task_id: "t1".to_owned(),
+                cwd: repository.clone(),
+                title: "Task".to_owned(),
+                worktrees_root: Some(saved_root),
+            }]
+        );
+        reduce(
+            &mut state,
+            Action::PendingWorktreeForkCreationFailed {
+                request_id: 1,
+                message: "still unavailable".to_owned(),
+            },
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::DismissPendingWorktreeFork { request_id: 1 },
+            ),
+            [Effect::ForkTaskIntoWorktree {
+                request_id: 2,
+                task_id: "t2".to_owned(),
+                cwd: repository,
+                title: "Task".to_owned(),
+                worktrees_root: Some(changed_root),
+            }]
+        );
     }
 
     #[test]
