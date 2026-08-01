@@ -125,6 +125,7 @@ const MAX_EVENTS_PER_TICK: usize = 128;
 const MAX_RENDERED_DIFF_LINES: usize = 20_000;
 const MAX_RENDERED_ACTIVITY_SUMMARY_BYTES: usize = 4 * 1024;
 const MAX_RENDERED_ACTIVITY_DETAIL_BYTES: usize = 16 * 1024;
+const MAX_RENDERED_CONNECTION_ERROR_BYTES: usize = 16 * 1024;
 const MAX_RENDERED_PULL_REQUEST_BODY_BYTES: usize = 64 * 1024;
 const MAX_RENDERED_MCP_RESOURCE_BYTES: usize = 64 * 1024;
 const MAX_RENDERED_MCP_RESOURCE_CONTENTS: usize = 32;
@@ -4419,6 +4420,57 @@ impl Render for AboutView {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StartupRecoveryCard {
+    title: &'static str,
+    instruction: &'static str,
+    detail: String,
+    retryable: bool,
+}
+
+fn startup_recovery_card(
+    connection: &ConnectionStatus,
+    backend_available: bool,
+) -> Option<StartupRecoveryCard> {
+    let ConnectionStatus::Failed(error) = connection else {
+        return None;
+    };
+    let (title, instruction, retryable) = if backend_available {
+        (
+            "Couldn't connect to the Codex app-server",
+            "Install and sign in to the official Codex CLI. If it isn't on PATH, set CODEX_RS_CODEX_BIN, then retry.",
+            true,
+        )
+    } else {
+        (
+            "codexRS couldn't start its backend",
+            "Restart codexRS to try again.",
+            false,
+        )
+    };
+    Some(StartupRecoveryCard {
+        title,
+        instruction,
+        detail: bounded_render_text(error, MAX_RENDERED_CONNECTION_ERROR_BYTES),
+        retryable,
+    })
+}
+
+fn initial_app_state(backend_error: Option<String>) -> AppState {
+    let mut state = AppState::default();
+    if let Some(error) = backend_error {
+        let _ = reduce(&mut state, Action::ConnectionFailed(error));
+    }
+    state
+}
+
+fn connection_send_failure(error: &str) -> (Action, bool) {
+    (
+        Action::ConnectionFailed(error.to_owned()),
+        error == "backend is disconnected",
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UserInputAutoResolutionState {
     WaitingForInactivity,
@@ -5502,15 +5554,10 @@ impl WorkspaceView {
             this.schedule_window_placement_persist(window.window_bounds(), cx);
         }));
 
-        let backend = match Backend::spawn() {
-            Ok(backend) => Some(backend),
-            Err(error) => {
-                let mut state = AppState::default();
-                let _ = reduce(&mut state, Action::ConnectionFailed(error));
-                None
-            }
+        let (backend, mut state) = match Backend::spawn() {
+            Ok(backend) => (Some(backend), initial_app_state(None)),
+            Err(error) => (None, initial_app_state(Some(error))),
         };
-        let mut state = AppState::default();
         if backend.is_some() {
             let effects = reduce(&mut state, Action::Connect);
             if let Some(backend) = backend.as_ref() {
@@ -6228,6 +6275,7 @@ impl WorkspaceView {
             self.sync_browser_address_in_window(cx);
         }
         for effect in effects {
+            let connection_effect = matches!(&effect, Effect::ConnectAppServer);
             let pending_worktree_failure = match &effect {
                 Effect::ForkTaskIntoWorktree { request_id, .. } => Some((*request_id, 0_u8)),
                 Effect::RetryPendingWorktreeFork { request_id, .. } => Some((*request_id, 1_u8)),
@@ -6240,22 +6288,30 @@ impl WorkspaceView {
                 .ok_or("backend is unavailable")
                 .and_then(|backend| backend.send(effect));
             if let Err(error) = result {
-                let action = match pending_worktree_failure {
-                    Some((request_id, 0)) => Action::PendingWorktreeForkCreationFailed {
-                        request_id,
-                        message: error.to_owned(),
-                    },
-                    Some((request_id, 1)) => Action::PendingWorktreeForkConversationFailed {
-                        request_id,
-                        message: error.to_owned(),
-                    },
-                    Some((request_id, 2)) => Action::PendingWorktreeForkCancelFailed {
-                        request_id,
-                        message: format!("Could not cancel worktree: {error}"),
-                    },
-                    Some(_) => unreachable!("worktree effect kind is bounded"),
-                    None => Action::SetStatus(error.to_owned()),
+                let (action, discard_backend) = if connection_effect {
+                    connection_send_failure(error)
+                } else {
+                    let action = match pending_worktree_failure {
+                        Some((request_id, 0)) => Action::PendingWorktreeForkCreationFailed {
+                            request_id,
+                            message: error.to_owned(),
+                        },
+                        Some((request_id, 1)) => Action::PendingWorktreeForkConversationFailed {
+                            request_id,
+                            message: error.to_owned(),
+                        },
+                        Some((request_id, 2)) => Action::PendingWorktreeForkCancelFailed {
+                            request_id,
+                            message: format!("Could not cancel worktree: {error}"),
+                        },
+                        Some(_) => unreachable!("worktree effect kind is bounded"),
+                        None => Action::SetStatus(error.to_owned()),
+                    };
+                    (action, false)
                 };
+                if discard_backend {
+                    self.backend = None;
+                }
                 let _ = reduce(&mut self.state, action);
             }
         }
@@ -12531,12 +12587,23 @@ impl WorkspaceView {
                 );
                 (label, cx.theme().warning, Some(tooltip), false)
             }
-            ConnectionStatus::Failed(error) => (
-                "Connection failed".to_owned(),
-                cx.theme().danger,
-                Some(format!("{error}\nClick to retry.")),
-                true,
-            ),
+            ConnectionStatus::Failed(error) => {
+                let retryable = self.backend.is_some();
+                let recovery = if retryable {
+                    "Click to retry."
+                } else {
+                    "Restart codexRS to try again."
+                };
+                (
+                    "Connection failed".to_owned(),
+                    cx.theme().danger,
+                    Some(format!(
+                        "{}\n{recovery}",
+                        bounded_render_text(error, MAX_RENDERED_CONNECTION_ERROR_BYTES)
+                    )),
+                    retryable,
+                )
+            }
         };
         v_flex()
             .px_2()
@@ -12574,12 +12641,6 @@ impl WorkspaceView {
                     .px_2()
                     .gap_2()
                     .items_center()
-                    .when(retryable, |row| {
-                        row.when(pointer_cursors_enabled(cx), |row| row.cursor_pointer())
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.dispatch(Action::RetryConnection, cx);
-                            }))
-                    })
                     .when_some(tooltip, |row, tooltip| {
                         row.tooltip(move |window, cx| {
                             Tooltip::new(tooltip.clone()).build(window, cx)
@@ -12593,7 +12654,20 @@ impl WorkspaceView {
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
                             .child(label),
-                    ),
+                    )
+                    .when(retryable, |row| {
+                        row.child(
+                            Button::new("retry-sidebar-connection")
+                                .icon(IconName::Redo)
+                                .tooltip("Retry connection")
+                                .xsmall()
+                                .ghost()
+                                .high_contrast_focus()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.dispatch(Action::RetryConnection, cx);
+                                })),
+                        )
+                    }),
             )
             .into_any_element()
     }
@@ -15103,6 +15177,7 @@ impl WorkspaceView {
     fn render_task_workspace(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let Some(task_id) = self.state.selected_task_id.clone() else {
             let new_chat_cwd = self.state.new_chat_cwd.clone();
+            let recovery = startup_recovery_card(&self.state.connection, self.backend.is_some());
             return v_flex()
                 .flex_1()
                 .min_w_0()
@@ -15126,6 +15201,60 @@ impl WorkspaceView {
                                 .text_color(cx.theme().muted_foreground)
                                 .child("Start a new chat or open one from the sidebar."),
                         )
+                        .when_some(recovery, |empty, recovery| {
+                            empty.child(
+                                v_flex()
+                                    .mt_4()
+                                    .w_full()
+                                    .min_w_0()
+                                    .max_w(px(520.0))
+                                    .p_4()
+                                    .gap_2()
+                                    .rounded_lg()
+                                    .border_1()
+                                    .border_color(cx.theme().warning.opacity(0.5))
+                                    .bg(cx.theme().sidebar)
+                                    .child(
+                                        h_flex()
+                                            .gap_2()
+                                            .items_center()
+                                            .child(
+                                                Icon::new(IconName::TriangleAlert)
+                                                    .small()
+                                                    .text_color(cx.theme().warning),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                    .child(recovery.title),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(recovery.instruction),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .line_clamp(5)
+                                            .child(recovery.detail),
+                                    )
+                                    .when(recovery.retryable, |card| {
+                                        card.child(
+                                            Button::new("retry-startup-connection")
+                                                .label("Retry")
+                                                .small()
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.dispatch(Action::RetryConnection, cx);
+                                                })),
+                                        )
+                                    }),
+                            )
+                        })
                         .when_some(new_chat_cwd, |empty, cwd| {
                             empty.child(
                                 h_flex()
@@ -42933,13 +43062,14 @@ mod tests {
         composer_desktop_app_commands, composer_file_query, composer_file_search_max_height,
         composer_plugin_commands, composer_service_tier_command_for_query,
         composer_service_tier_commands, composer_skill_command_for_query, composer_skill_commands,
-        composer_slash_command_for_prefix, decode_mcp_form_image_data_url, default_branch_name,
-        diff_file_review_rows, diff_file_sections, extract_code_comment_findings,
-        fetch_plugin_logo_blocking, find_timeline_matches, format_decimal_grouped,
-        input_position_for_offset, integrated_terminal_shell_label, is_navigation_back_key,
-        is_navigation_forward_key, is_next_chat_bracket_key, is_previous_chat_bracket_key,
-        is_settings_shortcut_key, is_stable_composer_photo, is_supported_external_url,
-        is_supported_plugin_logo_url, is_terminal_shortcut_key, keyboard_shortcut_search_matches,
+        composer_slash_command_for_prefix, connection_send_failure, decode_mcp_form_image_data_url,
+        default_branch_name, diff_file_review_rows, diff_file_sections,
+        extract_code_comment_findings, fetch_plugin_logo_blocking, find_timeline_matches,
+        format_decimal_grouped, initial_app_state, input_position_for_offset,
+        integrated_terminal_shell_label, is_navigation_back_key, is_navigation_forward_key,
+        is_next_chat_bracket_key, is_previous_chat_bracket_key, is_settings_shortcut_key,
+        is_stable_composer_photo, is_supported_external_url, is_supported_plugin_logo_url,
+        is_terminal_shortcut_key, keyboard_shortcut_search_matches,
         keyboard_shortcut_settings_matches, keyboard_shortcut_stable_order,
         linked_pull_request_merge_command_enabled, mcp_auth_status_label, modal_surface_max_height,
         modal_surface_width, normalized_accelerator, output_artifact_type_label,
@@ -42949,21 +43079,21 @@ mod tests {
         remote_control_status_label, render_conversation_markdown, replace_composer_file_query,
         reserve_thread_find_history_page, sanitize_assistant_markdown, selected_approval_request,
         selected_task_copy_value, settings_section_matches, shell_width_class,
-        sidebar_layout_width, split_diff_rows, status_context_total_label, status_rate_limit_label,
-        status_rate_limit_reset_metadata_at, task_slot_id, terminal_tab_label,
-        timeline_activity_content, turn_diff_update_is_accepted, validate_plugin_logo_dimensions,
-        worktree_fork_queue_full,
+        sidebar_layout_width, split_diff_rows, startup_recovery_card, status_context_total_label,
+        status_rate_limit_label, status_rate_limit_reset_metadata_at, task_slot_id,
+        terminal_tab_label, timeline_activity_content, turn_diff_update_is_accepted,
+        validate_plugin_logo_dimensions, worktree_fork_queue_full,
     };
     use codex_core::{
         AppCard, AppState, AppearancePalette, AppearanceVariant, ApprovalContext, ApprovalKind,
         ApprovalRequest, ComposerAttachment, ComposerAttachmentKind, ComputerApplicationState,
-        GitPullRequestState, IntegratedTerminalShell, KEYBOARD_SHORTCUT_COMMAND_IDS, LoadStatus,
-        MAX_PENDING_WORKTREE_FORKS, MainRoute, McpAuthStatus, PendingWorktreeFork,
-        PendingWorktreeForkPhase, PluginCard, ProcessManagerState, PullRequestCiStatus,
-        PullRequestDetail, PullRequestIdentity, PullRequestMutationKind, PullRequestState,
-        PullRequestSummary, ReasoningEffortOption, RemoteControlRuntimeStatus, ServiceTierOption,
-        SkillCard, SkillScope, TaskRunStatus, TaskSummary, TerminalTabState, TimelineItem,
-        TimelineKind, TurnDiffState,
+        ConnectionStatus, GitPullRequestState, IntegratedTerminalShell,
+        KEYBOARD_SHORTCUT_COMMAND_IDS, LoadStatus, MAX_PENDING_WORKTREE_FORKS, MainRoute,
+        McpAuthStatus, PendingWorktreeFork, PendingWorktreeForkPhase, PluginCard,
+        ProcessManagerState, PullRequestCiStatus, PullRequestDetail, PullRequestIdentity,
+        PullRequestMutationKind, PullRequestState, PullRequestSummary, ReasoningEffortOption,
+        RemoteControlRuntimeStatus, ServiceTierOption, SkillCard, SkillScope, TaskRunStatus,
+        TaskSummary, TerminalTabState, TimelineItem, TimelineKind, TurnDiffState,
     };
 
     fn task(id: &str, cwd: &str) -> TaskSummary {
@@ -42978,6 +43108,49 @@ mod tests {
             forked_from_id: None,
             status: TaskRunStatus::Idle,
         }
+    }
+
+    #[test]
+    fn startup_recovery_distinguishes_backend_and_app_server_failures() {
+        let failure = ConnectionStatus::Failed("x".repeat(20 * 1024));
+
+        let Some(app_server) = startup_recovery_card(&failure, true) else {
+            panic!("expected app-server failure card");
+        };
+        assert_eq!(app_server.title, "Couldn't connect to the Codex app-server");
+        assert!(app_server.retryable);
+        assert!(app_server.detail.len() <= 16 * 1024 + "…".len());
+
+        let Some(backend) = startup_recovery_card(&failure, false) else {
+            panic!("expected backend failure card");
+        };
+        assert_eq!(backend.title, "codexRS couldn't start its backend");
+        assert_eq!(backend.instruction, "Restart codexRS to try again.");
+        assert!(!backend.retryable);
+
+        assert!(startup_recovery_card(&ConnectionStatus::Online, true).is_none());
+    }
+
+    #[test]
+    fn initial_state_preserves_backend_start_failure() {
+        let state = initial_app_state(Some("backend unavailable".to_owned()));
+
+        assert_eq!(
+            state.connection,
+            ConnectionStatus::Failed("backend unavailable".to_owned())
+        );
+    }
+
+    #[test]
+    fn disconnected_backend_retry_returns_to_non_retryable_failure() {
+        let (action, discard_backend) = connection_send_failure("backend is disconnected");
+
+        assert!(discard_backend);
+        assert!(matches!(
+            action,
+            codex_core::Action::ConnectionFailed(ref error)
+                if error == "backend is disconnected"
+        ));
     }
 
     fn plugin(
