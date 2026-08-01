@@ -17,8 +17,8 @@ use base64::{
 };
 use chrono::{Local, TimeZone};
 use codex_core::{
-    APPEARANCE_CODE_THEMES, AccountAuthOperation, AccountKind, Action, AgentConfigScope,
-    AgentConfigScopeKind, AppCard, AppDetailView, AppState, AppearancePalette,
+    APPEARANCE_CODE_THEMES, AccountAuthOperation, AccountKind, AccountState, Action,
+    AgentConfigScope, AgentConfigScopeKind, AppCard, AppDetailView, AppState, AppearancePalette,
     AppearancePreferences, AppearanceTheme, AppearanceVariant, ApprovalContext, ApprovalDecision,
     ApprovalRequest, ArchivedTaskDeleteKind, ArtifactPreviewKind, BackgroundTerminal,
     BrowserApprovalMode, BrowserDownloadState, BrowserDownloadStatus, BrowserKeyInput,
@@ -4473,6 +4473,17 @@ fn first_run_sign_in_visible(state: &AppState) -> bool {
         && state.account.requires_openai_auth
 }
 
+fn account_device_code(account: &AccountState) -> Option<(String, String)> {
+    (account.auth_operation == AccountAuthOperation::AwaitingLogin)
+        .then(|| {
+            account
+                .login_user_code
+                .clone()
+                .zip(account.login_verification_url.clone())
+        })
+        .flatten()
+}
+
 fn first_run_account_load_error(state: &AppState) -> Option<&str> {
     if state.connection == ConnectionStatus::Online && state.account.status == LoadStatus::Failed {
         state.account.error.as_deref()
@@ -6541,11 +6552,7 @@ impl WorkspaceView {
                 cx.notify();
             }
             if let Some(authorization_url) = account_authentication {
-                if is_supported_external_url(&authorization_url) {
-                    cx.open_url(&authorization_url);
-                } else {
-                    self.dispatch(Action::AccountLoginAuthorizationUrlRejected, cx);
-                }
+                self.open_account_login_url(&authorization_url, cx);
             }
             if let Some((name, authorization_url)) = mcp_authentication {
                 if is_supported_external_url(&authorization_url) {
@@ -9527,6 +9534,14 @@ impl WorkspaceView {
         }
         self.workspace_modal = Some(WorkspaceModal::LogOutAccount);
         cx.notify();
+    }
+
+    fn open_account_login_url(&mut self, authorization_url: &str, cx: &mut Context<Self>) {
+        if is_supported_external_url(authorization_url) {
+            cx.open_url(authorization_url);
+        } else {
+            self.dispatch(Action::AccountLoginAuthorizationUrlRejected, cx);
+        }
     }
 
     fn confirm_remove_computer_use_allowed_app(&mut self, app_id: String, cx: &mut Context<Self>) {
@@ -15221,6 +15236,8 @@ impl WorkspaceView {
             let first_run_sign_in = first_run_sign_in_visible(&self.state);
             let account_auth_operation = self.state.account.auth_operation;
             let account_auth_error = self.state.account.auth_error.clone();
+            let account_device_code = account_device_code(&self.state.account);
+            let awaiting_device_code = account_device_code.is_some();
             let first_run_account_error =
                 first_run_account_load_error(&self.state).map(str::to_owned);
             return v_flex()
@@ -15302,7 +15319,33 @@ impl WorkspaceView {
                         })
                         .when(first_run_sign_in, |empty| {
                             let (instruction, action) = match account_auth_operation {
-                                AccountAuthOperation::Idle | AccountAuthOperation::LoggingOut => (
+                                AccountAuthOperation::Idle => (
+                                    "Sign in with your ChatGPT account to start using Codex.",
+                                    v_flex()
+                                        .gap_2()
+                                        .items_start()
+                                        .child(
+                                            Button::new("first-run-account-login")
+                                                .label("Sign in with ChatGPT")
+                                                .small()
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.dispatch(Action::StartAccountLogin, cx);
+                                                })),
+                                        )
+                                        .child(
+                                            Button::new("first-run-account-device-code")
+                                                .label("Use device code")
+                                                .small()
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.dispatch(
+                                                        Action::StartAccountDeviceCodeLogin,
+                                                        cx,
+                                                    );
+                                                })),
+                                        )
+                                        .into_any_element(),
+                                ),
+                                AccountAuthOperation::LoggingOut => (
                                     "Sign in with your ChatGPT account to start using Codex.",
                                     Button::new("first-run-account-login")
                                         .label("Sign in with ChatGPT")
@@ -15321,7 +15364,11 @@ impl WorkspaceView {
                                         .into_any_element(),
                                 ),
                                 AccountAuthOperation::AwaitingLogin => (
-                                    "Finish signing in in your browser.",
+                                    if awaiting_device_code {
+                                        "Enter the one-time code at the verification page."
+                                    } else {
+                                        "Finish signing in in your browser."
+                                    },
                                     Button::new("first-run-account-login-cancel")
                                         .label("Cancel sign-in")
                                         .small()
@@ -15363,6 +15410,44 @@ impl WorkspaceView {
                                             .text_color(cx.theme().muted_foreground)
                                             .child(instruction),
                                     )
+                                    .when_some(account_device_code, |card, (user_code, verification_url)| {
+                                        let copied_code = user_code.clone();
+                                        card.child(
+                                            v_flex()
+                                                .gap_2()
+                                                .child(
+                                                    h_flex()
+                                                        .gap_2()
+                                                        .items_center()
+                                                        .child(
+                                                            div()
+                                                                .flex_1()
+                                                                .min_w_0()
+                                                                .text_sm()
+                                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                                .child(user_code),
+                                                        )
+                                                        .child(
+                                                            Button::new("first-run-account-device-code-copy")
+                                                                .label("Copy code")
+                                                                .small()
+                                                                .on_click(move |_, _, cx| {
+                                                                    cx.write_to_clipboard(ClipboardItem::new_string(
+                                                                        copied_code.clone(),
+                                                                    ));
+                                                                }),
+                                                        ),
+                                                )
+                                                .child(
+                                                    Button::new("first-run-account-device-code-open")
+                                                        .label("Open verification page")
+                                                        .small()
+                                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                                            this.open_account_login_url(&verification_url, cx);
+                                                        })),
+                                                ),
+                                        )
+                                    })
                                     .when_some(account_auth_error, |card, error| {
                                         card.child(
                                             div()
@@ -34567,6 +34652,7 @@ impl WorkspaceView {
     fn render_profile_settings(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let account = self.state.account.clone();
         let loading = account.status == LoadStatus::Loading;
+        let device_code = account_device_code(&account);
         let mut cards = Vec::new();
 
         if account.status == LoadStatus::Failed {
@@ -34648,27 +34734,97 @@ impl WorkspaceView {
                     .into_any_element()
             } else {
                 match account.auth_operation {
-                    AccountAuthOperation::Idle | AccountAuthOperation::LoggingOut => {
-                        Button::new("account-login")
-                            .label("Sign in with ChatGPT")
-                            .small()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.dispatch(Action::StartAccountLogin, cx);
-                            }))
-                            .into_any_element()
-                    }
+                    AccountAuthOperation::Idle => v_flex()
+                        .gap_2()
+                        .items_end()
+                        .child(
+                            Button::new("account-login")
+                                .label("Sign in with ChatGPT")
+                                .small()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.dispatch(Action::StartAccountLogin, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("account-device-code")
+                                .label("Use device code")
+                                .small()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.dispatch(Action::StartAccountDeviceCodeLogin, cx);
+                                })),
+                        )
+                        .into_any_element(),
+                    AccountAuthOperation::LoggingOut => Button::new("account-login")
+                        .label("Sign in with ChatGPT")
+                        .small()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.dispatch(Action::StartAccountLogin, cx);
+                        }))
+                        .into_any_element(),
                     AccountAuthOperation::StartingLogin => Button::new("account-login-starting")
                         .label("Starting…")
                         .small()
                         .disabled(true)
                         .into_any_element(),
-                    AccountAuthOperation::AwaitingLogin => Button::new("account-login-cancel")
-                        .label("Cancel sign-in")
-                        .small()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.dispatch(Action::CancelAccountLogin, cx);
-                        }))
-                        .into_any_element(),
+                    AccountAuthOperation::AwaitingLogin => device_code.clone().map_or_else(
+                        || {
+                            Button::new("account-login-cancel")
+                                .label("Cancel sign-in")
+                                .small()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.dispatch(Action::CancelAccountLogin, cx);
+                                }))
+                                .into_any_element()
+                        },
+                        |(user_code, verification_url)| {
+                            let copied_code = user_code.clone();
+                            v_flex()
+                                .gap_2()
+                                .items_end()
+                                .child(
+                                    h_flex()
+                                        .gap_2()
+                                        .items_center()
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .text_sm()
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .child(user_code),
+                                        )
+                                        .child(
+                                            Button::new("account-device-code-copy")
+                                                .label("Copy code")
+                                                .small()
+                                                .on_click(move |_, _, cx| {
+                                                    cx.write_to_clipboard(
+                                                        ClipboardItem::new_string(
+                                                            copied_code.clone(),
+                                                        ),
+                                                    );
+                                                }),
+                                        ),
+                                )
+                                .child(
+                                    Button::new("account-device-code-open")
+                                        .label("Open verification page")
+                                        .small()
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.open_account_login_url(&verification_url, cx);
+                                        })),
+                                )
+                                .child(
+                                    Button::new("account-login-cancel")
+                                        .label("Cancel sign-in")
+                                        .small()
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.dispatch(Action::CancelAccountLogin, cx);
+                                        })),
+                                )
+                                .into_any_element()
+                        },
+                    ),
                     AccountAuthOperation::CancelingLogin => Button::new("account-login-canceling")
                         .label("Canceling…")
                         .small()
@@ -43521,17 +43677,18 @@ mod tests {
         KeyboardShortcutGroup, MAX_CONVERSATION_MARKDOWN_BYTES, MAX_NAVIGATION_HISTORY_ENTRIES,
         MAX_THREAD_FIND_HISTORY_PAGES, MAX_THREAD_FIND_MATCHES, NavigationHistory,
         NavigationLocation, PaletteCommand, PaletteGroup, ReasoningEffortStep, SettingsSection,
-        ShellWidthClass, TaskCopyKind, ThreadFindSurface, accelerators_conflict, adjacent_task_id,
-        app_chatgpt_url, app_mention_prompt, appearance_color, appearance_color_value,
-        appearance_theme_share_string, archived_chat_groups, archived_chat_projects,
-        archived_delete_confirmation_copy, background_terminal_summary,
-        bounded_keyboard_shortcut_search_query, bounded_settings_search_query,
-        bounded_thread_find_query, browser_display_url, browser_navigation_url,
-        browser_surface_coordinates, build_plugin_catalog_sections, case_insensitive_match_ranges,
-        command_task_slot, composer_app_commands, composer_at_skill_commands,
-        composer_desktop_app_commands, composer_file_query, composer_file_search_max_height,
-        composer_plugin_commands, composer_service_tier_command_for_query,
-        composer_service_tier_commands, composer_skill_command_for_query, composer_skill_commands,
+        ShellWidthClass, TaskCopyKind, ThreadFindSurface, accelerators_conflict,
+        account_device_code, adjacent_task_id, app_chatgpt_url, app_mention_prompt,
+        appearance_color, appearance_color_value, appearance_theme_share_string,
+        archived_chat_groups, archived_chat_projects, archived_delete_confirmation_copy,
+        background_terminal_summary, bounded_keyboard_shortcut_search_query,
+        bounded_settings_search_query, bounded_thread_find_query, browser_display_url,
+        browser_navigation_url, browser_surface_coordinates, build_plugin_catalog_sections,
+        case_insensitive_match_ranges, command_task_slot, composer_app_commands,
+        composer_at_skill_commands, composer_desktop_app_commands, composer_file_query,
+        composer_file_search_max_height, composer_plugin_commands,
+        composer_service_tier_command_for_query, composer_service_tier_commands,
+        composer_skill_command_for_query, composer_skill_commands,
         composer_slash_command_for_prefix, connection_send_failure, decode_mcp_form_image_data_url,
         default_branch_name, diff_file_review_rows, diff_file_sections,
         extract_code_comment_findings, fetch_plugin_logo_blocking, find_timeline_matches,
@@ -43556,10 +43713,10 @@ mod tests {
         validate_plugin_logo_dimensions, worktree_fork_queue_full,
     };
     use codex_core::{
-        AccountKind, AccountProfile, AccountState, AppCard, AppState, AppearancePalette,
-        AppearanceVariant, ApprovalContext, ApprovalKind, ApprovalRequest, ComposerAttachment,
-        ComposerAttachmentKind, ComputerApplicationState, ConnectionStatus, GitPullRequestState,
-        IntegratedTerminalShell, KEYBOARD_SHORTCUT_COMMAND_IDS, LoadStatus,
+        AccountAuthOperation, AccountKind, AccountProfile, AccountState, AppCard, AppState,
+        AppearancePalette, AppearanceVariant, ApprovalContext, ApprovalKind, ApprovalRequest,
+        ComposerAttachment, ComposerAttachmentKind, ComputerApplicationState, ConnectionStatus,
+        GitPullRequestState, IntegratedTerminalShell, KEYBOARD_SHORTCUT_COMMAND_IDS, LoadStatus,
         MAX_PENDING_WORKTREE_FORKS, MainRoute, McpAuthStatus, PendingWorktreeFork,
         PendingWorktreeForkPhase, PluginCard, ProcessManagerState, PullRequestCiStatus,
         PullRequestDetail, PullRequestIdentity, PullRequestMutationKind, PullRequestState,
@@ -43651,6 +43808,27 @@ mod tests {
         );
         state.connection = ConnectionStatus::Offline;
         assert!(first_run_account_load_error(&state).is_none());
+    }
+
+    #[test]
+    fn account_device_code_is_visible_only_while_awaiting_login() {
+        let mut account = AccountState {
+            auth_operation: AccountAuthOperation::AwaitingLogin,
+            login_verification_url: Some("https://auth.openai.com/device".to_owned()),
+            login_user_code: Some("ABCD-EFGH".to_owned()),
+            ..AccountState::default()
+        };
+
+        assert_eq!(
+            account_device_code(&account),
+            Some((
+                "ABCD-EFGH".to_owned(),
+                "https://auth.openai.com/device".to_owned()
+            ))
+        );
+
+        account.auth_operation = AccountAuthOperation::Idle;
+        assert!(account_device_code(&account).is_none());
     }
 
     #[test]
