@@ -1737,6 +1737,23 @@ struct SplitDiffRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct DiffFileSection {
+    label: String,
+    lines: Vec<DiffLine>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DiffReviewRow {
+    FileHeader {
+        section_index: usize,
+        label: String,
+        expanded: bool,
+    },
+    Unified(DiffLine),
+    Split(SplitDiffRow),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct PluginCatalogSection {
     filter: MarketplaceSectionFilter,
     title: String,
@@ -4608,6 +4625,7 @@ struct WorkspaceView {
     syncing_appearance_controls: bool,
     mcp_editor_error: Option<String>,
     diff_split_view: bool,
+    collapsed_diff_file_sections: HashSet<usize>,
     renaming_task_id: Option<String>,
     editing_message: Option<(String, String)>,
     timeline_list: ListState,
@@ -5640,6 +5658,7 @@ impl WorkspaceView {
             syncing_appearance_controls: false,
             mcp_editor_error: None,
             diff_split_view: false,
+            collapsed_diff_file_sections: HashSet::new(),
             renaming_task_id: None,
             editing_message: None,
             timeline_list: ListState::new(0, ListAlignment::Bottom, px(200.0)),
@@ -6048,6 +6067,26 @@ impl WorkspaceView {
     }
 
     fn dispatch(&mut self, action: Action, cx: &mut Context<Self>) {
+        let reset_diff_file_sections = match &action {
+            Action::SelectTask(_) | Action::SelectGitDiffScope(_) => true,
+            Action::TurnDiffUpdated {
+                task_id, turn_id, ..
+            } => {
+                self.state.selected_task_id.as_deref() == Some(task_id)
+                    && turn_diff_update_is_accepted(&self.state, task_id, turn_id)
+            }
+            Action::GitSourceDiffLoaded {
+                generation, scope, ..
+            } => {
+                *generation == self.state.git.diff_generation
+                    && *scope == self.state.git.selected_scope
+            }
+            Action::BranchDiffLoaded { generation, .. } => {
+                *generation == self.state.git.diff_generation
+                    && self.state.git.selected_scope == GitDiffScope::Branch
+            }
+            _ => false,
+        };
         let remote_pairing_started = matches!(&action, Action::RemotePairingStarted { .. });
         let remote_pairing_claimed = matches!(
             &action,
@@ -6141,6 +6180,9 @@ impl WorkspaceView {
         }
         let previous_location = NavigationLocation::from_state(&self.state);
         let effects = reduce(&mut self.state, action);
+        if reset_diff_file_sections {
+            self.collapsed_diff_file_sections.clear();
+        }
         if pending_worktree_opened && self.state.pending_worktree_fork.is_some() {
             self.workspace_modal = Some(WorkspaceModal::PendingWorktreeFork);
         } else if pending_worktree_closed
@@ -14759,6 +14801,83 @@ impl WorkspaceView {
             .into_any_element()
     }
 
+    fn render_diff_review_row(
+        &mut self,
+        index: usize,
+        row: DiffReviewRow,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        match row {
+            DiffReviewRow::FileHeader {
+                section_index,
+                label,
+                expanded,
+            } => self.render_diff_file_section_header(section_index, label, expanded, cx),
+            DiffReviewRow::Unified(line) => self.render_diff_line(index, line, cx),
+            DiffReviewRow::Split(row) => self.render_split_diff_row(index, row, cx),
+        }
+    }
+
+    fn render_diff_file_section_header(
+        &mut self,
+        section_index: usize,
+        label: String,
+        expanded: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        Button::new(SharedString::from(format!(
+            "changes-diff-file-section-{section_index}"
+        )))
+        .h(px(24.0))
+        .w_full()
+        .px_0()
+        .custom(
+            ButtonCustomVariant::new(cx)
+                .color(cx.theme().info.opacity(0.12))
+                .foreground(cx.theme().foreground)
+                .hover(cx.theme().list_hover)
+                .active(cx.theme().list_active),
+        )
+        .high_contrast_focus()
+        .when(pointer_cursors_enabled(cx), |element| {
+            element.cursor_pointer()
+        })
+        .child(
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .h_full()
+                .px_2()
+                .gap_2()
+                .items_center()
+                .child(
+                    Icon::new(if expanded {
+                        IconName::ChevronDown
+                    } else {
+                        IconName::ChevronRight
+                    })
+                    .xsmall()
+                    .text_color(cx.theme().muted_foreground),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .font_family(cx.theme().mono_font_family.clone())
+                        .text_xs()
+                        .text_color(cx.theme().foreground)
+                        .child(label),
+                ),
+        )
+        .on_click(cx.listener(move |this, _, _, cx| {
+            if !this.collapsed_diff_file_sections.insert(section_index) {
+                this.collapsed_diff_file_sections.remove(&section_index);
+            }
+            cx.notify();
+        }))
+        .into_any_element()
+    }
+
     fn render_split_diff_row(
         &mut self,
         _index: usize,
@@ -22339,8 +22458,33 @@ impl WorkspaceView {
             | GitDiffScope::Branch => self.state.git.unified_diff.as_str(),
         };
         let diff_lines = Rc::new(parse_unified_diff(diff_text, MAX_RENDERED_DIFF_LINES));
-        let diff_line_count = diff_lines.len();
-        let diff_lines_for_list = Rc::clone(&diff_lines);
+        let whole_source = matches!(
+            scope,
+            GitDiffScope::LastTurn
+                | GitDiffScope::Uncommitted
+                | GitDiffScope::Committed
+                | GitDiffScope::Branch
+        );
+        let diff_review_rows = Rc::new(if whole_source {
+            diff_file_review_rows(
+                &diff_file_sections(&diff_lines),
+                &self.collapsed_diff_file_sections,
+                self.diff_split_view,
+            )
+        } else if self.diff_split_view {
+            split_diff_rows(&diff_lines)
+                .into_iter()
+                .map(DiffReviewRow::Split)
+                .collect()
+        } else {
+            diff_lines
+                .iter()
+                .cloned()
+                .map(DiffReviewRow::Unified)
+                .collect()
+        });
+        let diff_line_count = diff_review_rows.len();
+        let diff_review_rows_for_list = Rc::clone(&diff_review_rows);
         let effective_review_base = self
             .state
             .git
@@ -22467,26 +22611,28 @@ impl WorkspaceView {
                     .items_center()
                     .justify_between()
                     .child(
-                        Button::new("changes-source")
-                            .label(source_label)
-                            .dropdown_caret(true)
-                            .small()
-                            .ghost()
-                            .dropdown_menu(move |menu, window, cx| {
-                                Self::git_review_source_menu(
-                                    menu,
-                                    source_menu_view.clone(),
-                                    GitReviewSourceMenuState {
-                                        selected_scope: scope,
-                                        review_disabled,
-                                        repository_available,
-                                        commits: source_menu_commits.clone(),
-                                        selected_commit_sha: source_menu_commit_sha.clone(),
-                                    },
-                                    window,
-                                    cx,
-                                )
-                            }),
+                        h_flex().gap_1().child(
+                            Button::new("changes-source")
+                                .label(source_label)
+                                .dropdown_caret(true)
+                                .small()
+                                .ghost()
+                                .dropdown_menu(move |menu, window, cx| {
+                                    Self::git_review_source_menu(
+                                        menu,
+                                        source_menu_view.clone(),
+                                        GitReviewSourceMenuState {
+                                            selected_scope: scope,
+                                            review_disabled,
+                                            repository_available,
+                                            commits: source_menu_commits.clone(),
+                                            selected_commit_sha: source_menu_commit_sha.clone(),
+                                        },
+                                        window,
+                                        cx,
+                                    )
+                                }),
+                        ),
                     )
                     .child(
                         h_flex()
@@ -22552,6 +22698,36 @@ impl WorkspaceView {
                             ),
                     ),
             )
+            .when(whole_source, |panel| {
+                panel.child(
+                    h_flex()
+                        .h(px(24.0))
+                        .px_4()
+                        .gap_1()
+                        .child(
+                            Button::new("changes-diff-unified")
+                                .label("Unified")
+                                .xsmall()
+                                .ghost()
+                                .selected(!self.diff_split_view)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.diff_split_view = false;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Button::new("changes-diff-split")
+                                .label("Split")
+                                .xsmall()
+                                .ghost()
+                                .selected(self.diff_split_view)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.diff_split_view = true;
+                                    cx.notify();
+                                })),
+                        ),
+                )
+            })
             .when(show_review_base_picker, |panel| {
                 panel.child(
                     h_flex()
@@ -22845,12 +23021,12 @@ impl WorkspaceView {
                             cx.processor(move |this, range: Range<usize>, _, cx| {
                                 range
                                     .filter_map(|index| {
-                                        diff_lines_for_list
+                                        diff_review_rows_for_list
                                             .get(index)
                                             .cloned()
-                                            .map(|line| (index, line))
+                                            .map(|row| (index, row))
                                     })
-                                    .map(|(index, line)| this.render_diff_line(index, line, cx))
+                                    .map(|(index, row)| this.render_diff_review_row(index, row, cx))
                                     .collect()
                             }),
                         )
@@ -39939,6 +40115,103 @@ fn parse_unified_diff(diff: &str, limit: usize) -> Vec<DiffLine> {
         .collect()
 }
 
+fn diff_file_sections(lines: &[DiffLine]) -> Vec<DiffFileSection> {
+    let mut sections = Vec::new();
+    let mut label = "Changes".to_owned();
+    let mut section_lines = Vec::new();
+    let mut saw_file_header = false;
+
+    for line in lines {
+        if line.kind == DiffLineKind::Header && line.text.starts_with("diff --git ") {
+            if saw_file_header || !section_lines.is_empty() {
+                sections.push(DiffFileSection {
+                    label,
+                    lines: section_lines,
+                });
+                section_lines = Vec::new();
+            }
+            label = diff_file_section_label(&line.text);
+            saw_file_header = true;
+            continue;
+        }
+        section_lines.push(line.clone());
+    }
+
+    if saw_file_header || !section_lines.is_empty() {
+        sections.push(DiffFileSection {
+            label,
+            lines: section_lines,
+        });
+    }
+    sections
+}
+
+fn diff_file_section_label(header: &str) -> String {
+    header
+        .strip_prefix("diff --git ")
+        .filter(|label| !label.is_empty())
+        .unwrap_or("Changes")
+        .to_owned()
+}
+
+fn diff_file_review_rows(
+    sections: &[DiffFileSection],
+    collapsed_sections: &HashSet<usize>,
+    split: bool,
+) -> Vec<DiffReviewRow> {
+    let mut rows = Vec::new();
+    for (section_index, section) in sections.iter().enumerate() {
+        let expanded = !collapsed_sections.contains(&section_index);
+        rows.push(DiffReviewRow::FileHeader {
+            section_index,
+            label: section.label.clone(),
+            expanded,
+        });
+        if !expanded {
+            continue;
+        }
+        let remaining = MAX_RENDERED_DIFF_LINES.saturating_sub(rows.len());
+        if remaining == 0 {
+            break;
+        }
+        if split {
+            rows.extend(
+                split_diff_rows(&section.lines)
+                    .into_iter()
+                    .map(DiffReviewRow::Split)
+                    .take(remaining),
+            );
+        } else {
+            rows.extend(
+                section
+                    .lines
+                    .iter()
+                    .cloned()
+                    .map(DiffReviewRow::Unified)
+                    .take(remaining),
+            );
+        }
+        if rows.len() == MAX_RENDERED_DIFF_LINES {
+            break;
+        }
+    }
+    rows
+}
+
+fn turn_diff_update_is_accepted(state: &AppState, task_id: &str, turn_id: &str) -> bool {
+    state.timelines.get(task_id).is_none_or(|timeline| {
+        !timeline
+            .active_turn_id
+            .as_deref()
+            .is_some_and(|active_turn_id| active_turn_id != turn_id)
+            && !(timeline.active_turn_id.is_none()
+                && timeline
+                    .last_turn_diff
+                    .as_ref()
+                    .is_some_and(|current| current.turn_id != turn_id))
+    })
+}
+
 fn parse_hunk_starts(header: &str) -> (Option<u32>, Option<u32>) {
     let mut fields = header.split_whitespace();
     let marker = fields.next();
@@ -42538,7 +42811,7 @@ mod tests {
     use super::{
         ACTIVE_KEYBOARD_SHORTCUTS, APPEARANCE_THEME_SHARE_PREFIX, ArchivedChatDeleteScope,
         ArchivedChatKindFilter, ArchivedChatProjectFilter, ArchivedChatSortKey, AssistantFinding,
-        CONVERSATION_MARKDOWN_TRUNCATED_NOTICE, DiffLineKind, INIT_AGENTS_PROMPT,
+        CONVERSATION_MARKDOWN_TRUNCATED_NOTICE, DiffLineKind, DiffReviewRow, INIT_AGENTS_PROMPT,
         KeyboardShortcutGroup, MAX_CONVERSATION_MARKDOWN_BYTES, MAX_NAVIGATION_HISTORY_ENTRIES,
         MAX_THREAD_FIND_HISTORY_PAGES, MAX_THREAD_FIND_MATCHES, NavigationHistory,
         NavigationLocation, PaletteCommand, PaletteGroup, ReasoningEffortStep, SettingsSection,
@@ -42554,24 +42827,24 @@ mod tests {
         composer_plugin_commands, composer_service_tier_command_for_query,
         composer_service_tier_commands, composer_skill_command_for_query, composer_skill_commands,
         composer_slash_command_for_prefix, decode_mcp_form_image_data_url, default_branch_name,
-        extract_code_comment_findings, fetch_plugin_logo_blocking, find_timeline_matches,
-        format_decimal_grouped, input_position_for_offset, integrated_terminal_shell_label,
-        is_navigation_back_key, is_navigation_forward_key, is_next_chat_bracket_key,
-        is_previous_chat_bracket_key, is_settings_shortcut_key, is_stable_composer_photo,
-        is_supported_external_url, is_supported_plugin_logo_url, is_terminal_shortcut_key,
-        keyboard_shortcut_search_matches, keyboard_shortcut_settings_matches,
-        keyboard_shortcut_stable_order, linked_pull_request_merge_command_enabled,
-        mcp_auth_status_label, modal_surface_max_height, modal_surface_width,
-        normalized_accelerator, output_artifact_type_label, parse_appearance_theme_share_string,
-        parse_mcp_list, parse_mcp_record, parse_unified_diff, plugin_logo_format,
-        process_manager_auto_refresh_allowed, project_trigger_matches, project_workspace_options,
-        pull_request_merge_submission_enabled, reasoning_effort_target,
+        diff_file_review_rows, diff_file_sections, extract_code_comment_findings,
+        fetch_plugin_logo_blocking, find_timeline_matches, format_decimal_grouped,
+        input_position_for_offset, integrated_terminal_shell_label, is_navigation_back_key,
+        is_navigation_forward_key, is_next_chat_bracket_key, is_previous_chat_bracket_key,
+        is_settings_shortcut_key, is_stable_composer_photo, is_supported_external_url,
+        is_supported_plugin_logo_url, is_terminal_shortcut_key, keyboard_shortcut_search_matches,
+        keyboard_shortcut_settings_matches, keyboard_shortcut_stable_order,
+        linked_pull_request_merge_command_enabled, mcp_auth_status_label, modal_surface_max_height,
+        modal_surface_width, normalized_accelerator, output_artifact_type_label,
+        parse_appearance_theme_share_string, parse_mcp_list, parse_mcp_record, parse_unified_diff,
+        plugin_logo_format, process_manager_auto_refresh_allowed, project_trigger_matches,
+        project_workspace_options, pull_request_merge_submission_enabled, reasoning_effort_target,
         remote_control_status_label, render_conversation_markdown, replace_composer_file_query,
         reserve_thread_find_history_page, sanitize_assistant_markdown, selected_approval_request,
         selected_task_copy_value, settings_section_matches, shell_width_class,
         sidebar_layout_width, split_diff_rows, status_context_total_label, status_rate_limit_label,
         status_rate_limit_reset_metadata_at, task_slot_id, terminal_tab_label,
-        timeline_activity_content, validate_plugin_logo_dimensions,
+        timeline_activity_content, turn_diff_update_is_accepted, validate_plugin_logo_dimensions,
     };
     use codex_core::{
         AppCard, AppState, AppearancePalette, AppearanceVariant, ApprovalContext, ApprovalKind,
@@ -42581,7 +42854,7 @@ mod tests {
         PullRequestDetail, PullRequestIdentity, PullRequestMutationKind, PullRequestState,
         PullRequestSummary, ReasoningEffortOption, RemoteControlRuntimeStatus, ServiceTierOption,
         SkillCard, SkillScope, TaskRunStatus, TaskSummary, TerminalTabState, TimelineItem,
-        TimelineKind,
+        TimelineKind, TurnDiffState,
     };
 
     fn task(id: &str, cwd: &str) -> TaskSummary {
@@ -44811,6 +45084,122 @@ mod tests {
             rows[1].right.as_ref().map(|line| line.text.as_str()),
             Some("new")
         );
+    }
+
+    #[test]
+    fn diff_file_sections_fold_one_file_without_hiding_the_next() {
+        let lines = parse_unified_diff(
+            "diff --git a/one.rs b/one.rs\n@@ -1 +1 @@\n-old one\n+new one\n\
+             diff --git a/two.rs b/two.rs\n@@ -4 +4 @@\n-old two\n+new two\n",
+            100,
+        );
+        let sections = diff_file_sections(&lines);
+        let rows = diff_file_review_rows(&sections, &HashSet::from([0]), false);
+
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].label, "a/one.rs b/one.rs");
+        assert_eq!(sections[1].label, "a/two.rs b/two.rs");
+        assert!(matches!(
+            rows.first(),
+            Some(DiffReviewRow::FileHeader {
+                section_index: 0,
+                expanded: false,
+                ..
+            })
+        ));
+        assert!(
+            !rows
+                .iter()
+                .any(|row| matches!(row, DiffReviewRow::Unified(line) if line.text == "old one"))
+        );
+        assert!(
+            rows.iter()
+                .any(|row| matches!(row, DiffReviewRow::Unified(line) if line.text == "new two"))
+        );
+    }
+
+    #[test]
+    fn diff_file_sections_preserve_split_replacement_line_numbers() {
+        let lines =
+            parse_unified_diff("diff --git a/a.rs b/a.rs\n@@ -10 +20 @@\n-old\n+new\n", 100);
+        let rows = diff_file_review_rows(&diff_file_sections(&lines), &HashSet::new(), true);
+        let replacement = rows.iter().find_map(|row| match row {
+            DiffReviewRow::Split(row)
+                if row.left.as_ref().is_some_and(|line| line.text == "old")
+                    && row.right.as_ref().is_some_and(|line| line.text == "new") =>
+            {
+                Some((
+                    row.left.as_ref().and_then(|line| line.old_line),
+                    row.right.as_ref().and_then(|line| line.new_line),
+                ))
+            }
+            _ => None,
+        });
+
+        assert_eq!(replacement, Some((Some(10), Some(20))));
+    }
+
+    #[test]
+    fn diff_file_sections_keep_malformed_patches_in_one_expanded_fallback() {
+        let lines = parse_unified_diff("not a standard diff\n+new line\n", 100);
+        let sections = diff_file_sections(&lines);
+        let rows = diff_file_review_rows(&sections, &HashSet::new(), false);
+
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].label, "Changes");
+        assert!(matches!(
+            rows.first(),
+            Some(DiffReviewRow::FileHeader {
+                section_index: 0,
+                expanded: true,
+                ..
+            })
+        ));
+        assert!(rows.iter().any(
+            |row| matches!(row, DiffReviewRow::Unified(line) if line.text == "not a standard diff")
+        ));
+    }
+
+    #[test]
+    fn diff_file_sections_keep_a_final_file_header_at_the_line_limit() {
+        let lines = parse_unified_diff(
+            "diff --git a/one.rs b/one.rs\n-old\ndiff --git a/two.rs b/two.rs\n+new\n",
+            3,
+        );
+        let sections = diff_file_sections(&lines);
+        let rows = diff_file_review_rows(&sections, &HashSet::new(), false);
+
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[1].label, "a/two.rs b/two.rs");
+        assert!(matches!(
+            rows.get(2),
+            Some(DiffReviewRow::FileHeader {
+                section_index: 1,
+                expanded: true,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn turn_diff_update_acceptance_rejects_stale_active_and_completed_turns() {
+        let mut state = AppState::default();
+        assert!(turn_diff_update_is_accepted(&state, "task", "turn-1"));
+
+        let timeline = state.timelines.entry("task".to_owned()).or_default();
+        timeline.active_turn_id = Some("turn-2".to_owned());
+        assert!(!turn_diff_update_is_accepted(&state, "task", "turn-1"));
+        assert!(turn_diff_update_is_accepted(&state, "task", "turn-2"));
+
+        let timeline = state.timelines.entry("task".to_owned()).or_default();
+        timeline.active_turn_id = None;
+        timeline.last_turn_diff = Some(TurnDiffState {
+            turn_id: "turn-2".to_owned(),
+            unified_diff: String::new(),
+            truncated: false,
+        });
+        assert!(!turn_diff_update_is_accepted(&state, "task", "turn-1"));
+        assert!(turn_diff_update_is_accepted(&state, "task", "turn-2"));
     }
 
     #[test]
