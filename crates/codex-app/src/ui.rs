@@ -51,12 +51,13 @@ use codex_core::{
     PullRequestCiStatus, PullRequestDetail, PullRequestDetailTab, PullRequestLifecycle,
     PullRequestMergeMethod, PullRequestMutation, PullRequestMutationKind, PullRequestRelationship,
     PullRequestReviewEvent, PullRequestReviewState, PullRequestState, PullRequestSummary,
-    ReasoningEffortOption, ReducedMotionPreference, STANDARD_SERVICE_TIER_ID, ServiceTierOption,
-    SkillCard, SkillScope, TaskRunStatus, TaskSearchResult, TaskSummary, TerminalDockLocation,
-    TerminalTabState, ThreadGoalStatus, TimelineCitation, TimelineItem, TimelineKind,
-    UsageLimitWindow, UserInputAnswer, UserInputAnswers, UserInputRequest,
-    appearance_code_theme_supports_variant, composer_plugin_display_name,
-    composer_plugin_is_mentionable, is_appearance_code_theme_id, reduce, validate_mcp_form_content,
+    ReasoningEffortOption, ReducedMotionPreference, RemoteControlRuntimeStatus,
+    STANDARD_SERVICE_TIER_ID, ServiceTierOption, SkillCard, SkillScope, TaskRunStatus,
+    TaskSearchResult, TaskSummary, TerminalDockLocation, TerminalTabState, ThreadGoalStatus,
+    TimelineCitation, TimelineItem, TimelineKind, UsageLimitWindow, UserInputAnswer,
+    UserInputAnswers, UserInputRequest, appearance_code_theme_supports_variant,
+    composer_plugin_display_name, composer_plugin_is_mentionable, is_appearance_code_theme_id,
+    reduce, validate_mcp_form_content,
 };
 use codex_platform::{
     default_browser_download_dir, desktop_work_areas, normalize_browser_origin, read_artifact_image,
@@ -1940,6 +1941,13 @@ enum WorkspaceModal {
     RemoveComputerUseAllowedApp {
         app_id: String,
     },
+    EnableRemoteControl,
+    DisableRemoteControl,
+    RevokeRemoteDevice {
+        client_id: String,
+        display_name: String,
+    },
+    RemotePairing,
     ImportAppearanceTheme(AppearanceVariant),
     LogOutAccount,
     RenameLocalProject {
@@ -2129,6 +2137,7 @@ enum SettingsSection {
     McpServers,
     Browser,
     ComputerUse,
+    Connections,
     ArchivedChats,
 }
 
@@ -4520,6 +4529,9 @@ struct WorkspaceView {
     composer_fork_picker_open: bool,
     composer_status_open: bool,
     composer_status_session_copied: bool,
+    remote_pairing_focus: FocusHandle,
+    remote_pairing_focus_requested: bool,
+    remote_pairing_not_claimed: bool,
     command_palette: Option<Entity<CommandPaletteView>>,
     workspace_modal: Option<WorkspaceModal>,
     about_window: Option<AnyWindowHandle>,
@@ -4583,6 +4595,7 @@ impl WorkspaceView {
         let mcp_elicitation_focus = cx.focus_handle();
         let keyboard_shortcut_capture_focus = cx.focus_handle();
         let browser_focus = cx.focus_handle();
+        let remote_pairing_focus = cx.focus_handle();
         let initial_appearance_preferences = AppearancePreferences::default();
         let initial_appearance_variant = active_appearance_variant(cx);
         let initial_appearance_palette = initial_appearance_preferences
@@ -5505,6 +5518,9 @@ impl WorkspaceView {
             composer_fork_picker_open: false,
             composer_status_open: false,
             composer_status_session_copied: false,
+            remote_pairing_focus,
+            remote_pairing_focus_requested: false,
+            remote_pairing_not_claimed: false,
             command_palette: None,
             workspace_modal: None,
             about_window: None,
@@ -5926,6 +5942,35 @@ impl WorkspaceView {
     }
 
     fn dispatch(&mut self, action: Action, cx: &mut Context<Self>) {
+        let remote_pairing_started = matches!(&action, Action::RemotePairingStarted { .. });
+        let remote_pairing_claimed = matches!(
+            &action,
+            Action::RemotePairingChecked {
+                generation,
+                claimed: true,
+            } if matches!(
+                &self.state.remote_control.busy,
+                Some(codex_core::RemoteControlBusy::CheckPairing { generation: pending })
+                    if *pending == *generation
+            )
+        );
+        let remote_pairing_not_claimed = matches!(
+            &action,
+            Action::RemotePairingChecked {
+                generation,
+                claimed: false,
+            } if matches!(
+                &self.state.remote_control.busy,
+                Some(codex_core::RemoteControlBusy::CheckPairing { generation: pending })
+                    if *pending == *generation
+            )
+        );
+        let remote_pairing_reset = matches!(
+            &action,
+            Action::StartRemotePairing { .. }
+                | Action::RemotePairingStarted { .. }
+                | Action::CloseRemotePairing
+        ) || remote_pairing_claimed;
         let browser_address_changed = matches!(
             &action,
             Action::BrowserTabsChanged { .. }
@@ -6000,6 +6045,22 @@ impl WorkspaceView {
             )
         {
             self.workspace_modal = None;
+        }
+        if remote_pairing_started && self.state.remote_control.pairing.is_some() {
+            self.workspace_modal = Some(WorkspaceModal::RemotePairing);
+        } else if remote_pairing_claimed
+            && self.state.remote_control.pairing.is_none()
+            && matches!(self.workspace_modal, Some(WorkspaceModal::RemotePairing))
+        {
+            self.workspace_modal = None;
+        }
+        if remote_pairing_reset {
+            self.remote_pairing_not_claimed = false;
+        } else if remote_pairing_not_claimed
+            && self.state.remote_control.pairing.is_some()
+            && matches!(self.workspace_modal, Some(WorkspaceModal::RemotePairing))
+        {
+            self.remote_pairing_not_claimed = true;
         }
         let next_location = NavigationLocation::from_state(&self.state);
         if self.thread_find_open
@@ -7288,6 +7349,12 @@ impl WorkspaceView {
             && self.state.computer_use_settings.status != LoadStatus::Loading
         {
             self.dispatch(Action::RefreshComputerUsePolicy, cx);
+        } else if section == SettingsSection::Connections {
+            if self.state.remote_control.runtime_status == RemoteControlRuntimeStatus::Connected {
+                self.dispatch(Action::RefreshRemoteDevices, cx);
+            } else {
+                self.dispatch(Action::RefreshRemoteControlStatus, cx);
+            }
         }
     }
 
@@ -9089,6 +9156,9 @@ impl WorkspaceView {
             .is_some()
         {
             return;
+        }
+        if matches!(self.workspace_modal, Some(WorkspaceModal::RemotePairing)) {
+            self.dispatch(Action::CloseRemotePairing, cx);
         }
         if matches!(self.workspace_modal, Some(WorkspaceModal::LogOutAccount))
             && self.state.account.auth_operation == AccountAuthOperation::LoggingOut
@@ -28377,6 +28447,7 @@ impl WorkspaceView {
         let mcp_servers_visible = settings_section_matches(SettingsSection::McpServers, &query);
         let browser_visible = settings_section_matches(SettingsSection::Browser, &query);
         let computer_use_visible = settings_section_matches(SettingsSection::ComputerUse, &query);
+        let connections_visible = settings_section_matches(SettingsSection::Connections, &query);
         let archived_chats_visible =
             settings_section_matches(SettingsSection::ArchivedChats, &query);
         let personal_visible = general_visible
@@ -28385,8 +28456,11 @@ impl WorkspaceView {
             || keyboard_shortcuts_visible
             || usage_visible
             || import_visible;
-        let integrations_visible =
-            plugins_visible || mcp_servers_visible || browser_visible || computer_use_visible;
+        let integrations_visible = plugins_visible
+            || mcp_servers_visible
+            || browser_visible
+            || computer_use_visible
+            || connections_visible;
         let coding_visible =
             configuration_visible || hooks_visible || git_visible || worktrees_visible;
         let any_visible =
@@ -28406,6 +28480,7 @@ impl WorkspaceView {
             SettingsSection::McpServers => self.render_mcp_server_settings(cx),
             SettingsSection::Browser => self.render_browser_settings(cx),
             SettingsSection::ComputerUse => self.render_computer_use_settings_page(cx),
+            SettingsSection::Connections => self.render_connections_settings_page(cx),
             SettingsSection::ArchivedChats => self.render_archived_chat_settings(cx),
         };
         h_flex()
@@ -28571,6 +28646,15 @@ impl WorkspaceView {
                                         SettingsSection::ComputerUse,
                                         cx,
                                     ))
+                                })
+                                .when(connections_visible, |group| {
+                                    group.child(self.render_settings_nav_item(
+                                        "settings-connections",
+                                        "Connections",
+                                        IconName::Globe,
+                                        SettingsSection::Connections,
+                                        cx,
+                                    ))
                                 }),
                         )
                     })
@@ -28683,27 +28767,22 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let selected = self.settings_section == section;
-        h_flex()
-            .id(id)
+        Button::new(id)
+            .label(label)
+            .icon(icon)
+            .w_full()
             .h(px(38.0))
             .px_3()
             .gap_2()
             .items_center()
+            .justify_start()
             .rounded_lg()
+            .small()
+            .ghost()
+            .selected(selected)
             .when(pointer_cursors_enabled(cx), |element| {
                 element.cursor_pointer()
             })
-            .text_sm()
-            .when(selected, |row| {
-                row.bg(cx.theme().secondary)
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-            })
-            .when(!selected, |row| {
-                row.text_color(cx.theme().muted_foreground)
-                    .hover(|style| style.bg(cx.theme().list_hover))
-            })
-            .child(Icon::new(icon).xsmall())
-            .child(label)
             .on_click(cx.listener(move |this, _, window, cx| {
                 if section == SettingsSection::Plugins {
                     this.open_plugins_settings(window, cx);
@@ -33815,6 +33894,592 @@ impl WorkspaceView {
             .into_any_element()
     }
 
+    fn render_connections_settings_page(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let remote = self.state.remote_control.clone();
+        let policy_disabled = remote.policy_status == LoadStatus::Ready
+            && remote.managed_allow_remote_control == Some(false);
+        let mutating = remote.busy.is_some();
+        let action_allowed = remote.policy_status == LoadStatus::Ready
+            && !policy_disabled
+            && matches!(self.state.connection, ConnectionStatus::Online)
+            && !mutating
+            && self.workspace_modal.is_none();
+        let connected = remote.runtime_status == RemoteControlRuntimeStatus::Connected;
+        let (status_icon, status_color) = if remote.policy_status != LoadStatus::Ready {
+            (IconName::LoaderCircle, cx.theme().warning)
+        } else {
+            match remote.runtime_status {
+                RemoteControlRuntimeStatus::Disabled => {
+                    (IconName::CircleX, cx.theme().muted_foreground)
+                }
+                RemoteControlRuntimeStatus::Connecting => {
+                    (IconName::LoaderCircle, cx.theme().warning)
+                }
+                RemoteControlRuntimeStatus::Connected => {
+                    (IconName::CircleCheck, cx.theme().success)
+                }
+                RemoteControlRuntimeStatus::Errored => (IconName::CircleX, cx.theme().danger),
+            }
+        };
+        let status_label = if remote.policy_status == LoadStatus::Ready {
+            remote_control_status_label(remote.runtime_status)
+        } else {
+            "Checking"
+        };
+        let control_action = if matches!(
+            remote.runtime_status,
+            RemoteControlRuntimeStatus::Disabled | RemoteControlRuntimeStatus::Errored
+        ) {
+            Button::new("confirm-enable-remote-control")
+                .label("Enable remote control")
+                .disabled(!action_allowed)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.workspace_modal = Some(WorkspaceModal::EnableRemoteControl);
+                    cx.notify();
+                }))
+                .into_any_element()
+        } else {
+            Button::new("confirm-disable-remote-control")
+                .label("Disable remote control")
+                .danger()
+                .disabled(!action_allowed)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.workspace_modal = Some(WorkspaceModal::DisableRemoteControl);
+                    cx.notify();
+                }))
+                .into_any_element()
+        };
+        let device_rows = remote
+            .devices
+            .iter()
+            .enumerate()
+            .map(|(index, device)| {
+                let client_id = device.client_id.clone();
+                let display_name = device
+                    .display_name
+                    .as_deref()
+                    .filter(|name| !name.trim().is_empty())
+                    .unwrap_or("Unnamed device")
+                    .to_owned();
+                let modal_name = display_name.clone();
+                h_flex()
+                    .min_h(px(62.0))
+                    .px_4()
+                    .gap_3()
+                    .items_center()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        div()
+                            .size(px(36.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_lg()
+                            .bg(cx.theme().secondary)
+                            .child(Icon::new(IconName::Globe).small()),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .child(display_name),
+                    )
+                    .child(
+                        Button::new(("revoke-remote-device", index))
+                            .label("Revoke")
+                            .small()
+                            .danger()
+                            .disabled(!action_allowed)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.workspace_modal = Some(WorkspaceModal::RevokeRemoteDevice {
+                                    client_id: client_id.clone(),
+                                    display_name: modal_name.clone(),
+                                });
+                                cx.notify();
+                            })),
+                    )
+                    .into_any_element()
+            })
+            .collect::<Vec<_>>();
+
+        v_flex()
+            .flex_1()
+            .h_full()
+            .min_w_0()
+            .child(
+                v_flex()
+                    .min_h(px(86.0))
+                    .px_6()
+                    .py_4()
+                    .gap_1()
+                    .justify_center()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("Connections"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Manage remote control and paired devices"),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .p_6()
+                    .gap_6()
+                    .child(
+                        v_flex()
+                            .max_w(px(760.0))
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child("Remote control"),
+                            )
+                            .child(
+                                h_flex()
+                                    .min_h(px(72.0))
+                                    .px_4()
+                                    .gap_3()
+                                    .items_center()
+                                    .rounded_lg()
+                                    .border_1()
+                                    .border_color(cx.theme().border)
+                                    .bg(cx.theme().sidebar)
+                                    .child(
+                                        div()
+                                            .size(px(38.0))
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded_lg()
+                                            .bg(status_color.opacity(0.10))
+                                            .text_color(status_color)
+                                            .child(Icon::new(status_icon.clone()).small()),
+                                    )
+                                    .child(
+                                        v_flex()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .gap_1()
+                                            .child(
+                                                div()
+                                                    .text_sm()
+                                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                    .child("This computer"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child("Allow another signed-in device to control this computer"),
+                                            ),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .px_2()
+                                            .py_1()
+                                            .gap_1()
+                                            .rounded_md()
+                                            .bg(status_color.opacity(0.10))
+                                            .text_xs()
+                                            .text_color(status_color)
+                                            .child(Icon::new(status_icon).xsmall())
+                                            .child(status_label),
+                                    ),
+                            )
+                            .when(policy_disabled, |section| {
+                                section.child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().danger)
+                                        .child("Remote control is disabled by your organization."),
+                                )
+                            })
+                            .when(
+                                remote.policy_status == LoadStatus::Loading
+                                    || remote.policy_status == LoadStatus::Idle,
+                                |section| {
+                                    section.child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child("Checking remote control policy…"),
+                                    )
+                                },
+                            )
+                            .when_some(remote.error.clone(), |section, error| {
+                                section.child(div().text_sm().text_color(cx.theme().danger).child(error))
+                            })
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .child(control_action)
+                                    .child(
+                                        Button::new("refresh-remote-control-status")
+                                            .label("Refresh")
+                                            .small()
+                                            .ghost()
+                                            .disabled(!action_allowed)
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.dispatch(Action::RefreshRemoteControlStatus, cx);
+                                            })),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        v_flex()
+                            .max_w(px(760.0))
+                            .gap_2()
+                            .child(
+                                h_flex()
+                                    .justify_between()
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .child("Paired devices"),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .gap_2()
+                                            .child(
+                                                Button::new("pair-remote-device")
+                                                    .label("Pair a device")
+                                                    .small()
+                                                    .disabled(!connected || !action_allowed)
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.dispatch(
+                                                            Action::StartRemotePairing { manual_code: false },
+                                                            cx,
+                                                        );
+                                                    })),
+                                            )
+                                            .child(
+                                                Button::new("refresh-remote-devices")
+                                                    .label("Refresh")
+                                                    .small()
+                                                    .ghost()
+                                                    .disabled(
+                                                        !connected
+                                                            || !action_allowed
+                                                            || remote.devices_status
+                                                                == LoadStatus::Loading,
+                                                    )
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.dispatch(Action::RefreshRemoteDevices, cx);
+                                                    })),
+                                            ),
+                                    ),
+                            )
+                            .child(
+                                v_flex()
+                                    .rounded_lg()
+                                    .border_1()
+                                    .border_color(cx.theme().border)
+                                    .bg(cx.theme().sidebar)
+                                    .when(!connected, |list| {
+                                        list.child(
+                                            div()
+                                                .p_4()
+                                                .text_sm()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child("Enable remote control to pair and manage devices."),
+                                        )
+                                    })
+                                    .when(connected && remote.devices_status == LoadStatus::Loading, |list| {
+                                        list.child(
+                                            div()
+                                                .p_4()
+                                                .text_sm()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child("Loading paired devices…"),
+                                        )
+                                    })
+                                    .when(connected && remote.devices_status == LoadStatus::Idle, |list| {
+                                        list.child(
+                                            div()
+                                                .p_4()
+                                                .text_sm()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child("Paired devices have not loaded yet."),
+                                        )
+                                    })
+                                    .when(
+                                        connected
+                                            && remote.devices_status == LoadStatus::Ready
+                                            && device_rows.is_empty(),
+                                        |list| {
+                                            list.child(
+                                                div()
+                                                    .p_4()
+                                                    .text_sm()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child("No devices paired yet."),
+                                            )
+                                        },
+                                    )
+                                    .when(
+                                        connected
+                                            && remote.devices_status == LoadStatus::Failed
+                                            && device_rows.is_empty(),
+                                        |list| {
+                                            list.child(
+                                                div()
+                                                    .p_4()
+                                                    .text_sm()
+                                                    .text_color(cx.theme().danger)
+                                                    .child("Unable to load paired devices."),
+                                            )
+                                        },
+                                    )
+                                    .children(device_rows)
+                                    .when(remote.next_cursor.is_some(), |list| {
+                                        list.child(
+                                            div().p_3().child(
+                                                Button::new("load-more-remote-devices")
+                                                    .label(if remote.loading_more { "Loading…" } else { "Load more" })
+                                                    .small()
+                                                    .ghost()
+                                                    .disabled(remote.loading_more || !action_allowed)
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.dispatch(Action::LoadMoreRemoteDevices, cx);
+                                                    })),
+                                            ),
+                                        )
+                                    }),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_remote_pairing_modal(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let remote = self.state.remote_control.clone();
+        let pairing = remote.pairing.clone();
+        let pending = matches!(
+            remote.busy,
+            Some(
+                codex_core::RemoteControlBusy::StartPairing { .. }
+                    | codex_core::RemoteControlBusy::CheckPairing { .. }
+            )
+        );
+        let action_allowed = remote.policy_status == LoadStatus::Ready
+            && remote.managed_allow_remote_control != Some(false)
+            && matches!(self.state.connection, ConnectionStatus::Online)
+            && remote.runtime_status == RemoteControlRuntimeStatus::Connected
+            && remote.busy.is_none();
+        let narrow = self.shell_viewport_width <= 480.0;
+        let manual_code_available = pairing
+            .as_ref()
+            .and_then(|pairing| pairing.manual_pairing_code.as_ref())
+            .is_some();
+        let actions = if narrow {
+            v_flex()
+                .w_full()
+                .gap_2()
+                .when(!manual_code_available, |actions| {
+                    actions.child(
+                        Button::new("get-new-manual-remote-pairing-code")
+                            .label("Get a new manual code")
+                            .w_full()
+                            .disabled(!action_allowed || pending)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.dispatch(Action::StartRemotePairing { manual_code: true }, cx);
+                            })),
+                    )
+                })
+                .child(
+                    Button::new("check-remote-pairing")
+                        .label(if pending {
+                            "Checking…"
+                        } else {
+                            "Check pairing"
+                        })
+                        .w_full()
+                        .disabled(pairing.is_none() || !action_allowed || pending)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.dispatch(Action::CheckRemotePairing, cx);
+                        })),
+                )
+                .child(
+                    Button::new("close-remote-pairing")
+                        .label("Close")
+                        .w_full()
+                        .ghost()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.close_workspace_modal(cx);
+                        })),
+                )
+                .into_any_element()
+        } else {
+            h_flex()
+                .justify_end()
+                .gap_2()
+                .when(!manual_code_available, |actions| {
+                    actions.child(
+                        Button::new("get-new-manual-remote-pairing-code")
+                            .label("Get a new manual code")
+                            .disabled(!action_allowed || pending)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.dispatch(Action::StartRemotePairing { manual_code: true }, cx);
+                            })),
+                    )
+                })
+                .child(
+                    Button::new("check-remote-pairing")
+                        .label(if pending {
+                            "Checking…"
+                        } else {
+                            "Check pairing"
+                        })
+                        .disabled(pairing.is_none() || !action_allowed || pending)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.dispatch(Action::CheckRemotePairing, cx);
+                        })),
+                )
+                .child(
+                    Button::new("close-remote-pairing")
+                        .label("Close")
+                        .ghost()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.close_workspace_modal(cx);
+                        })),
+                )
+                .into_any_element()
+        };
+
+        let panel = v_flex()
+            .w(px(modal_surface_width(self.shell_viewport_width, 480.0)))
+            .p_5()
+            .gap_4()
+            .rounded(px(16.0))
+            .bg(cx.theme().popover)
+            .shadow_xl()
+            .occlude()
+            .track_focus(&self.remote_pairing_focus)
+            .tab_group()
+            .tab_stop(true)
+            .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .text_lg()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child("Pair a device"),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Enter this code on the device you want to pair."),
+            )
+            .when_some(pairing.as_ref(), |panel, pairing| {
+                let pairing_code = pairing.pairing_code.clone();
+                panel
+                    .child(
+                        h_flex()
+                            .p_3()
+                            .gap_3()
+                            .items_center()
+                            .rounded_lg()
+                            .bg(cx.theme().secondary)
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_sm()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child(pairing_code.clone()),
+                            )
+                            .child(
+                                Button::new("copy-remote-pairing-code")
+                                    .label("Copy")
+                                    .small()
+                                    .icon(IconName::Copy)
+                                    .on_click(move |_, _, cx| {
+                                        cx.write_to_clipboard(ClipboardItem::new_string(
+                                            pairing_code.clone(),
+                                        ));
+                                    }),
+                            ),
+                    )
+                    .when_some(pairing.manual_pairing_code.clone(), |panel, manual_code| {
+                        let copied_code = manual_code.clone();
+                        panel.child(
+                            v_flex()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("Manual code"),
+                                )
+                                .child(
+                                    h_flex()
+                                        .p_3()
+                                        .gap_3()
+                                        .items_center()
+                                        .rounded_lg()
+                                        .border_1()
+                                        .border_color(cx.theme().border)
+                                        .child(
+                                            div().flex_1().min_w_0().text_sm().child(manual_code),
+                                        )
+                                        .child(
+                                            Button::new("copy-manual-remote-pairing-code")
+                                                .label("Copy manual code")
+                                                .small()
+                                                .ghost()
+                                                .on_click(move |_, _, cx| {
+                                                    cx.write_to_clipboard(
+                                                        ClipboardItem::new_string(
+                                                            copied_code.clone(),
+                                                        ),
+                                                    );
+                                                }),
+                                        ),
+                                ),
+                        )
+                    })
+            })
+            .when(pairing.is_none() && pending, |panel| {
+                panel.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Preparing a pairing code…"),
+                )
+            })
+            .when_some(remote.error.clone(), |panel, error| {
+                panel.child(div().text_sm().text_color(cx.theme().danger).child(error))
+            })
+            .when(self.remote_pairing_not_claimed, |panel| {
+                panel.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("This device has not completed pairing yet."),
+                )
+            })
+            .child(actions)
+            .into_any_element();
+        self.render_workspace_modal_overlay(panel, true, cx)
+    }
+
     fn render_process_manager_row(
         &mut self,
         index: usize,
@@ -36176,6 +36841,7 @@ impl WorkspaceView {
                 let panel = self.render_browser_downloads_modal(cx);
                 self.render_workspace_modal_overlay(panel, true, cx)
             }
+            WorkspaceModal::RemotePairing => self.render_remote_pairing_modal(cx),
             WorkspaceModal::AddBrowserSitePermission { preset } => {
                 let panel = self.render_add_browser_site_permission_modal(preset, cx);
                 self.render_workspace_modal_overlay(panel, true, cx)
@@ -36277,6 +36943,17 @@ impl WorkspaceView {
         let commit_pending = self.state.git.pending_commit.is_some();
         let pull_request_pending = self.state.git.pending_pull_request.is_some();
         let pull_request_mutation_pending = self.state.pull_requests.pending_mutation.is_some();
+        let remote_action_allowed = self.state.remote_control.policy_status == LoadStatus::Ready
+            && self.state.remote_control.managed_allow_remote_control != Some(false)
+            && matches!(self.state.connection, ConnectionStatus::Online)
+            && self.state.remote_control.busy.is_none();
+        let remote_enable_allowed = remote_action_allowed
+            && matches!(
+                self.state.remote_control.runtime_status,
+                RemoteControlRuntimeStatus::Disabled | RemoteControlRuntimeStatus::Errored
+            );
+        let remote_disable_allowed = remote_action_allowed
+            && self.state.remote_control.runtime_status != RemoteControlRuntimeStatus::Disabled;
         let dismiss_on_overlay = matches!(
             modal,
             WorkspaceModal::EditGoal
@@ -36293,6 +36970,9 @@ impl WorkspaceView {
                 | WorkspaceModal::ImportAppearanceTheme(_)
                 | WorkspaceModal::RenameLocalProject { .. }
                 | WorkspaceModal::RemoveLocalProject { .. }
+                | WorkspaceModal::EnableRemoteControl
+                | WorkspaceModal::DisableRemoteControl
+                | WorkspaceModal::RevokeRemoteDevice { .. }
         ) && !branch_pending
             && !commit_pending
             && !pull_request_pending
@@ -36320,7 +37000,8 @@ impl WorkspaceView {
             | WorkspaceModal::PullRequestAction(_)
             | WorkspaceModal::CreateGitBranch
             | WorkspaceModal::GitBranchConflict
-            | WorkspaceModal::InspectMcpServer { .. } => unreachable!(),
+            | WorkspaceModal::InspectMcpServer { .. }
+            | WorkspaceModal::RemotePairing => unreachable!(),
             WorkspaceModal::RenameLocalProject { .. } => render_modal_branch(|| {
                 let name = self.rename_input.read(cx).value().trim().to_owned();
                 v_flex()
@@ -37229,6 +37910,164 @@ impl WorkspaceView {
                     )
                     .into_any_element()
             }),
+            WorkspaceModal::EnableRemoteControl => render_modal_branch(|| {
+                v_flex()
+                    .w(px(modal_surface_width(self.shell_viewport_width, 420.0)))
+                    .p_5()
+                    .gap_4()
+                    .rounded(px(16.0))
+                    .bg(cx.theme().popover)
+                    .shadow_xl()
+                    .occlude()
+                    .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("Enable remote control?"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Paired devices will be able to control this computer."),
+                    )
+                    .child(
+                        h_flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                Button::new("cancel-enable-remote-control")
+                                    .label("Cancel")
+                                    .ghost()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.close_workspace_modal(cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("enable-remote-control")
+                                    .label("Enable")
+                                    .disabled(!remote_enable_allowed)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.workspace_modal = None;
+                                        this.dispatch(Action::EnableRemoteControl, cx);
+                                    })),
+                            ),
+                    )
+                    .into_any_element()
+            }),
+            WorkspaceModal::DisableRemoteControl => {
+                render_modal_branch(|| {
+                    v_flex()
+                    .w(px(modal_surface_width(self.shell_viewport_width, 420.0)))
+                    .p_5()
+                    .gap_4()
+                    .rounded(px(16.0))
+                    .bg(cx.theme().popover)
+                    .shadow_xl()
+                    .occlude()
+                    .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("Disable remote control?"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Paired devices will no longer be able to control this computer."),
+                    )
+                    .child(
+                        h_flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                Button::new("cancel-disable-remote-control")
+                                    .label("Cancel")
+                                    .ghost()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.close_workspace_modal(cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("disable-remote-control")
+                                    .label("Disable")
+                                    .danger()
+                                    .disabled(!remote_disable_allowed)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.workspace_modal = None;
+                                        this.dispatch(Action::DisableRemoteControl, cx);
+                                    })),
+                            ),
+                    )
+                    .into_any_element()
+                })
+            }
+            WorkspaceModal::RevokeRemoteDevice {
+                client_id,
+                display_name,
+            } => render_modal_branch(|| {
+                let revoke_client_id = client_id.clone();
+                let revoke_allowed = remote_action_allowed
+                    && self.state.remote_control.runtime_status
+                        == RemoteControlRuntimeStatus::Connected
+                    && self
+                        .state
+                        .remote_control
+                        .devices
+                        .iter()
+                        .any(|device| device.client_id == *client_id);
+                v_flex()
+                    .w(px(modal_surface_width(self.shell_viewport_width, 420.0)))
+                    .p_5()
+                    .gap_4()
+                    .rounded(px(16.0))
+                    .bg(cx.theme().popover)
+                    .shadow_xl()
+                    .occlude()
+                    .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(format!("Revoke “{display_name}”?")),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("This device will need to be paired again before it can control this computer."),
+                    )
+                    .child(
+                        h_flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                Button::new("cancel-revoke-remote-device")
+                                    .label("Cancel")
+                                    .ghost()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.close_workspace_modal(cx);
+                                    })),
+                            )
+                            .child(
+                                Button::new("revoke-remote-device")
+                                    .label("Revoke")
+                                    .danger()
+                                    .disabled(!revoke_allowed)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.workspace_modal = None;
+                                        this.dispatch(
+                                            Action::RevokeRemoteDevice(revoke_client_id.clone()),
+                                            cx,
+                                        );
+                                    })),
+                            ),
+                    )
+                    .into_any_element()
+            }),
             WorkspaceModal::LogOutAccount => render_modal_branch(|| {
                 v_flex()
                     .w(px(modal_surface_width(self.shell_viewport_width, 420.0)))
@@ -37455,6 +38294,14 @@ impl Render for WorkspaceView {
         self.shell_viewport_height = viewport_height;
         let shell_width_class = shell_width_class(viewport_width);
         self.sync_responsive_shell(shell_width_class);
+        if matches!(self.workspace_modal, Some(WorkspaceModal::RemotePairing)) {
+            if !self.remote_pairing_focus_requested {
+                self.remote_pairing_focus.focus(window);
+                self.remote_pairing_focus_requested = true;
+            }
+        } else {
+            self.remote_pairing_focus_requested = false;
+        }
         self.sync_browser_surface_state();
         let bottom_maximum = (viewport_height * 0.5).max(TERMINAL_BOTTOM_MIN_HEIGHT);
         self.terminal_bottom_height = self
@@ -40637,6 +41484,9 @@ fn settings_section_matches(section: SettingsSection, raw_query: &str) -> bool {
         SettingsSection::ComputerUse => {
             "computer use windows applications application apps permissions"
         }
+        SettingsSection::Connections => {
+            "connections connection remote remote control pairing paired devices device"
+        }
         SettingsSection::ArchivedChats => {
             "archived archive chats chat history data controls unarchive delete"
         }
@@ -40644,6 +41494,15 @@ fn settings_section_matches(section: SettingsSection, raw_query: &str) -> bool {
     query
         .split_whitespace()
         .all(|term| searchable_text.contains(term))
+}
+
+const fn remote_control_status_label(status: RemoteControlRuntimeStatus) -> &'static str {
+    match status {
+        RemoteControlRuntimeStatus::Disabled => "Disabled",
+        RemoteControlRuntimeStatus::Connecting => "Connecting",
+        RemoteControlRuntimeStatus::Connected => "Connected",
+        RemoteControlRuntimeStatus::Errored => "Needs attention",
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -41057,7 +41916,7 @@ mod tests {
         parse_mcp_list, parse_mcp_record, parse_unified_diff, plugin_logo_format,
         process_manager_auto_refresh_allowed, project_trigger_matches, project_workspace_options,
         pull_request_merge_submission_enabled, reasoning_effort_target,
-        render_conversation_markdown, replace_composer_file_query,
+        remote_control_status_label, render_conversation_markdown, replace_composer_file_query,
         reserve_thread_find_history_page, sanitize_assistant_markdown, selected_approval_request,
         selected_task_copy_value, settings_section_matches, shell_width_class,
         sidebar_layout_width, split_diff_rows, status_context_total_label, status_rate_limit_label,
@@ -41070,8 +41929,9 @@ mod tests {
         GitPullRequestState, IntegratedTerminalShell, KEYBOARD_SHORTCUT_COMMAND_IDS, LoadStatus,
         MainRoute, McpAuthStatus, PluginCard, ProcessManagerState, PullRequestCiStatus,
         PullRequestDetail, PullRequestIdentity, PullRequestMutationKind, PullRequestState,
-        PullRequestSummary, ReasoningEffortOption, ServiceTierOption, SkillCard, SkillScope,
-        TaskRunStatus, TaskSummary, TerminalTabState, TimelineItem, TimelineKind,
+        PullRequestSummary, ReasoningEffortOption, RemoteControlRuntimeStatus, ServiceTierOption,
+        SkillCard, SkillScope, TaskRunStatus, TaskSummary, TerminalTabState, TimelineItem,
+        TimelineKind,
     };
 
     fn task(id: &str, cwd: &str) -> TaskSummary {
@@ -42786,6 +43646,10 @@ mod tests {
             "computer apps"
         ));
         assert!(settings_section_matches(
+            SettingsSection::Connections,
+            "remote paired devices"
+        ));
+        assert!(settings_section_matches(
             SettingsSection::Personalization,
             "personality memories"
         ));
@@ -42842,6 +43706,30 @@ mod tests {
             SettingsSection::ComputerUse,
             "billing"
         ));
+        assert!(!settings_section_matches(
+            SettingsSection::Connections,
+            "billing"
+        ));
+    }
+
+    #[test]
+    fn remote_control_status_labels_are_user_facing() {
+        assert_eq!(
+            remote_control_status_label(RemoteControlRuntimeStatus::Disabled),
+            "Disabled"
+        );
+        assert_eq!(
+            remote_control_status_label(RemoteControlRuntimeStatus::Connecting),
+            "Connecting"
+        );
+        assert_eq!(
+            remote_control_status_label(RemoteControlRuntimeStatus::Connected),
+            "Connected"
+        );
+        assert_eq!(
+            remote_control_status_label(RemoteControlRuntimeStatus::Errored),
+            "Needs attention"
+        );
     }
 
     #[test]
