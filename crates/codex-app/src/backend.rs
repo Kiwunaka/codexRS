@@ -5165,14 +5165,41 @@ fn run_effect(
                 app_brand: None,
             };
             match app_server.start_account_login(params) {
-                Ok(LoginAccountResponse::ChatGpt { login_id, auth_url }) => emit(
+                Ok(response) => {
+                    if let Some(action) = browser_account_login_started_action(response) {
+                        emit(events, action);
+                    } else {
+                        emit(
+                            events,
+                            Action::AccountLoginStartFailed(
+                                "Could not start ChatGPT sign-in. Please try again.".to_owned(),
+                            ),
+                        );
+                    }
+                }
+                Err(_) => emit(
                     events,
-                    Action::AccountLoginStarted {
-                        login_id: bounded(login_id, 512),
-                        authorization_url: bounded(auth_url, 8 * 1024),
-                    },
+                    Action::AccountLoginStartFailed(
+                        "Could not start ChatGPT sign-in. Please try again.".to_owned(),
+                    ),
                 ),
-                Ok(_) | Err(_) => emit(
+            }
+        }
+        Effect::StartAccountDeviceCodeLogin => {
+            match app_server.start_account_login(LoginAccountParams::ChatGptDeviceCode) {
+                Ok(response) => {
+                    if let Some(action) = device_code_account_login_started_action(response) {
+                        emit(events, action);
+                    } else {
+                        emit(
+                            events,
+                            Action::AccountLoginStartFailed(
+                                "Could not start ChatGPT sign-in. Please try again.".to_owned(),
+                            ),
+                        );
+                    }
+                }
+                Err(_) => emit(
                     events,
                     Action::AccountLoginStartFailed(
                         "Could not start ChatGPT sign-in. Please try again.".to_owned(),
@@ -12287,7 +12314,9 @@ fn handle_notification(method: &str, params: Value, events: &Sender<Action>) -> 
                 emit(
                     events,
                     Action::AccountLoginCompleted {
-                        login_id: notification.login_id.map(|login_id| bounded(login_id, 512)),
+                        login_id: notification
+                            .login_id
+                            .filter(|login_id| !login_id.is_empty() && login_id.len() <= 512),
                         success: notification.success,
                     },
                 );
@@ -14248,6 +14277,55 @@ fn map_account_profile(account: ProtocolAccount) -> AccountProfile {
     }
 }
 
+fn browser_account_login_started_action(response: LoginAccountResponse) -> Option<Action> {
+    match response {
+        LoginAccountResponse::ChatGpt { login_id, auth_url } => {
+            account_login_started_action(login_id, auth_url, None)
+        }
+        LoginAccountResponse::ApiKey
+        | LoginAccountResponse::ChatGptAuthTokens
+        | LoginAccountResponse::ChatGptDeviceCode { .. }
+        | LoginAccountResponse::AmazonBedrock => None,
+    }
+}
+
+fn device_code_account_login_started_action(response: LoginAccountResponse) -> Option<Action> {
+    match response {
+        LoginAccountResponse::ChatGptDeviceCode {
+            login_id,
+            verification_url,
+            user_code,
+        } => account_login_started_action(login_id, verification_url, Some(user_code)),
+        LoginAccountResponse::ApiKey
+        | LoginAccountResponse::ChatGpt { .. }
+        | LoginAccountResponse::ChatGptAuthTokens
+        | LoginAccountResponse::AmazonBedrock => None,
+    }
+}
+
+fn account_login_started_action(
+    login_id: String,
+    authorization_url: String,
+    user_code: Option<String>,
+) -> Option<Action> {
+    if login_id.is_empty()
+        || login_id.len() > 512
+        || authorization_url.is_empty()
+        || authorization_url.len() > 8 * 1024
+        || user_code
+            .as_ref()
+            .is_some_and(|code| code.is_empty() || code.len() > 512)
+    {
+        return None;
+    }
+
+    Some(Action::AccountLoginStarted {
+        login_id,
+        authorization_url,
+        user_code,
+    })
+}
+
 fn plan_type_label(plan_type: PlanType) -> &'static str {
     match plan_type {
         PlanType::Free => "Free",
@@ -16031,7 +16109,7 @@ mod tests {
     use codex_platform::{AppServerEvent, ComputerApplication, ComputerKey};
     use codex_protocol::{
         AppInfo, AppToolSummary, ConfigReadResponse, ConnectorMetadata, FuzzyFileSearchMatchType,
-        FuzzyFileSearchResult as ProtocolFuzzyFileResult,
+        FuzzyFileSearchResult as ProtocolFuzzyFileResult, LoginAccountResponse,
         McpServerStatus as ProtocolMcpServerStatus, PluginListMarketplaceKind, RemoteControlClient,
         RemoteControlConnectionStatus, UserInput,
     };
@@ -16047,15 +16125,16 @@ mod tests {
         TRUSTED_ACCESS_FOR_CYBER_URL, TRUSTED_ACCESS_FOR_CYBER_WARNING, TaskSearchDebouncer,
         TerminalParserCallbacks, agent_configuration_snapshot, appearance_theme_key,
         bounded_marketplace_load_error_count, bounded_remote_identifier,
-        browser_origin_auto_decision, browser_origin_elicitation_response, browser_policy_target,
-        browser_resource_auto_decision, browser_resource_elicitation_response,
-        cancel_pending_worktree_runtime, combined_git_generation_prompt,
-        combined_git_output_schema, commit_generation_prompt, commit_message_output_schema,
-        composer_config_key, composer_inputs, computer_application_value,
-        computer_tool_request_meta, computer_tool_requires_interruption_monitor,
-        computer_use_allowed_app_ids, computer_use_allowed_app_ids_value,
-        computer_use_app_authorized, computer_use_dynamic_tools, computer_window_argument,
-        computer_window_schema, drag_coordinates, encode_appearance_preferences,
+        browser_account_login_started_action, browser_origin_auto_decision,
+        browser_origin_elicitation_response, browser_policy_target, browser_resource_auto_decision,
+        browser_resource_elicitation_response, cancel_pending_worktree_runtime,
+        combined_git_generation_prompt, combined_git_output_schema, commit_generation_prompt,
+        commit_message_output_schema, composer_config_key, composer_inputs,
+        computer_application_value, computer_tool_request_meta,
+        computer_tool_requires_interruption_monitor, computer_use_allowed_app_ids,
+        computer_use_allowed_app_ids_value, computer_use_app_authorized,
+        computer_use_dynamic_tools, computer_window_argument, computer_window_schema,
+        device_code_account_login_started_action, drag_coordinates, encode_appearance_preferences,
         encode_browser_download_preferences, encode_browser_permissions, encode_git_preferences,
         encode_keyboard_shortcut_preferences, encode_primary_window_placement,
         forbidden_computer_target_message, handle_notification, hook_state_config_value,
@@ -17889,6 +17968,58 @@ mod tests {
     }
 
     #[test]
+    fn account_login_response_mapping_accepts_only_matching_valid_shapes() {
+        assert!(matches!(
+            browser_account_login_started_action(LoginAccountResponse::ChatGpt {
+                login_id: "login-browser".to_owned(),
+                auth_url: "https://auth.openai.com/".to_owned(),
+            }),
+            Some(Action::AccountLoginStarted {
+                login_id,
+                authorization_url,
+                user_code: None,
+            }) if login_id == "login-browser" && authorization_url == "https://auth.openai.com/"
+        ));
+        assert!(matches!(
+            device_code_account_login_started_action(LoginAccountResponse::ChatGptDeviceCode {
+                login_id: "login-1".to_owned(),
+                verification_url: "https://auth.openai.com/device".to_owned(),
+                user_code: "ABCD-EFGH".to_owned(),
+            }),
+            Some(Action::AccountLoginStarted {
+                login_id,
+                authorization_url,
+                user_code: Some(user_code),
+            }) if login_id == "login-1"
+                && authorization_url == "https://auth.openai.com/device"
+                && user_code == "ABCD-EFGH"
+        ));
+        assert!(
+            device_code_account_login_started_action(LoginAccountResponse::ChatGpt {
+                login_id: "login-1".to_owned(),
+                auth_url: "https://auth.openai.com/".to_owned(),
+            })
+            .is_none()
+        );
+        assert!(
+            browser_account_login_started_action(LoginAccountResponse::ChatGptDeviceCode {
+                login_id: "login-1".to_owned(),
+                verification_url: "https://auth.openai.com/device".to_owned(),
+                user_code: "ABCD-EFGH".to_owned(),
+            })
+            .is_none()
+        );
+        assert!(
+            device_code_account_login_started_action(LoginAccountResponse::ChatGptDeviceCode {
+                login_id: "x".repeat(513),
+                verification_url: "https://auth.openai.com/device".to_owned(),
+                user_code: "ABCD-EFGH".to_owned(),
+            })
+            .is_none()
+        );
+    }
+
+    #[test]
     fn external_import_completion_notification_reaches_the_reducer() {
         let (events, actions) = bounded(1);
 
@@ -18065,7 +18196,7 @@ mod tests {
     }
 
     #[test]
-    fn account_login_completion_uses_typed_bounded_state_without_provider_error() {
+    fn account_login_completion_ignores_oversize_login_id_without_provider_error() {
         let (events, actions) = bounded(1);
 
         assert!(!handle_notification(
@@ -18080,9 +18211,9 @@ mod tests {
         assert!(matches!(
             actions.try_recv(),
             Ok(Action::AccountLoginCompleted {
-                login_id: Some(login_id),
+                login_id: None,
                 success: false,
-            }) if login_id.len() == 512
+            })
         ));
     }
 

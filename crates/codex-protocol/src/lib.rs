@@ -402,6 +402,8 @@ pub enum LoginAccountParams {
         #[serde(rename = "appBrand", skip_serializing_if = "Option::is_none")]
         app_brand: Option<LoginAppBrand>,
     },
+    #[serde(rename = "chatgptDeviceCode")]
+    ChatGptDeviceCode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -3720,6 +3722,14 @@ mod tests {
             }),
             b"{\"method\":\"account/login/start\",\"id\":2,\"params\":{\"type\":\"chatgpt\"}}\n"
         );
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "account/login/start",
+                id: 3,
+                params: Some(LoginAccountParams::ChatGptDeviceCode),
+            }),
+            b"{\"method\":\"account/login/start\",\"id\":3,\"params\":{\"type\":\"chatgptDeviceCode\"}}\n"
+        );
         assert!(matches!(
             serde_json::from_value::<LoginAccountResponse>(json!({
                 "type": "chatgpt",
@@ -3729,15 +3739,30 @@ mod tests {
             Ok(LoginAccountResponse::ChatGpt { login_id, auth_url })
                 if login_id == "login-1" && auth_url == "https://auth.openai.com/"
         ));
+        assert!(matches!(
+            serde_json::from_value::<LoginAccountResponse>(json!({
+                "type": "chatgptDeviceCode",
+                "loginId": "login-2",
+                "verificationUrl": "https://auth.openai.com/device",
+                "userCode": "ABCD-EFGH"
+            })),
+            Ok(LoginAccountResponse::ChatGptDeviceCode {
+                login_id,
+                verification_url,
+                user_code,
+            }) if login_id == "login-2"
+                && verification_url == "https://auth.openai.com/device"
+                && user_code == "ABCD-EFGH"
+        ));
         assert_eq!(
             encoded(&ClientRequest {
                 method: "account/login/cancel",
-                id: 3,
+                id: 4,
                 params: Some(CancelLoginAccountParams {
                     login_id: "login-1".to_owned(),
                 }),
             }),
-            b"{\"method\":\"account/login/cancel\",\"id\":3,\"params\":{\"loginId\":\"login-1\"}}\n"
+            b"{\"method\":\"account/login/cancel\",\"id\":4,\"params\":{\"loginId\":\"login-1\"}}\n"
         );
         assert!(matches!(
             serde_json::from_value::<CancelLoginAccountResponse>(json!({

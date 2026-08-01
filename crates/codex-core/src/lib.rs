@@ -3734,6 +3734,8 @@ pub struct AccountState {
     pub error: Option<String>,
     pub auth_operation: AccountAuthOperation,
     pub login_id: Option<String>,
+    pub login_verification_url: Option<String>,
+    pub login_user_code: Option<String>,
     pub auth_error: Option<String>,
 }
 
@@ -3749,6 +3751,8 @@ impl Default for AccountState {
             error: None,
             auth_operation: AccountAuthOperation::Idle,
             login_id: None,
+            login_verification_url: None,
+            login_user_code: None,
             auth_error: None,
         }
     }
@@ -5023,9 +5027,11 @@ pub enum Action {
     },
     AccountLoadFailed(String),
     StartAccountLogin,
+    StartAccountDeviceCodeLogin,
     AccountLoginStarted {
         login_id: String,
         authorization_url: String,
+        user_code: Option<String>,
     },
     AccountLoginStartFailed(String),
     AccountLoginAuthorizationUrlRejected,
@@ -6021,6 +6027,7 @@ pub enum Effect {
     },
     LoadAccount,
     StartAccountLogin,
+    StartAccountDeviceCodeLogin,
     CancelAccountLogin {
         login_id: String,
     },
@@ -7491,6 +7498,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.review_start.terminal_events.clear();
             state.account.auth_operation = AccountAuthOperation::Idle;
             state.account.login_id = None;
+            state.account.login_verification_url = None;
+            state.account.login_user_code = None;
             state.account.auth_error = None;
             let reconnect = !matches!(
                 state.connection,
@@ -13453,6 +13462,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             if connected {
                 state.account.auth_operation = AccountAuthOperation::Idle;
                 state.account.login_id = None;
+                state.account.login_verification_url = None;
+                state.account.login_user_code = None;
                 state.account.auth_error = None;
             }
             Vec::new()
@@ -13470,26 +13481,52 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             state.account.auth_operation = AccountAuthOperation::StartingLogin;
             state.account.login_id = None;
+            state.account.login_verification_url = None;
+            state.account.login_user_code = None;
             state.account.auth_error = None;
             vec![Effect::StartAccountLogin]
+        }
+        Action::StartAccountDeviceCodeLogin => {
+            if state.account.profile.is_some()
+                || state.account.auth_operation != AccountAuthOperation::Idle
+            {
+                return Vec::new();
+            }
+            state.account.auth_operation = AccountAuthOperation::StartingLogin;
+            state.account.login_id = None;
+            state.account.login_verification_url = None;
+            state.account.login_user_code = None;
+            state.account.auth_error = None;
+            vec![Effect::StartAccountDeviceCodeLogin]
         }
         Action::AccountLoginStarted {
             login_id,
             authorization_url,
+            user_code,
         } => {
             if state.account.auth_operation != AccountAuthOperation::StartingLogin {
                 return Vec::new();
             }
-            let login_id = bounded_string(login_id.trim().to_owned(), MAX_ACCOUNT_FIELD_BYTES);
-            let authorization_url = bounded_string(authorization_url.trim().to_owned(), 8 * 1024);
-            if login_id.is_empty() || authorization_url.is_empty() {
+            if login_id.is_empty()
+                || login_id.len() > MAX_ACCOUNT_FIELD_BYTES
+                || authorization_url.is_empty()
+                || authorization_url.len() > 8 * 1024
+                || user_code
+                    .as_ref()
+                    .is_some_and(|code| code.is_empty() || code.len() > MAX_ACCOUNT_FIELD_BYTES)
+            {
                 state.account.auth_operation = AccountAuthOperation::Idle;
+                state.account.login_id = None;
+                state.account.login_verification_url = None;
+                state.account.login_user_code = None;
                 state.account.auth_error =
                     Some("Could not start ChatGPT sign-in. Please try again.".to_owned());
                 return Vec::new();
             }
             state.account.auth_operation = AccountAuthOperation::AwaitingLogin;
             state.account.login_id = Some(login_id);
+            state.account.login_verification_url = Some(authorization_url);
+            state.account.login_user_code = user_code;
             state.account.auth_error = None;
             Vec::new()
         }
@@ -13497,6 +13534,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             if state.account.auth_operation == AccountAuthOperation::StartingLogin {
                 state.account.auth_operation = AccountAuthOperation::Idle;
                 state.account.login_id = None;
+                state.account.login_verification_url = None;
+                state.account.login_user_code = None;
                 state.account.auth_error = Some(bounded_string(message, MAX_ACCOUNT_FIELD_BYTES));
             }
             Vec::new()
@@ -13509,6 +13548,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 return Vec::new();
             }
             state.account.auth_operation = AccountAuthOperation::CancelingLogin;
+            state.account.login_verification_url = None;
+            state.account.login_user_code = None;
             state.account.auth_error =
                 Some("The sign-in service returned an unsupported URL.".to_owned());
             vec![Effect::CancelAccountLogin { login_id }]
@@ -13530,6 +13571,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             state.account.auth_operation = AccountAuthOperation::Idle;
             state.account.login_id = None;
+            state.account.login_verification_url = None;
+            state.account.login_user_code = None;
             Vec::new()
         }
         Action::AccountLoginCancelFailed(message) => {
@@ -13551,6 +13594,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             state.account.auth_operation = AccountAuthOperation::Idle;
             state.account.login_id = None;
+            state.account.login_verification_url = None;
+            state.account.login_user_code = None;
             if success {
                 state.account.auth_error = None;
                 state.account.status = LoadStatus::Loading;
@@ -17567,12 +17612,12 @@ mod tests {
         ImportBatch, ImportHistory, ImportItemSuccess, ImportItemType, ImportMigrationDetails,
         ImportMigrationItem, ImportProvider, ImportProviderItems, ImportTypeResult, InspectorPane,
         IntegratedTerminalShell, KeyboardShortcutPreferences, KeyboardShortcutUpdateTarget,
-        LoadStatus, LocalProjectSummary, MAX_BROWSER_DOWNLOADS, MAX_COMPOSER_BYTES,
-        MAX_GIT_BRANCH_BYTES, MAX_GIT_DIFF_BYTES, MAX_GIT_INSTRUCTIONS_BYTES, MAX_GIT_SHA_BYTES,
-        MAX_PLUGIN_DETAIL_ITEMS, MAX_REVIEW_START_ERROR_BYTES, MAX_TIMELINE_ITEMS,
-        MAX_TURN_DIFF_BYTES, MainRoute, MarketplaceManageTab, MarketplaceSectionFilter,
-        MarketplaceSourceCard, MarketplaceTab, MarketplaceUpgradeFailure, McpAuthStatus,
-        McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
+        LoadStatus, LocalProjectSummary, MAX_ACCOUNT_FIELD_BYTES, MAX_BROWSER_DOWNLOADS,
+        MAX_COMPOSER_BYTES, MAX_GIT_BRANCH_BYTES, MAX_GIT_DIFF_BYTES, MAX_GIT_INSTRUCTIONS_BYTES,
+        MAX_GIT_SHA_BYTES, MAX_PLUGIN_DETAIL_ITEMS, MAX_REVIEW_START_ERROR_BYTES,
+        MAX_TIMELINE_ITEMS, MAX_TURN_DIFF_BYTES, MainRoute, MarketplaceManageTab,
+        MarketplaceSectionFilter, MarketplaceSourceCard, MarketplaceTab, MarketplaceUpgradeFailure,
+        McpAuthStatus, McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
         McpElicitationContent, McpElicitationDecision, McpElicitationValue, McpFormElicitation,
         McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpFormOption, McpFormStringFormat,
         McpResourceCard, McpResourceContentCard, McpServerCard, McpServerDraft,
@@ -24767,6 +24812,7 @@ mod tests {
             Action::AccountLoginStarted {
                 login_id: "login-1".to_owned(),
                 authorization_url: "https://auth.openai.com/".to_owned(),
+                user_code: None,
             },
         );
         assert_eq!(
@@ -24794,6 +24840,7 @@ mod tests {
             Action::AccountLoginStarted {
                 login_id: "login-2".to_owned(),
                 authorization_url: "https://auth.openai.com/".to_owned(),
+                user_code: None,
             },
         );
         assert_eq!(
@@ -24832,6 +24879,117 @@ mod tests {
             [Effect::LoadAccount]
         );
         assert!(state.account.profile.is_none());
+    }
+
+    #[test]
+    fn device_code_login_is_ephemeral_and_cleared_when_cancelled() {
+        let mut state = AppState::default();
+
+        assert_eq!(
+            reduce(&mut state, Action::StartAccountDeviceCodeLogin),
+            [Effect::StartAccountDeviceCodeLogin]
+        );
+        assert!(reduce(&mut state, Action::StartAccountLogin).is_empty());
+        reduce(
+            &mut state,
+            Action::AccountLoginStarted {
+                login_id: "login-1".to_owned(),
+                authorization_url: "https://auth.openai.com/device".to_owned(),
+                user_code: Some("ABCD-EFGH".to_owned()),
+            },
+        );
+
+        assert_eq!(
+            state.account.login_verification_url.as_deref(),
+            Some("https://auth.openai.com/device")
+        );
+        assert_eq!(state.account.login_user_code.as_deref(), Some("ABCD-EFGH"));
+        assert_eq!(
+            reduce(&mut state, Action::CancelAccountLogin),
+            [Effect::CancelAccountLogin {
+                login_id: "login-1".to_owned(),
+            }]
+        );
+        assert_eq!(
+            state.account.login_verification_url.as_deref(),
+            Some("https://auth.openai.com/device")
+        );
+        assert_eq!(state.account.login_user_code.as_deref(), Some("ABCD-EFGH"));
+        reduce(
+            &mut state,
+            Action::AccountLoginCancelFailed("temporary failure".to_owned()),
+        );
+        assert_eq!(
+            state.account.auth_operation,
+            AccountAuthOperation::AwaitingLogin
+        );
+        assert_eq!(
+            state.account.login_verification_url.as_deref(),
+            Some("https://auth.openai.com/device")
+        );
+        assert_eq!(state.account.login_user_code.as_deref(), Some("ABCD-EFGH"));
+        reduce(
+            &mut state,
+            Action::AccountLoginCanceled {
+                login_id: "login-1".to_owned(),
+            },
+        );
+        assert!(state.account.login_verification_url.is_none());
+        assert!(state.account.login_user_code.is_none());
+    }
+
+    #[test]
+    fn account_login_started_rejects_empty_or_oversize_opaque_values() {
+        for (login_id, authorization_url, user_code) in [
+            (
+                String::new(),
+                "https://auth.openai.com/device".to_owned(),
+                Some("ABCD-EFGH".to_owned()),
+            ),
+            (
+                "x".repeat(MAX_ACCOUNT_FIELD_BYTES + 1),
+                "https://auth.openai.com/device".to_owned(),
+                Some("ABCD-EFGH".to_owned()),
+            ),
+            (
+                "login-1".to_owned(),
+                String::new(),
+                Some("ABCD-EFGH".to_owned()),
+            ),
+            (
+                "login-1".to_owned(),
+                "x".repeat(8 * 1024 + 1),
+                Some("ABCD-EFGH".to_owned()),
+            ),
+            (
+                "login-1".to_owned(),
+                "https://auth.openai.com/device".to_owned(),
+                Some(String::new()),
+            ),
+            (
+                "login-1".to_owned(),
+                "https://auth.openai.com/device".to_owned(),
+                Some("x".repeat(MAX_ACCOUNT_FIELD_BYTES + 1)),
+            ),
+        ] {
+            let mut state = AppState::default();
+            reduce(&mut state, Action::StartAccountDeviceCodeLogin);
+            assert!(
+                reduce(
+                    &mut state,
+                    Action::AccountLoginStarted {
+                        login_id,
+                        authorization_url,
+                        user_code,
+                    },
+                )
+                .is_empty()
+            );
+            assert_eq!(state.account.auth_operation, AccountAuthOperation::Idle);
+            assert!(state.account.login_id.is_none());
+            assert!(state.account.login_verification_url.is_none());
+            assert!(state.account.login_user_code.is_none());
+        }
     }
 
     #[test]
