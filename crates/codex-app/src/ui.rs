@@ -2200,6 +2200,7 @@ enum SettingsSection {
     Appearance,
     Personalization,
     KeyboardShortcuts,
+    Profile,
     Usage,
     Import,
     Configuration,
@@ -7583,7 +7584,9 @@ impl WorkspaceView {
         }
         self.settings_section = section;
         self.navigate(MainRoute::Settings, cx);
-        if section == SettingsSection::Usage && self.state.account.status != LoadStatus::Loading {
+        if settings_section_refreshes_account(section)
+            && self.state.account.status != LoadStatus::Loading
+        {
             self.dispatch(Action::RefreshAccount, cx);
         } else if section == SettingsSection::Personalization
             && self.state.personalization.status != LoadStatus::Loading
@@ -29344,6 +29347,7 @@ impl WorkspaceView {
             settings_section_matches(SettingsSection::Personalization, &query);
         let keyboard_shortcuts_visible =
             settings_section_matches(SettingsSection::KeyboardShortcuts, &query);
+        let profile_visible = settings_section_matches(SettingsSection::Profile, &query);
         let usage_visible = settings_section_matches(SettingsSection::Usage, &query);
         let import_visible = settings_section_matches(SettingsSection::Import, &query);
         let configuration_visible =
@@ -29363,6 +29367,7 @@ impl WorkspaceView {
             || appearance_visible
             || personalization_visible
             || keyboard_shortcuts_visible
+            || profile_visible
             || usage_visible
             || import_visible;
         let integrations_visible = plugins_visible
@@ -29382,6 +29387,7 @@ impl WorkspaceView {
             SettingsSection::Appearance => self.render_appearance_settings(cx),
             SettingsSection::Personalization => self.render_personalization_settings(cx),
             SettingsSection::KeyboardShortcuts => self.render_keyboard_shortcut_settings(cx),
+            SettingsSection::Profile => self.render_profile_settings(cx),
             SettingsSection::Usage => self.render_usage_settings(cx),
             SettingsSection::Import => self.render_import_settings(cx),
             SettingsSection::Configuration => self.render_agent_configuration_settings(cx),
@@ -29487,6 +29493,15 @@ impl WorkspaceView {
                                         "Keyboard shortcuts",
                                         IconName::Asterisk,
                                         SettingsSection::KeyboardShortcuts,
+                                        cx,
+                                    ))
+                                })
+                                .when(profile_visible, |group| {
+                                    group.child(self.render_settings_nav_item(
+                                        "settings-profile",
+                                        "Profile",
+                                        IconName::User,
+                                        SettingsSection::Profile,
                                         cx,
                                     ))
                                 })
@@ -34286,7 +34301,7 @@ impl WorkspaceView {
             .into_any_element()
     }
 
-    fn render_usage_settings(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_profile_settings(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let account = self.state.account.clone();
         let loading = account.status == LoadStatus::Loading;
         let mut cards = Vec::new();
@@ -34304,7 +34319,7 @@ impl WorkspaceView {
                     .child(
                         div()
                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child("Could not load usage settings"),
+                            .child("Could not load profile settings"),
                     )
                     .child(
                         div()
@@ -34317,7 +34332,7 @@ impl WorkspaceView {
                             ),
                     )
                     .child(
-                        Button::new("retry-account-usage")
+                        Button::new("retry-account-profile")
                             .label("Retry")
                             .small()
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -34327,7 +34342,7 @@ impl WorkspaceView {
                     .into_any_element(),
             );
         } else if account.profile.is_none() && loading {
-            cards.push(settings_card("Your plan", "Loading usage settings…", cx));
+            cards.push(settings_card("Your plan", "Loading profile settings…", cx));
         } else {
             let profile_connected = account.profile.is_some();
             let plan_summary = account.profile.as_ref().map_or_else(
@@ -34435,7 +34450,107 @@ impl WorkspaceView {
                     })
                     .into_any_element(),
             );
+        }
 
+        v_flex()
+            .flex_1()
+            .h_full()
+            .min_w_0()
+            .child(
+                h_flex()
+                    .min_h(px(86.0))
+                    .px_6()
+                    .py_4()
+                    .gap_4()
+                    .items_center()
+                    .justify_between()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_lg()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child("Profile"),
+                            )
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("Manage your account and sign-in settings"),
+                            ),
+                    )
+                    .child(
+                        Button::new("refresh-account-profile")
+                            .label(if loading { "Refreshing…" } else { "Refresh" })
+                            .small()
+                            .disabled(loading)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.dispatch(Action::RefreshAccount, cx);
+                            })),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .p_6()
+                    .gap_4()
+                    .children(cards),
+            )
+            .into_any_element()
+    }
+
+    fn render_usage_settings(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let account = self.state.account.clone();
+        let loading = account.status == LoadStatus::Loading;
+        let mut cards = Vec::new();
+
+        if account.status == LoadStatus::Failed {
+            cards.push(
+                v_flex()
+                    .max_w(px(760.0))
+                    .p_4()
+                    .gap_3()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().sidebar)
+                    .child(
+                        div()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("Could not load usage settings"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(
+                                account
+                                    .error
+                                    .unwrap_or_else(|| "Please try again.".to_owned()),
+                            ),
+                    )
+                    .child(
+                        Button::new("retry-account-usage")
+                            .label("Retry")
+                            .small()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.dispatch(Action::RefreshAccount, cx);
+                            })),
+                    )
+                    .into_any_element(),
+            );
+        } else if loading {
+            cards.push(settings_card(
+                "General usage limits",
+                "Loading usage settings…",
+                cx,
+            ));
+        } else {
             if let Some(credits) = account.credits {
                 let balance = if credits.unlimited {
                     "Unlimited credit".to_owned()
@@ -42669,7 +42784,10 @@ fn settings_section_matches(section: SettingsSection, raw_query: &str) -> bool {
         SettingsSection::KeyboardShortcuts => {
             "keyboard shortcuts hotkeys key bindings commands customize"
         }
-        SettingsSection::Usage => "usage billing account plan credits limits login",
+        SettingsSection::Profile => {
+            "profile account plan email identity authentication api key sign in login logout"
+        }
+        SettingsSection::Usage => "usage billing credits limits",
         SettingsSection::Import => {
             "import migration migrate claude code cowork cursor setup projects chats sessions plugins skills"
         }
@@ -42708,6 +42826,10 @@ fn settings_section_matches(section: SettingsSection, raw_query: &str) -> bool {
     query
         .split_whitespace()
         .all(|term| searchable_text.contains(term))
+}
+
+const fn settings_section_refreshes_account(section: SettingsSection) -> bool {
+    matches!(section, SettingsSection::Profile | SettingsSection::Usage)
 }
 
 const fn remote_control_status_label(status: RemoteControlRuntimeStatus) -> &'static str {
@@ -43133,10 +43255,10 @@ mod tests {
         project_workspace_options, pull_request_merge_submission_enabled, reasoning_effort_target,
         remote_control_status_label, render_conversation_markdown, replace_composer_file_query,
         reserve_thread_find_history_page, sanitize_assistant_markdown, selected_approval_request,
-        selected_task_copy_value, settings_section_matches, shell_width_class,
-        sidebar_layout_width, split_diff_rows, startup_recovery_card, status_context_total_label,
-        status_rate_limit_label, status_rate_limit_reset_metadata_at, task_slot_id,
-        terminal_tab_label, timeline_activity_content, turn_diff_update_is_accepted,
+        selected_task_copy_value, settings_section_matches, settings_section_refreshes_account,
+        shell_width_class, sidebar_layout_width, split_diff_rows, startup_recovery_card,
+        status_context_total_label, status_rate_limit_label, status_rate_limit_reset_metadata_at,
+        task_slot_id, terminal_tab_label, timeline_activity_content, turn_diff_update_is_accepted,
         validate_plugin_logo_dimensions, worktree_fork_queue_full,
     };
     use codex_core::{
@@ -44926,6 +45048,14 @@ mod tests {
             "keyboard hotkeys"
         ));
         assert!(settings_section_matches(
+            SettingsSection::Profile,
+            "account plan"
+        ));
+        assert!(settings_section_matches(
+            SettingsSection::Profile,
+            "email authentication"
+        ));
+        assert!(settings_section_matches(
             SettingsSection::Usage,
             "billing credits"
         ));
@@ -44981,6 +45111,23 @@ mod tests {
         assert!(!settings_section_matches(
             SettingsSection::Connections,
             "billing"
+        ));
+        assert!(!settings_section_matches(
+            SettingsSection::Profile,
+            "credits"
+        ));
+        assert!(!settings_section_matches(SettingsSection::Usage, "profile"));
+    }
+
+    #[test]
+    fn profile_and_usage_refresh_the_shared_account_snapshot() {
+        assert!(settings_section_refreshes_account(SettingsSection::Profile));
+        assert!(settings_section_refreshes_account(SettingsSection::Usage));
+        assert!(!settings_section_refreshes_account(
+            SettingsSection::General
+        ));
+        assert!(!settings_section_refreshes_account(
+            SettingsSection::Personalization
         ));
     }
 
