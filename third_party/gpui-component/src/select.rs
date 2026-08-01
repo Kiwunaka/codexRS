@@ -648,6 +648,16 @@ where
         self.focus_handle.focus(window);
     }
 
+    /// Closes the dropdown menu without changing keyboard focus.
+    pub fn close_menu(&mut self, cx: &mut Context<Self>) {
+        if !self.open {
+            return;
+        }
+
+        self.open = false;
+        cx.notify();
+    }
+
     fn update_selected_value(&mut self, _: &Window, cx: &App) {
         self.selected_value = self
             .selected_index(cx)
