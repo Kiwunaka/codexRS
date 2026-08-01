@@ -37,24 +37,24 @@ use codex_protocol::{
     RemoteControlClientsRevokeResponse, RemoteControlDisableResponse, RemoteControlEnableResponse,
     RemoteControlPairingStartParams, RemoteControlPairingStartResponse,
     RemoteControlPairingStatusParams, RemoteControlPairingStatusResponse,
-    RemoteControlStatusReadResponse, SkillsConfigWriteParams, SkillsConfigWriteResponse,
-    SkillsListParams, SkillsListResponse, ThreadArchiveParams,
-    ThreadBackgroundTerminalsCleanParams, ThreadBackgroundTerminalsCleanResponse,
-    ThreadBackgroundTerminalsListParams, ThreadBackgroundTerminalsListResponse,
-    ThreadBackgroundTerminalsTerminateParams, ThreadBackgroundTerminalsTerminateResponse,
-    ThreadCompactStartParams, ThreadCompactStartResponse, ThreadDeleteParams, ThreadForkParams,
-    ThreadForkResponse, ThreadGoalClearParams, ThreadGoalClearResponse, ThreadGoalGetParams,
-    ThreadGoalGetResponse, ThreadGoalSetParams, ThreadGoalSetResponse, ThreadItemsListParams,
-    ThreadItemsListResponse, ThreadListParams, ThreadListResponse, ThreadLoadedListParams,
-    ThreadLoadedListResponse, ThreadMemoryModeSetParams, ThreadMemoryModeSetResponse,
-    ThreadReadParams, ThreadReadResponse, ThreadResumeParams, ThreadResumeResponse,
-    ThreadRollbackParams, ThreadRollbackResponse, ThreadSearchParams, ThreadSearchResponse,
-    ThreadSetNameParams, ThreadSettingsUpdateParams, ThreadSettingsUpdateResponse,
-    ThreadShellCommandParams, ThreadShellCommandResponse, ThreadStartParams, ThreadStartResponse,
-    ThreadTurnsListParams, ThreadTurnsListResponse, ThreadUnarchiveParams, ThreadUnarchiveResponse,
-    TurnInterruptParams, TurnStartParams, TurnStartResponse, TurnSteerParams, decode_incoming,
-    decode_result, encode_error_response, encode_json_line, encode_success_response,
-    encode_unsupported_request, read_bounded_frame,
+    RemoteControlStatusReadResponse, ReviewDelivery, ReviewStartParams, ReviewStartResponse,
+    ReviewTarget, SkillsConfigWriteParams, SkillsConfigWriteResponse, SkillsListParams,
+    SkillsListResponse, ThreadArchiveParams, ThreadBackgroundTerminalsCleanParams,
+    ThreadBackgroundTerminalsCleanResponse, ThreadBackgroundTerminalsListParams,
+    ThreadBackgroundTerminalsListResponse, ThreadBackgroundTerminalsTerminateParams,
+    ThreadBackgroundTerminalsTerminateResponse, ThreadCompactStartParams,
+    ThreadCompactStartResponse, ThreadDeleteParams, ThreadForkParams, ThreadForkResponse,
+    ThreadGoalClearParams, ThreadGoalClearResponse, ThreadGoalGetParams, ThreadGoalGetResponse,
+    ThreadGoalSetParams, ThreadGoalSetResponse, ThreadItemsListParams, ThreadItemsListResponse,
+    ThreadListParams, ThreadListResponse, ThreadLoadedListParams, ThreadLoadedListResponse,
+    ThreadMemoryModeSetParams, ThreadMemoryModeSetResponse, ThreadReadParams, ThreadReadResponse,
+    ThreadResumeParams, ThreadResumeResponse, ThreadRollbackParams, ThreadRollbackResponse,
+    ThreadSearchParams, ThreadSearchResponse, ThreadSetNameParams, ThreadSettingsUpdateParams,
+    ThreadSettingsUpdateResponse, ThreadShellCommandParams, ThreadShellCommandResponse,
+    ThreadStartParams, ThreadStartResponse, ThreadTurnsListParams, ThreadTurnsListResponse,
+    ThreadUnarchiveParams, ThreadUnarchiveResponse, TurnInterruptParams, TurnStartParams,
+    TurnStartResponse, TurnSteerParams, decode_incoming, decode_result, encode_error_response,
+    encode_json_line, encode_success_response, encode_unsupported_request, read_bounded_frame,
 };
 use crossbeam_channel::{
     Receiver as CrossbeamReceiver, SendTimeoutError, Sender as CrossbeamSender, TrySendError,
@@ -81,6 +81,11 @@ pub const MAX_APP_READ_ITEMS: usize = 100;
 const MAX_REMOTE_CONTROL_CURSOR_BYTES: usize = 1_024;
 const MAX_REMOTE_CONTROL_PAIRING_CODE_BYTES: usize = 1_024;
 const MAX_REMOTE_CONTROL_IDENTIFIER_BYTES: usize = 256;
+const MAX_REVIEW_IDENTIFIER_BYTES: usize = 256;
+const MAX_REVIEW_BRANCH_BYTES: usize = 1_024;
+const MAX_REVIEW_SHA_BYTES: usize = 128;
+const MAX_REVIEW_TITLE_BYTES: usize = 4 * 1024;
+const MAX_REVIEW_INSTRUCTIONS_BYTES: usize = 16 * 1024;
 
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
@@ -228,6 +233,8 @@ pub enum AppServerError {
     InvalidRemoteControlCursor,
     InvalidRemoteControlIdentifier,
     InvalidRemoteControlPairingStatus,
+    InvalidReviewStartParams,
+    InvalidReviewStartResponse,
     #[cfg(windows)]
     Job(JobError),
 }
@@ -299,6 +306,12 @@ impl fmt::Display for AppServerError {
             }
             Self::InvalidRemoteControlPairingStatus => formatter
                 .write_str("remote-control pairing status requires exactly one valid pairing code"),
+            Self::InvalidReviewStartParams => {
+                formatter.write_str("review start parameters are invalid")
+            }
+            Self::InvalidReviewStartResponse => {
+                formatter.write_str("review start response is invalid")
+            }
             #[cfg(windows)]
             Self::Job(_) => formatter.write_str("Windows Job Object setup failed"),
         }
@@ -334,7 +347,9 @@ impl Error for AppServerError {
             | Self::InvalidPageLimit { .. }
             | Self::InvalidRemoteControlCursor
             | Self::InvalidRemoteControlIdentifier
-            | Self::InvalidRemoteControlPairingStatus => None,
+            | Self::InvalidRemoteControlPairingStatus
+            | Self::InvalidReviewStartParams
+            | Self::InvalidReviewStartResponse => None,
         }
     }
 }
@@ -1162,6 +1177,17 @@ impl AppServerConnection {
         self.request("turn/start", params)
     }
 
+    pub fn start_review(
+        &self,
+        params: ReviewStartParams,
+    ) -> Result<ReviewStartResponse, AppServerError> {
+        self.require_initialized()?;
+        validate_review_start_params(&params)?;
+        let response = self.request("review/start", params.clone())?;
+        validate_review_start_response(&params, &response)?;
+        Ok(response)
+    }
+
     pub fn steer_turn(&self, params: TurnSteerParams) -> Result<Value, AppServerError> {
         self.require_initialized()?;
         self.request("turn/steer", params)
@@ -1619,6 +1645,111 @@ fn validate_remote_control_pairing_status(
     }
 }
 
+fn validate_review_start_params(params: &ReviewStartParams) -> Result<(), AppServerError> {
+    validate_review_identifier(&params.thread_id)?;
+    match &params.target {
+        ReviewTarget::UncommittedChanges => Ok(()),
+        ReviewTarget::BaseBranch { branch } => validate_review_branch(branch),
+        ReviewTarget::Commit { sha, title } => {
+            validate_review_sha(sha)?;
+            if let Some(title) = title {
+                validate_review_title(title)?;
+            }
+            Ok(())
+        }
+        ReviewTarget::Custom { instructions } => validate_review_instructions(instructions),
+    }
+}
+
+fn validate_review_start_response(
+    params: &ReviewStartParams,
+    response: &ReviewStartResponse,
+) -> Result<(), AppServerError> {
+    validate_review_response_identifier(&response.review_thread_id)?;
+    let turn = response
+        .turn
+        .as_object()
+        .ok_or(AppServerError::InvalidReviewStartResponse)?;
+    let turn_id = turn
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or(AppServerError::InvalidReviewStartResponse)?;
+    validate_review_response_identifier(turn_id)?;
+    if !turn.get("items").is_some_and(Value::is_array)
+        || !matches!(
+            turn.get("status").and_then(Value::as_str),
+            Some("completed" | "interrupted" | "failed" | "inProgress")
+        )
+    {
+        return Err(AppServerError::InvalidReviewStartResponse);
+    }
+
+    match params.delivery {
+        None | Some(ReviewDelivery::Inline) if response.review_thread_id == params.thread_id => {
+            Ok(())
+        }
+        Some(ReviewDelivery::Detached) if response.review_thread_id != params.thread_id => Ok(()),
+        _ => Err(AppServerError::InvalidReviewStartResponse),
+    }
+}
+
+fn validate_review_identifier(value: &str) -> Result<(), AppServerError> {
+    if value.is_empty()
+        || value.len() > MAX_REVIEW_IDENTIFIER_BYTES
+        || value.chars().any(char::is_control)
+    {
+        return Err(AppServerError::InvalidReviewStartParams);
+    }
+    Ok(())
+}
+
+fn validate_review_response_identifier(value: &str) -> Result<(), AppServerError> {
+    if value.is_empty()
+        || value.len() > MAX_REVIEW_IDENTIFIER_BYTES
+        || value.chars().any(char::is_control)
+    {
+        return Err(AppServerError::InvalidReviewStartResponse);
+    }
+    Ok(())
+}
+
+fn validate_review_branch(value: &str) -> Result<(), AppServerError> {
+    if value.trim().is_empty()
+        || value.len() > MAX_REVIEW_BRANCH_BYTES
+        || value.chars().any(char::is_control)
+    {
+        return Err(AppServerError::InvalidReviewStartParams);
+    }
+    Ok(())
+}
+
+fn validate_review_sha(value: &str) -> Result<(), AppServerError> {
+    if value.trim().is_empty()
+        || value.len() > MAX_REVIEW_SHA_BYTES
+        || value.chars().any(char::is_control)
+    {
+        return Err(AppServerError::InvalidReviewStartParams);
+    }
+    Ok(())
+}
+
+fn validate_review_title(value: &str) -> Result<(), AppServerError> {
+    if value.len() > MAX_REVIEW_TITLE_BYTES || value.chars().any(char::is_control) {
+        return Err(AppServerError::InvalidReviewStartParams);
+    }
+    Ok(())
+}
+
+fn validate_review_instructions(value: &str) -> Result<(), AppServerError> {
+    if value.trim().is_empty()
+        || value.len() > MAX_REVIEW_INSTRUCTIONS_BYTES
+        || value.contains('\0')
+    {
+        return Err(AppServerError::InvalidReviewStartParams);
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn route_app_server(
     mut child: ManagedChild,
@@ -2066,10 +2197,11 @@ mod tests {
 
     use codex_protocol::{
         RemoteControlClientsListParams, RemoteControlClientsRevokeParams,
-        RemoteControlPairingStatusParams,
+        RemoteControlPairingStatusParams, ReviewDelivery, ReviewStartParams, ReviewStartResponse,
+        ReviewTarget,
     };
     use crossbeam_channel::bounded;
-    use serde_json::Value;
+    use serde_json::{Value, json};
 
     use super::{
         AppServerError, AppServerEvent, CodexHome, CodexHomeKind, EVENT_BACKPRESSURE_TIMEOUT,
@@ -2077,7 +2209,8 @@ mod tests {
         MAX_REMOTE_CONTROL_PAIRING_CODE_BYTES, MAX_THREAD_PAGE_LIMIT, RoutedReaderEvent,
         notification_requires_resync, publish_notification, send_routed_reader_event,
         validate_remote_control_clients_list, validate_remote_control_clients_revoke,
-        validate_remote_control_pairing_status,
+        validate_remote_control_pairing_status, validate_review_start_params,
+        validate_review_start_response,
     };
 
     #[test]
@@ -2299,6 +2432,179 @@ mod tests {
                 None,
             )),
             Err(AppServerError::InvalidRemoteControlPairingStatus)
+        ));
+    }
+
+    #[test]
+    fn review_start_params_are_bounded() {
+        let params = |thread_id, target| ReviewStartParams {
+            thread_id,
+            target,
+            delivery: None,
+        };
+
+        assert!(
+            validate_review_start_params(&params(
+                "thread".to_owned(),
+                ReviewTarget::UncommittedChanges,
+            ))
+            .is_ok()
+        );
+        assert!(matches!(
+            validate_review_start_params(&params(
+                "bad\u{0001}".to_owned(),
+                ReviewTarget::UncommittedChanges,
+            )),
+            Err(AppServerError::InvalidReviewStartParams)
+        ));
+        assert!(matches!(
+            validate_review_start_params(&params(
+                "thread".to_owned(),
+                ReviewTarget::BaseBranch {
+                    branch: " \t ".to_owned(),
+                },
+            )),
+            Err(AppServerError::InvalidReviewStartParams)
+        ));
+        assert!(matches!(
+            validate_review_start_params(&params(
+                "thread".to_owned(),
+                ReviewTarget::BaseBranch {
+                    branch: "x".repeat(1_025),
+                },
+            )),
+            Err(AppServerError::InvalidReviewStartParams)
+        ));
+        assert!(
+            validate_review_start_params(&params(
+                "thread".to_owned(),
+                ReviewTarget::Commit {
+                    sha: "commit".to_owned(),
+                    title: Some(String::new()),
+                },
+            ))
+            .is_ok()
+        );
+        assert!(matches!(
+            validate_review_start_params(&params(
+                "thread".to_owned(),
+                ReviewTarget::Commit {
+                    sha: "commit".to_owned(),
+                    title: Some("\n".to_owned()),
+                },
+            )),
+            Err(AppServerError::InvalidReviewStartParams)
+        ));
+        assert!(matches!(
+            validate_review_start_params(&params(
+                "thread".to_owned(),
+                ReviewTarget::Commit {
+                    sha: "x".repeat(129),
+                    title: None,
+                },
+            )),
+            Err(AppServerError::InvalidReviewStartParams)
+        ));
+        assert!(
+            validate_review_start_params(&params(
+                "thread".to_owned(),
+                ReviewTarget::Custom {
+                    instructions: "line one\n\tline two".to_owned(),
+                },
+            ))
+            .is_ok()
+        );
+        assert!(matches!(
+            validate_review_start_params(&params(
+                "thread".to_owned(),
+                ReviewTarget::Custom {
+                    instructions: "x".repeat(16 * 1024 + 1),
+                },
+            )),
+            Err(AppServerError::InvalidReviewStartParams)
+        ));
+    }
+
+    #[test]
+    fn review_start_response_matches_delivery_mode() {
+        let params = |delivery| ReviewStartParams {
+            thread_id: "thread".to_owned(),
+            target: ReviewTarget::UncommittedChanges,
+            delivery,
+        };
+        let response = |review_thread_id: &str| ReviewStartResponse {
+            turn: json!({ "id": "turn", "items": [], "status": "inProgress" }),
+            review_thread_id: review_thread_id.to_owned(),
+        };
+
+        assert!(validate_review_start_response(&params(None), &response("thread")).is_ok());
+        assert!(
+            validate_review_start_response(
+                &params(Some(ReviewDelivery::Inline)),
+                &response("thread"),
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_review_start_response(
+                &params(Some(ReviewDelivery::Detached)),
+                &response("review-thread"),
+            )
+            .is_ok()
+        );
+        assert!(matches!(
+            validate_review_start_response(
+                &params(Some(ReviewDelivery::Detached)),
+                &response("thread"),
+            ),
+            Err(AppServerError::InvalidReviewStartResponse)
+        ));
+        assert!(matches!(
+            validate_review_start_response(
+                &params(Some(ReviewDelivery::Inline)),
+                &response("review-thread"),
+            ),
+            Err(AppServerError::InvalidReviewStartResponse)
+        ));
+        assert!(matches!(
+            validate_review_start_response(
+                &params(None),
+                &ReviewStartResponse {
+                    turn: json!({ "items": [], "status": "inProgress" }),
+                    review_thread_id: "thread".to_owned(),
+                },
+            ),
+            Err(AppServerError::InvalidReviewStartResponse)
+        ));
+        assert!(matches!(
+            validate_review_start_response(
+                &params(None),
+                &ReviewStartResponse {
+                    turn: json!({ "id": "x".repeat(257), "items": [], "status": "inProgress" }),
+                    review_thread_id: "thread".to_owned(),
+                },
+            ),
+            Err(AppServerError::InvalidReviewStartResponse)
+        ));
+        assert!(matches!(
+            validate_review_start_response(
+                &params(None),
+                &ReviewStartResponse {
+                    turn: json!({ "id": "turn", "status": "inProgress" }),
+                    review_thread_id: "thread".to_owned(),
+                },
+            ),
+            Err(AppServerError::InvalidReviewStartResponse)
+        ));
+        assert!(matches!(
+            validate_review_start_response(
+                &params(None),
+                &ReviewStartResponse {
+                    turn: json!({ "id": "turn", "items": [], "status": "unknown" }),
+                    review_thread_id: "thread".to_owned(),
+                },
+            ),
+            Err(AppServerError::InvalidReviewStartResponse)
         ));
     }
 }

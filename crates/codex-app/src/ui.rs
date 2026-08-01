@@ -51,11 +51,11 @@ use codex_core::{
     PullRequestCiStatus, PullRequestDetail, PullRequestDetailTab, PullRequestLifecycle,
     PullRequestMergeMethod, PullRequestMutation, PullRequestMutationKind, PullRequestRelationship,
     PullRequestReviewEvent, PullRequestReviewState, PullRequestState, PullRequestSummary,
-    ReasoningEffortOption, ReducedMotionPreference, RemoteControlRuntimeStatus,
-    STANDARD_SERVICE_TIER_ID, ServiceTierOption, SkillCard, SkillScope, TaskRunStatus,
-    TaskSearchResult, TaskSummary, TerminalDockLocation, TerminalTabState, ThreadGoalStatus,
-    TimelineCitation, TimelineItem, TimelineKind, UsageLimitWindow, UserInputAnswer,
-    UserInputAnswers, UserInputRequest, appearance_code_theme_supports_variant,
+    ReasoningEffortOption, ReducedMotionPreference, RemoteControlRuntimeStatus, ReviewDelivery,
+    ReviewTarget, STANDARD_SERVICE_TIER_ID, ServiceTierOption, SkillCard, SkillScope,
+    TaskRunStatus, TaskSearchResult, TaskSummary, TerminalDockLocation, TerminalTabState,
+    ThreadGoalStatus, TimelineCitation, TimelineItem, TimelineKind, UsageLimitWindow,
+    UserInputAnswer, UserInputAnswers, UserInputRequest, appearance_code_theme_supports_variant,
     composer_plugin_display_name, composer_plugin_is_mentionable, is_appearance_code_theme_id,
     reduce, validate_mcp_form_content,
 };
@@ -4516,17 +4516,22 @@ struct WorkspaceView {
     permission_picker: Entity<SelectState<SearchableVec<PickerItem>>>,
     review_base_picker: Entity<SelectState<ReviewBasePickerDelegate>>,
     review_base_query: Rc<RefCell<String>>,
+    review_start_base_picker: Entity<SelectState<ReviewBasePickerDelegate>>,
+    review_start_base_query: Rc<RefCell<String>>,
     synced_model_items: Vec<PickerItem>,
     synced_effort_items: Vec<PickerItem>,
     synced_service_tier_items: Vec<PickerItem>,
     synced_permission_items: Vec<PickerItem>,
     synced_review_base_items: Vec<ReviewBasePickerItem>,
+    synced_review_start_base_items: Vec<ReviewBasePickerItem>,
     composer_file_search_selected: usize,
     composer_file_search_dismissed_query: Option<String>,
     composer_mcp_status_open: bool,
     composer_project_picker_open: bool,
     composer_project_picker_restore: Option<String>,
     composer_fork_picker_open: bool,
+    composer_review_submenu_open: bool,
+    composer_review_submitting: bool,
     composer_status_open: bool,
     composer_status_session_copied: bool,
     remote_pairing_focus: FocusHandle,
@@ -4833,6 +4838,17 @@ impl WorkspaceView {
             )
             .searchable(true)
         });
+        let review_start_base_query = Rc::new(RefCell::new(String::new()));
+        let picker_query = Rc::clone(&review_start_base_query);
+        let review_start_base_picker = cx.new(|cx| {
+            SelectState::new(
+                ReviewBasePickerDelegate::new(Vec::new(), picker_query),
+                None,
+                window,
+                cx,
+            )
+            .searchable(true)
+        });
 
         let mut subscriptions = vec![
             cx.subscribe_in(
@@ -4853,6 +4869,9 @@ impl WorkspaceView {
                         }
                         if value.trim() != "/fork" {
                             this.composer_fork_picker_open = false;
+                        }
+                        if value.trim() != "/review" && !this.composer_review_submitting {
+                            this.composer_review_submenu_open = false;
                         }
                         if !value.trim().is_empty() {
                             this.composer_status_open = false;
@@ -5300,6 +5319,21 @@ impl WorkspaceView {
                     }
                 },
             ),
+            cx.subscribe_in(
+                &review_start_base_picker,
+                window,
+                |this, _, event: &SelectEvent<ReviewBasePickerDelegate>, window, cx| {
+                    if let SelectEvent::Confirm(Some(base)) = event {
+                        this.start_composer_review(
+                            ReviewTarget::BaseBranch {
+                                branch: base.clone(),
+                            },
+                            window,
+                            cx,
+                        );
+                    }
+                },
+            ),
         ];
         subscriptions.push(
             cx.on_blur(&keyboard_shortcut_capture_focus, window, |this, _, cx| {
@@ -5508,17 +5542,22 @@ impl WorkspaceView {
             permission_picker,
             review_base_picker,
             review_base_query,
+            review_start_base_picker,
+            review_start_base_query,
             synced_model_items: Vec::new(),
             synced_effort_items: Vec::new(),
             synced_service_tier_items: Vec::new(),
             synced_permission_items: Vec::new(),
             synced_review_base_items: Vec::new(),
+            synced_review_start_base_items: Vec::new(),
             composer_file_search_selected: 0,
             composer_file_search_dismissed_query: None,
             composer_mcp_status_open: false,
             composer_project_picker_open: false,
             composer_project_picker_restore: None,
             composer_fork_picker_open: false,
+            composer_review_submenu_open: false,
+            composer_review_submitting: false,
             composer_status_open: false,
             composer_status_session_copied: false,
             remote_pairing_focus,
@@ -6424,6 +6463,17 @@ impl WorkspaceView {
             }
             return true;
         }
+        if command == "/review" {
+            if !self.composer_review_submenu_open && !self.composer_review_available() {
+                return true;
+            }
+            if self.composer_review_submenu_open {
+                self.start_composer_review(ReviewTarget::UncommittedChanges, window, cx);
+            } else {
+                self.open_composer_review_submenu(window, cx);
+            }
+            return true;
+        }
         if command == "/mcp" {
             self.open_mcp_slash_status(window, cx);
             return true;
@@ -6504,6 +6554,62 @@ impl WorkspaceView {
             && self
                 .local_workspace_cwd()
                 .is_some_and(|cwd| cwd != Path::new("/"))
+    }
+
+    fn composer_review_available(&self) -> bool {
+        let Some(task_id) = self.state.selected_task_id.as_deref() else {
+            return false;
+        };
+        self.state.connection == ConnectionStatus::Online
+            && self.state.git.repository_root.is_some()
+            && self.state.git_preferences.review_mode == GitReviewMode::Full
+            && self.state.composer_attachments.is_empty()
+            && self.state.review_start.pending.is_none()
+            && self.state.review_start.unresolved_detached.is_none()
+            && self.state.timelines.get(task_id).is_none_or(|timeline| {
+                timeline.active_turn_id.is_none() && timeline.active_review_turn_id.is_none()
+            })
+    }
+
+    fn open_composer_review_submenu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.composer_mcp_status_open = false;
+        self.composer_project_picker_open = false;
+        self.composer_fork_picker_open = false;
+        self.composer_status_open = false;
+        self.composer_status_session_copied = false;
+        self.composer_review_submenu_open = true;
+        self.composer_review_submitting = false;
+        self.composer.update(cx, |input, cx| {
+            input.set_value("/review", window, cx);
+            input.focus(window, cx);
+        });
+        self.dispatch(Action::ComposerChanged("/review".to_owned()), cx);
+        self.sync_composer_placeholder(window, cx);
+    }
+
+    fn start_composer_review(
+        &mut self,
+        target: ReviewTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.composer_review_available() {
+            return;
+        }
+        self.composer_review_submitting = true;
+        self.composer.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+            input.focus(window, cx);
+        });
+        self.dispatch(Action::ComposerChanged(String::new()), cx);
+        self.dispatch(
+            Action::StartReview {
+                target,
+                delivery: self.state.git_preferences.review_delivery,
+            },
+            cx,
+        );
+        self.sync_composer_placeholder(window, cx);
     }
 
     fn submit_init_prompt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -10429,6 +10535,31 @@ impl WorkspaceView {
         menu
     }
 
+    fn git_review_delivery_menu(
+        mut menu: PopupMenu,
+        view: WeakEntity<Self>,
+        selected: ReviewDelivery,
+    ) -> PopupMenu {
+        for (delivery, label) in [
+            (ReviewDelivery::Inline, "Inline"),
+            (ReviewDelivery::Detached, "Detached"),
+        ] {
+            let delivery_view = view.clone();
+            menu = menu.item(
+                PopupMenuItem::new(label)
+                    .checked(selected == delivery)
+                    .on_click(move |_, _, cx| {
+                        let _ = delivery_view.update(cx, |this, cx| {
+                            let mut preferences = this.state.git_preferences.clone();
+                            preferences.review_delivery = delivery;
+                            this.dispatch(Action::SetGitPreferences(preferences), cx);
+                        });
+                    }),
+            );
+        }
+        menu
+    }
+
     fn pull_request_review_state_menu(
         mut menu: PopupMenu,
         view: WeakEntity<Self>,
@@ -11180,10 +11311,6 @@ impl WorkspaceView {
             .into_iter()
             .map(ReviewBasePickerItem::branch)
             .collect::<Vec<_>>();
-        if items == self.synced_review_base_items {
-            return;
-        }
-
         let selected = self
             .state
             .git
@@ -11191,21 +11318,36 @@ impl WorkspaceView {
             .as_ref()
             .or(self.state.git.review_default_base.as_ref())
             .cloned();
-        let picker_items = items.clone();
-        let picker_query = Rc::clone(&self.review_base_query);
-        self.review_base_picker.update(cx, |picker, cx| {
-            picker.set_items(
-                ReviewBasePickerDelegate::new(picker_items, picker_query),
-                window,
-                cx,
-            );
-            if let Some(selected) = selected.as_ref() {
-                picker.set_selected_value(selected, window, cx);
-            } else {
+        if items != self.synced_review_base_items {
+            let picker_items = items.clone();
+            let picker_query = Rc::clone(&self.review_base_query);
+            self.review_base_picker.update(cx, |picker, cx| {
+                picker.set_items(
+                    ReviewBasePickerDelegate::new(picker_items, picker_query),
+                    window,
+                    cx,
+                );
+                if let Some(selected) = selected.as_ref() {
+                    picker.set_selected_value(selected, window, cx);
+                } else {
+                    picker.set_selected_index(None, window, cx);
+                }
+            });
+            self.synced_review_base_items = items.clone();
+        }
+        if items != self.synced_review_start_base_items {
+            let picker_items = items.clone();
+            let picker_query = Rc::clone(&self.review_start_base_query);
+            self.review_start_base_picker.update(cx, |picker, cx| {
+                picker.set_items(
+                    ReviewBasePickerDelegate::new(picker_items, picker_query),
+                    window,
+                    cx,
+                );
                 picker.set_selected_index(None, window, cx);
-            }
-        });
-        self.synced_review_base_items = items;
+            });
+            self.synced_review_start_base_items = items;
+        }
     }
 
     fn render_sidebar_toggle(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -19240,6 +19382,117 @@ impl WorkspaceView {
             .into_any_element()
     }
 
+    fn render_composer_review_submenu(
+        &mut self,
+        pending: bool,
+        error: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let choices_disabled = pending || !self.composer_review_available();
+        let mut commands = Vec::with_capacity(3);
+        if let Some(error) = error {
+            commands.push(
+                div()
+                    .id("review-slash-error")
+                    .px_2()
+                    .py_1()
+                    .text_xs()
+                    .text_color(cx.theme().danger)
+                    .child(error)
+                    .into_any_element(),
+            );
+        }
+        commands.push(
+            h_flex()
+                .id("review-uncommitted-slash-command")
+                .w_full()
+                .p_2()
+                .gap_3()
+                .items_center()
+                .rounded_md()
+                .when(
+                    pointer_cursors_enabled(cx) && !choices_disabled,
+                    |element| element.cursor_pointer(),
+                )
+                .hover(|style| style.bg(cx.theme().list_hover))
+                .child(
+                    Icon::new(IconName::GitHub)
+                        .small()
+                        .text_color(cx.theme().muted_foreground),
+                )
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .child(div().text_sm().child("Review uncommitted changes"))
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("Review all staged, unstaged, and untracked changes"),
+                        ),
+                )
+                .when(pending, |element| {
+                    element.child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Starting…"),
+                    )
+                })
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.start_composer_review(ReviewTarget::UncommittedChanges, window, cx);
+                }))
+                .into_any_element(),
+        );
+        commands.push(
+            v_flex()
+                .id("review-base-slash-picker")
+                .w_full()
+                .px_2()
+                .py_1()
+                .gap_1()
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Compare against branch"),
+                )
+                .child(if pending {
+                    div()
+                        .h(px(30.0))
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .rounded_md()
+                        .bg(cx.theme().muted.opacity(0.35))
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Starting review…")
+                        .into_any_element()
+                } else {
+                    Select::new(&self.review_start_base_picker)
+                        .small()
+                        .w_full()
+                        .disabled(choices_disabled)
+                        .menu_width(px(288.0))
+                        .placeholder("Search branches")
+                        .search_placeholder("Search branches")
+                        .empty(
+                            div()
+                                .py_4()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("No branches found"),
+                        )
+                        .appearance(false)
+                        .into_any_element()
+                })
+                .into_any_element(),
+        );
+        commands
+    }
+
     fn render_fork_slash_destination(
         &mut self,
         id: &'static str,
@@ -19713,6 +19966,24 @@ impl WorkspaceView {
             self.composer.update(cx, |input, cx| {
                 input.set_value("/", window, cx);
                 input.set_cursor_position(position, window, cx);
+            });
+            self.dispatch(Action::ComposerChanged("/".to_owned()), cx);
+            cx.stop_propagation();
+            return;
+        }
+        if self.composer_review_submenu_open
+            && matches!(key.as_str(), "escape")
+            && !keystroke.modifiers.secondary()
+            && !keystroke.modifiers.alt
+            && !keystroke.modifiers.function
+        {
+            self.composer_review_submenu_open = false;
+            self.composer_review_submitting = false;
+            let position = input_position_for_offset("/", 1);
+            self.composer.update(cx, |input, cx| {
+                input.set_value("/", window, cx);
+                input.set_cursor_position(position, window, cx);
+                input.focus(window, cx);
             });
             self.dispatch(Action::ComposerChanged("/".to_owned()), cx);
             cx.stop_propagation();
@@ -20435,8 +20706,26 @@ impl WorkspaceView {
         });
         let shell_command_mode = shell_command.is_some();
         let shell_command_ready = shell_command.is_some_and(|command| !command.trim().is_empty());
+        let active_review = self
+            .state
+            .selected_task_id
+            .as_deref()
+            .and_then(|task_id| self.state.timelines.get(task_id))
+            .is_some_and(|timeline| timeline.active_review_turn_id.is_some());
+        let pending_inline_review =
+            self.state
+                .review_start
+                .pending
+                .as_ref()
+                .is_some_and(|pending| {
+                    pending.delivery == ReviewDelivery::Inline
+                        && self.state.selected_task_id.as_deref()
+                            == Some(pending.source_task_id.as_str())
+                });
         let can_submit = has_input
             && self.state.composer_error.is_none()
+            && !active_review
+            && !pending_inline_review
             && (!shell_command_mode
                 || (shell_command_ready && self.state.composer_attachments.is_empty()));
         let active_timeline = self
@@ -20561,6 +20850,26 @@ impl WorkspaceView {
         let show_mcp_status = self.composer_mcp_status_open && composer_text == "/mcp";
         let show_project_picker = self.composer_project_picker_open && composer_text == "/project";
         let show_fork_picker = self.composer_fork_picker_open && composer_text == "/fork";
+        let review_error =
+            self.state.selected_task_id.as_deref().and_then(|task_id| {
+                self.state.review_start.error.as_ref().and_then(|error| {
+                    (error.source_task_id == task_id).then(|| error.message.clone())
+                })
+            });
+        if self.composer_review_submitting
+            && self.state.review_start.pending.is_none()
+            && self.state.review_start.unresolved_detached.is_none()
+        {
+            self.composer_review_submitting = false;
+            if review_error.is_none() {
+                self.composer_review_submenu_open = false;
+            }
+        }
+        let show_review_submenu = self.composer_review_submenu_open;
+        let show_review_command = !show_review_submenu
+            && self.composer_review_available()
+            && !composer_text.is_empty()
+            && "/review".starts_with(composer_text);
         let show_slash_commands = show_chat_command
             || show_compact_command
             || show_feedback_command
@@ -20574,6 +20883,8 @@ impl WorkspaceView {
             || show_plan_command
             || show_project_command
             || show_reasoning_command
+            || show_review_command
+            || show_review_submenu
             || show_shell_command
             || !service_tier_commands.is_empty()
             || show_status_command
@@ -20653,7 +20964,7 @@ impl WorkspaceView {
             })
             .collect::<Vec<_>>();
         let mut slash_commands =
-            Vec::with_capacity(15 + service_tier_commands.len() + skill_commands.len());
+            Vec::with_capacity(16 + service_tier_commands.len() + skill_commands.len());
         if show_chat_command {
             slash_commands.push(self.render_composer_slash_command(
                 "chat-slash-command",
@@ -20704,6 +21015,22 @@ impl WorkspaceView {
                     cx,
                 ));
             }
+        }
+        if show_review_command {
+            slash_commands.push(self.render_composer_slash_submenu_command(
+                "review-slash-command",
+                "/review",
+                "Code review",
+                "Review uncommitted changes or compare against a branch",
+                IconName::GitHub,
+                cx,
+            ));
+        } else if show_review_submenu {
+            slash_commands.extend(self.render_composer_review_submenu(
+                self.state.review_start.pending.is_some(),
+                review_error,
+                cx,
+            ));
         }
         if show_goal_command {
             slash_commands.push(self.render_composer_slash_command(
@@ -32760,6 +33087,20 @@ impl WorkspaceView {
                 Self::git_pull_request_merge_method_menu(menu, merge_view.clone(), merge_method)
             })
             .into_any_element();
+        let review_delivery = preferences.review_delivery;
+        let review_delivery_view = cx.entity().downgrade();
+        let review_delivery_control = Button::new("git-review-delivery")
+            .label(match review_delivery {
+                ReviewDelivery::Inline => "Inline",
+                ReviewDelivery::Detached => "Detached",
+            })
+            .small()
+            .w(px(120.0))
+            .dropdown_caret(true)
+            .dropdown_menu(move |menu, _, _| {
+                Self::git_review_delivery_menu(menu, review_delivery_view.clone(), review_delivery)
+            })
+            .into_any_element();
         let branch_prefix_control = Input::new(&self.git_branch_prefix)
             .h(px(36.0))
             .w(px(224.0))
@@ -32785,6 +33126,12 @@ impl WorkspaceView {
                  to avoid git operations"
                     .into(),
                 review_mode_control,
+                cx,
+            ))
+            .child(self.render_browser_settings_row(
+                "Review delivery",
+                "Choose whether a review runs in this chat or a separate chat".into(),
+                review_delivery_control,
                 cx,
             ))
             .child(self.render_browser_settings_row(
@@ -40073,7 +40420,7 @@ fn composer_slash_command_for_prefix(
     if prefix.is_empty() {
         return None;
     }
-    const COMMANDS: [&str; 15] = [
+    const COMMANDS: [&str; 16] = [
         "/chat",
         "/compact",
         "/feedback",
@@ -40087,6 +40434,7 @@ fn composer_slash_command_for_prefix(
         "/plan",
         "/project",
         "/reasoning",
+        "/review",
         "/shell",
         "/status",
     ];
@@ -42226,7 +42574,15 @@ mod tests {
         );
         assert_eq!(
             composer_slash_command_for_prefix("/r", true, true, true, true),
+            None
+        );
+        assert_eq!(
+            composer_slash_command_for_prefix("/rea", true, true, true, true),
             Some("/reasoning")
+        );
+        assert_eq!(
+            composer_slash_command_for_prefix("/rev", true, true, true, true),
+            Some("/review")
         );
         assert_eq!(
             composer_slash_command_for_prefix("/s", true, true, true, true),

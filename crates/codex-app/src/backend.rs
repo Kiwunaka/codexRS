@@ -45,14 +45,14 @@ use codex_core::{
     MAX_MCP_SERVER_FIELD_BYTES, MAX_MCP_SERVER_LIST_ITEMS, MAX_PENDING_APPROVALS,
     MAX_REMOTE_CURSOR_BYTES, MAX_REMOTE_DEVICE_ID_BYTES, MAX_REMOTE_DEVICE_LABEL_BYTES,
     MAX_REMOTE_ENVIRONMENT_ID_BYTES, MAX_REMOTE_PAIRING_CODE_BYTES, MAX_RETRYABLE_TURN_MESSAGES,
-    MAX_TERMINAL_TABS, MAX_TURN_DIFF_BYTES, MAX_USER_INPUT_OPTIONS, MAX_USER_INPUT_QUESTIONS,
-    MAX_USER_INPUT_VALUE_BYTES, MAX_VISIBLE_THREADS, MAX_WORKTREE_ROOT_BYTES, MainRoute,
-    MarketplaceSourceCard, MarketplaceUpgradeFailure, McpAuthStatus as CoreMcpAuthStatus,
-    McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
-    McpElicitationContent, McpElicitationDecision, McpElicitationValue, McpFormElicitation,
-    McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpFormOption, McpFormStringFormat,
-    McpResourceCard, McpResourceContentCard, McpResourceTemplateCard, McpServerCard,
-    McpServerDraft, McpServerInfoCard,
+    MAX_TERMINAL_TABS, MAX_TIMELINE_ITEMS, MAX_TURN_DIFF_BYTES, MAX_USER_INPUT_OPTIONS,
+    MAX_USER_INPUT_QUESTIONS, MAX_USER_INPUT_VALUE_BYTES, MAX_VISIBLE_THREADS,
+    MAX_WORKTREE_ROOT_BYTES, MainRoute, MarketplaceSourceCard, MarketplaceUpgradeFailure,
+    McpAuthStatus as CoreMcpAuthStatus, McpBrowserOriginElicitation, McpBrowserResourceElicitation,
+    McpElicitation, McpElicitationContent, McpElicitationDecision, McpElicitationValue,
+    McpFormElicitation, McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpFormOption,
+    McpFormStringFormat, McpResourceCard, McpResourceContentCard, McpResourceTemplateCard,
+    McpServerCard, McpServerDraft, McpServerInfoCard,
     McpServerStartupFailureReason as CoreMcpServerStartupFailureReason,
     McpServerStartupState as CoreMcpServerStartupState, McpToolCard, McpTransportKind,
     McpUrlElicitation, ModelOption, NetworkApprovalContext as CoreNetworkApprovalContext,
@@ -68,13 +68,14 @@ use codex_core::{
     PullRequestRelationship, PullRequestReviewEvent, PullRequestState, PullRequestSummary,
     ReasoningEffortOption as CoreReasoningEffortOption, ReducedMotionPreference,
     RemoteControlRuntimeStatus, RemoteDevice, RemotePairing, RetryableTurnSubmission,
-    RetryableUserMessage, STANDARD_SERVICE_TIER_ID, ServiceTierOption, SkillCard,
-    SkillScope as CoreSkillScope, StartedImport, TaskRunStatus, TaskSearchResult, TaskSummary,
-    TerminalDockLocation, ThreadGoal as CoreThreadGoal, ThreadGoalStatus as CoreThreadGoalStatus,
-    TimelineCitation, TimelineItem, TimelineKind, TimelineSource, UsageLimitWindow,
-    UserInputAnswers, UserInputOption as CoreUserInputOption,
-    UserInputQuestion as CoreUserInputQuestion, UserInputRequest,
-    appearance_code_theme_supports_variant, computer_app_id_matches, is_appearance_code_theme_id,
+    RetryableUserMessage, ReviewDelivery as CoreReviewDelivery, ReviewTarget as CoreReviewTarget,
+    STANDARD_SERVICE_TIER_ID, ServiceTierOption, SkillCard, SkillScope as CoreSkillScope,
+    StartedImport, TaskRunStatus, TaskSearchResult, TaskSummary, TerminalDockLocation,
+    ThreadGoal as CoreThreadGoal, ThreadGoalStatus as CoreThreadGoalStatus, TimelineCitation,
+    TimelineItem, TimelineKind, TimelineSource, UsageLimitWindow, UserInputAnswers,
+    UserInputOption as CoreUserInputOption, UserInputQuestion as CoreUserInputQuestion,
+    UserInputRequest, appearance_code_theme_supports_variant, computer_app_id_matches,
+    is_appearance_code_theme_id,
 };
 use codex_platform::{
     AppServerConfig, AppServerConnection, AppServerError, AppServerEvent, ArtifactFileKind,
@@ -155,7 +156,8 @@ use codex_protocol::{
     PluginUninstallParams, RemoteControlClient, RemoteControlClientsListParams,
     RemoteControlClientsRevokeParams, RemoteControlConnectionStatus,
     RemoteControlPairingStartParams, RemoteControlPairingStatusParams,
-    RemoteControlStatusChangedNotification, SkillScope as ProtocolSkillScope,
+    RemoteControlStatusChangedNotification, ReviewDelivery as ProtocolReviewDelivery,
+    ReviewStartParams, ReviewTarget as ProtocolReviewTarget, SkillScope as ProtocolSkillScope,
     SkillsConfigWriteParams, SkillsListParams, ThreadArchiveParams, ThreadBackgroundTerminal,
     ThreadBackgroundTerminalsCleanParams, ThreadBackgroundTerminalsListParams,
     ThreadBackgroundTerminalsTerminateParams, ThreadCompactStartParams, ThreadDeleteParams,
@@ -187,6 +189,7 @@ const APP_SERVER_RECONNECT_INITIAL_DELAY: Duration = Duration::from_secs(1);
 const APP_SERVER_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(20);
 const UI_EVENT_TIMEOUT: Duration = Duration::from_millis(100);
 const HISTORY_PAGE_LIMIT: u32 = 100;
+const MAX_REVIEW_MODE_PAGES: usize = MAX_TIMELINE_ITEMS.div_ceil(HISTORY_PAGE_LIMIT as usize);
 const ARCHIVED_DELETE_PAGE_LIMIT: u32 = 200;
 const MAX_ARCHIVED_DELETE_PAGES: usize =
     MAX_VISIBLE_THREADS.div_ceil(ARCHIVED_DELETE_PAGE_LIMIT as usize);
@@ -198,6 +201,8 @@ const MAX_WEB_SEARCH_SOURCES: usize = 32;
 const MAX_CITATION_FIELD_BYTES: usize = 4 * 1024;
 const MAX_SOURCE_TITLE_BYTES: usize = 512;
 const MAX_SOURCE_URL_BYTES: usize = 8 * 1024;
+const MAX_REVIEW_ID_BYTES: usize = 256;
+const CODE_REVIEW_START_FAILED: &str = "Couldn't start review.";
 const TRUSTED_ACCESS_FOR_CYBER_WARNING: &str = "Your conversations have multiple flags for possible cybersecurity risk. Responses may take longer because extra safety checks are on. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber";
 const TRUSTED_ACCESS_FOR_CYBER_URL: &str = "https://chatgpt.com/cyber";
 const MAX_STATUS_BYTES: usize = 16 * 1024;
@@ -2451,6 +2456,7 @@ fn encode_git_preferences(preferences: &GitPreferences) -> Result<String, serde_
             preferences.pull_request_merge_method
         ),
         "reviewMode": git_review_mode_key(preferences.review_mode),
+        "reviewDelivery": review_delivery_key(preferences.review_delivery),
         "commitInstructions": preferences.commit_instructions,
         "pullRequestInstructions": preferences.pull_request_instructions,
         "worktreeRoot": preferences
@@ -2483,6 +2489,15 @@ fn parse_git_preferences(value: &str) -> Option<GitPreferences> {
         "last-turn-only" => GitReviewMode::LastTurnOnly,
         _ => return None,
     };
+    let review_delivery = match object
+        .get("reviewDelivery")
+        .and_then(Value::as_str)
+        .unwrap_or("inline")
+    {
+        "inline" => CoreReviewDelivery::Inline,
+        "detached" => CoreReviewDelivery::Detached,
+        _ => return None,
+    };
     Some(
         GitPreferences {
             branch_prefix: object.get("branchPrefix")?.as_str()?.to_owned(),
@@ -2490,6 +2505,7 @@ fn parse_git_preferences(value: &str) -> Option<GitPreferences> {
             create_pull_request_as_draft: object.get("createPullRequestAsDraft")?.as_bool()?,
             pull_request_merge_method,
             review_mode,
+            review_delivery,
             commit_instructions: object.get("commitInstructions")?.as_str()?.to_owned(),
             pull_request_instructions: object.get("pullRequestInstructions")?.as_str()?.to_owned(),
             worktree_root: object
@@ -2505,6 +2521,13 @@ const fn git_review_mode_key(mode: GitReviewMode) -> &'static str {
     match mode {
         GitReviewMode::Full => "full",
         GitReviewMode::LastTurnOnly => "last-turn-only",
+    }
+}
+
+const fn review_delivery_key(delivery: CoreReviewDelivery) -> &'static str {
+    match delivery {
+        CoreReviewDelivery::Inline => "inline",
+        CoreReviewDelivery::Detached => "detached",
     }
 }
 
@@ -6144,12 +6167,12 @@ fn run_effect(
         Effect::ResumeTask { task_id } => {
             match app_server.resume_thread(ThreadResumeParams {
                 thread_id: task_id.clone(),
-                exclude_turns: None,
+                exclude_turns: Some(true),
                 initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
                     cursor: None,
                     limit: 1,
                     sort_direction: HistorySortDirection::Desc,
-                    items_view: Some("summary".to_owned()),
+                    items_view: Some("notLoaded".to_owned()),
                 }),
             }) {
                 Ok(response) => {
@@ -6174,12 +6197,18 @@ fn run_effect(
                                 .map(core_approvals_reviewer),
                         },
                     );
-                    let latest_turn = response.thread.turns.first();
+                    let latest_turn = response
+                        .initial_turns_page
+                        .as_ref()
+                        .and_then(|page| page.data.first());
                     let active_turn_id = latest_turn
                         .filter(|turn| {
                             string_field(turn, "status").as_deref() == Some("inProgress")
                         })
                         .and_then(|turn| string_field(turn, "id"));
+                    let active_turn_is_review = active_turn_id.as_ref().is_some_and(|turn_id| {
+                        load_active_turn_review_mode(app_server, &task_id, turn_id)
+                    });
                     let run_status = latest_turn
                         .and_then(|turn| string_field(turn, "status"))
                         .and_then(|status| map_turn_status(&status));
@@ -6188,6 +6217,7 @@ fn run_effect(
                         Action::TaskRuntimeLoaded {
                             task_id,
                             active_turn_id,
+                            active_turn_is_review,
                             run_status,
                         },
                     );
@@ -6698,6 +6728,79 @@ fn run_effect(
                         message: "Could not compact this chat's context.".to_owned(),
                     },
                 );
+            }
+        }
+        Effect::StartReview {
+            generation,
+            source_task_id,
+            target,
+            delivery,
+        } => {
+            let target = match target {
+                CoreReviewTarget::UncommittedChanges => ProtocolReviewTarget::UncommittedChanges,
+                CoreReviewTarget::BaseBranch { branch } => {
+                    ProtocolReviewTarget::BaseBranch { branch }
+                }
+            };
+            let delivery = match delivery {
+                CoreReviewDelivery::Inline => ProtocolReviewDelivery::Inline,
+                CoreReviewDelivery::Detached => ProtocolReviewDelivery::Detached,
+            };
+            match app_server.start_review(ReviewStartParams {
+                thread_id: source_task_id.clone(),
+                target,
+                delivery: Some(delivery),
+            }) {
+                Ok(response) => {
+                    let turn_id = bounded(
+                        string_field(&response.turn, "id").unwrap_or_default(),
+                        MAX_REVIEW_ID_BYTES,
+                    );
+                    let turn_active =
+                        string_field(&response.turn, "status").as_deref() == Some("inProgress");
+                    let review_thread_id = bounded(response.review_thread_id, MAX_REVIEW_ID_BYTES);
+                    if turn_id.is_empty() || review_thread_id.is_empty() {
+                        emit(
+                            events,
+                            Action::ReviewStartFailed {
+                                generation,
+                                source_task_id,
+                                message: CODE_REVIEW_START_FAILED.to_owned(),
+                            },
+                        );
+                    } else {
+                        let review_task = if delivery == ProtocolReviewDelivery::Detached {
+                            app_server
+                                .read_thread(ThreadReadParams {
+                                    thread_id: review_thread_id.clone(),
+                                    include_turns: false,
+                                })
+                                .ok()
+                                .map(|response| map_task(response.thread))
+                        } else {
+                            None
+                        };
+                        emit(
+                            events,
+                            Action::ReviewStarted {
+                                generation,
+                                source_task_id,
+                                review_thread_id,
+                                turn_id,
+                                turn_active,
+                                review_task,
+                            },
+                        );
+                    }
+                }
+                Err(_) => emit(
+                    events,
+                    Action::ReviewStartFailed {
+                        generation,
+                        source_task_id,
+                        message: CODE_REVIEW_START_FAILED.to_owned(),
+                    },
+                ),
             }
         }
         Effect::RunThreadShellCommand { task_id, command } => {
@@ -13766,6 +13869,50 @@ fn map_turn_status(status: &str) -> Option<TaskRunStatus> {
     }
 }
 
+fn review_mode_marker(item: &Value) -> Option<bool> {
+    match string_field(item, "type").as_deref() {
+        Some("enteredReviewMode") => Some(true),
+        Some("exitedReviewMode") => Some(false),
+        _ => None,
+    }
+}
+
+fn newest_review_mode_from_items<'a>(items: impl IntoIterator<Item = &'a Value>) -> Option<bool> {
+    items
+        .into_iter()
+        .take(HISTORY_PAGE_LIMIT as usize)
+        .find_map(review_mode_marker)
+}
+
+fn load_active_turn_review_mode(
+    app_server: &AppServerConnection,
+    thread_id: &str,
+    turn_id: &str,
+) -> bool {
+    let mut cursor = None;
+    for _ in 0..MAX_REVIEW_MODE_PAGES {
+        let Ok(page) = app_server.list_thread_items(ThreadItemsListParams {
+            thread_id: thread_id.to_owned(),
+            limit: HISTORY_PAGE_LIMIT,
+            sort_direction: HistorySortDirection::Desc,
+            turn_id: Some(turn_id.to_owned()),
+            cursor,
+        }) else {
+            break;
+        };
+        if let Some(review_mode) =
+            newest_review_mode_from_items(page.data.iter().map(|entry| &entry.item))
+        {
+            return review_mode;
+        }
+        let Some(next_cursor) = page.next_cursor else {
+            return false;
+        };
+        cursor = Some(next_cursor);
+    }
+    true
+}
+
 fn map_account_profile(account: ProtocolAccount) -> AccountProfile {
     match account {
         ProtocolAccount::ApiKey => AccountProfile {
@@ -15558,8 +15705,8 @@ mod tests {
         NetworkPolicyAction, OutputArtifactKind, PermissionFileSystemAccess,
         PermissionRequestDetail, Personality, PluginDirectoryTab, PrimaryWindowPlacement,
         PullRequestMergeMethod, ReducedMotionPreference, RemoteControlRuntimeStatus, RemotePairing,
-        RetryableTurnSubmission, RetryableUserMessage, TimelineItem, TimelineKind, TimelineSource,
-        UserInputAnswer, UserInputAnswers,
+        RetryableTurnSubmission, RetryableUserMessage, ReviewDelivery, TimelineItem, TimelineKind,
+        TimelineSource, UserInputAnswer, UserInputAnswers,
     };
     use codex_platform::{AppServerEvent, ComputerApplication, ComputerKey};
     use codex_protocol::{
@@ -15595,16 +15742,34 @@ mod tests {
         map_mcp_elicitation, map_mcp_resource_contents, map_mcp_runtime_catalog,
         map_remote_control_snapshot, map_remote_devices_page, map_timeline_item,
         map_user_input_request, mcp_elicitation_content_json, mcp_server_config_value,
-        parse_appearance_preferences, parse_appearance_theme, parse_browser_download_preferences,
-        parse_browser_permissions, parse_computer_key_chord, parse_generated_commit_message,
-        parse_generated_commit_pull_request_messages, parse_generated_pull_request_message,
-        parse_git_preferences, parse_keyboard_shortcut_preferences, parse_primary_window_placement,
+        newest_review_mode_from_items, parse_appearance_preferences, parse_appearance_theme,
+        parse_browser_download_preferences, parse_browser_permissions, parse_computer_key_chord,
+        parse_generated_commit_message, parse_generated_commit_pull_request_messages,
+        parse_generated_pull_request_message, parse_git_preferences,
+        parse_keyboard_shortcut_preferences, parse_primary_window_placement,
         personalization_snapshot, plugin_directory_includes_marketplace,
         plugin_directory_marketplace_kinds, pull_request_generation_prompt,
         pull_request_output_schema, record_retryable_steer, remote_pairing_status_params,
         restored_browser_download, retryable_submission_inputs, run_computer_tool,
         safety_retry_fork_point, stored_browser_download, user_input_response,
     };
+
+    #[test]
+    fn resumed_turn_uses_the_latest_review_mode_marker() {
+        let entered = [json!({ "type": "enteredReviewMode" })];
+        assert_eq!(
+            newest_review_mode_from_items(entered.iter().rev()),
+            Some(true)
+        );
+        let exited = [
+            json!({ "type": "enteredReviewMode" }),
+            json!({ "type": "exitedReviewMode" }),
+        ];
+        assert_eq!(
+            newest_review_mode_from_items(exited.iter().rev()),
+            Some(false)
+        );
+    }
 
     #[test]
     fn remote_pairing_status_uses_only_the_canonical_pairing_code() {
@@ -16090,6 +16255,7 @@ mod tests {
             create_pull_request_as_draft: true,
             pull_request_merge_method: PullRequestMergeMethod::Squash,
             review_mode: GitReviewMode::LastTurnOnly,
+            review_delivery: ReviewDelivery::Detached,
             commit_instructions: "Use an imperative subject.".to_owned(),
             pull_request_instructions: "Follow the repository template.".to_owned(),
             worktree_root: Some(worktree_root),
@@ -16112,15 +16278,23 @@ mod tests {
         invalid_merge_method["pullRequestMergeMethod"] = json!("rebase");
         assert!(parse_git_preferences(&invalid_merge_method.to_string()).is_none());
 
+        let Ok(mut invalid_review_delivery) = serde_json::from_str::<Value>(&encoded) else {
+            panic!("encoded Git preferences must be valid JSON");
+        };
+        invalid_review_delivery["reviewDelivery"] = json!("mail");
+        assert!(parse_git_preferences(&invalid_review_delivery.to_string()).is_none());
+
         let Ok(mut legacy) = serde_json::from_str::<Value>(&encoded) else {
             panic!("encoded Git preferences must be valid JSON");
         };
         if let Some(object) = legacy.as_object_mut() {
             object.remove("reviewMode");
+            object.remove("reviewDelivery");
         }
         assert_eq!(
-            parse_git_preferences(&legacy.to_string()).map(|value| value.review_mode),
-            Some(GitReviewMode::Full)
+            parse_git_preferences(&legacy.to_string())
+                .map(|value| (value.review_mode, value.review_delivery)),
+            Some((GitReviewMode::Full, ReviewDelivery::Inline))
         );
     }
 

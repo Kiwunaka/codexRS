@@ -1375,6 +1375,38 @@ pub struct ThreadCompactStartParams {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ThreadCompactStartResponse {}
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewStartParams {
+    pub thread_id: String,
+    pub target: ReviewTarget,
+    #[serde(default)]
+    pub delivery: Option<ReviewDelivery>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReviewDelivery {
+    Inline,
+    Detached,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ReviewTarget {
+    UncommittedChanges,
+    BaseBranch { branch: String },
+    Commit { sha: String, title: Option<String> },
+    Custom { instructions: String },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewStartResponse {
+    pub turn: Value,
+    pub review_thread_id: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadShellCommandParams {
@@ -1598,6 +1630,8 @@ pub struct ThreadResumeInitialTurnsPageParams {
 #[serde(rename_all = "camelCase")]
 pub struct ThreadResumeResponse {
     pub thread: ThreadSummary,
+    #[serde(default)]
+    pub initial_turns_page: Option<ThreadTurnsListResponse>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
@@ -3443,10 +3477,11 @@ mod tests {
         FuzzyFileSearchSessionCompletedNotification, FuzzyFileSearchSessionStartParams,
         FuzzyFileSearchSessionUpdateParams, FuzzyFileSearchSessionUpdatedNotification,
         GetAccountParams, GetAccountRateLimitsResponse, GetAccountResponse, GetAuthStatusParams,
-        GetAuthStatusResponse, GitDiffToRemoteParams, GitDiffToRemoteResponse, HookEventName,
-        HookHandlerType, HookSource, HookTrustStatus, HooksListParams, HooksListResponse,
-        IncomingMessage, InitializeParams, ListMcpServerStatusParams, ListMcpServerStatusResponse,
-        LoginAccountParams, LoginAccountResponse, MarketplaceAddParams, MarketplaceRemoveParams,
+        GetAuthStatusResponse, GitDiffToRemoteParams, GitDiffToRemoteResponse,
+        HistorySortDirection, HookEventName, HookHandlerType, HookSource, HookTrustStatus,
+        HooksListParams, HooksListResponse, IncomingMessage, InitializeParams,
+        ListMcpServerStatusParams, ListMcpServerStatusResponse, LoginAccountParams,
+        LoginAccountResponse, MarketplaceAddParams, MarketplaceRemoveParams,
         MarketplaceUpgradeParams, McpAuthStatus, McpElicitationPrimitiveSchema,
         McpResourceReadParams, McpResourceReadResponse, McpServerElicitationAction,
         McpServerElicitationRequest, McpServerElicitationRequestParams,
@@ -3468,22 +3503,24 @@ mod tests {
         RemoteControlEnableResponse, RemoteControlPairingStartParams,
         RemoteControlPairingStartResponse, RemoteControlPairingStatusParams,
         RemoteControlPairingStatusResponse, RemoteControlStatusChangedNotification,
-        RemoteControlStatusReadResponse, SkillScope, SkillsConfigWriteParams,
-        SkillsConfigWriteResponse, SkillsListParams, SkillsListResponse, ThreadArchiveParams,
+        RemoteControlStatusReadResponse, ReviewDelivery, ReviewStartParams, ReviewStartResponse,
+        ReviewTarget, SkillScope, SkillsConfigWriteParams, SkillsConfigWriteResponse,
+        SkillsListParams, SkillsListResponse, ThreadArchiveParams,
         ThreadBackgroundTerminalsCleanResponse, ThreadBackgroundTerminalsListParams,
         ThreadBackgroundTerminalsListResponse, ThreadBackgroundTerminalsTerminateParams,
         ThreadBackgroundTerminalsTerminateResponse, ThreadCompactStartParams,
         ThreadCompactStartResponse, ThreadDeleteParams, ThreadForkParams, ThreadGoal,
         ThreadGoalGetResponse, ThreadGoalSetParams, ThreadGoalStatus, ThreadListParams,
         ThreadLoadedListParams, ThreadLoadedListResponse, ThreadMemoryMode,
-        ThreadMemoryModeSetParams, ThreadMemoryModeSetResponse, ThreadResumeResponse,
-        ThreadRollbackParams, ThreadRollbackResponse, ThreadSearchParams, ThreadSetNameParams,
-        ThreadSettingsUpdateParams, ThreadShellCommandParams, ThreadShellCommandResponse,
-        ThreadStartParams, ThreadTokenUsageUpdatedNotification, ThreadUnarchiveParams,
-        ThreadUnsubscribeParams, ThreadUnsubscribeResponse, ThreadUnsubscribeStatus,
-        ToolRequestUserInputAnswer, ToolRequestUserInputParams, ToolRequestUserInputResponse,
-        TurnInterruptParams, TurnStartParams, TurnSteerParams, UserInput, decode_incoming,
-        encode_json_line, read_bounded_frame,
+        ThreadMemoryModeSetParams, ThreadMemoryModeSetResponse, ThreadResumeInitialTurnsPageParams,
+        ThreadResumeParams, ThreadResumeResponse, ThreadRollbackParams, ThreadRollbackResponse,
+        ThreadSearchParams, ThreadSetNameParams, ThreadSettingsUpdateParams,
+        ThreadShellCommandParams, ThreadShellCommandResponse, ThreadStartParams,
+        ThreadTokenUsageUpdatedNotification, ThreadUnarchiveParams, ThreadUnsubscribeParams,
+        ThreadUnsubscribeResponse, ThreadUnsubscribeStatus, ToolRequestUserInputAnswer,
+        ToolRequestUserInputParams, ToolRequestUserInputResponse, TurnInterruptParams,
+        TurnStartParams, TurnSteerParams, UserInput, decode_incoming, encode_json_line,
+        read_bounded_frame,
     };
 
     fn limit(value: usize) -> NonZeroUsize {
@@ -3902,6 +3939,134 @@ mod tests {
             b"{\"method\":\"thread/compact/start\",\"id\":11,\"params\":{\"threadId\":\"thread-1\"}}\n"
         );
         assert!(serde_json::from_value::<ThreadCompactStartResponse>(json!({})).is_ok());
+    }
+
+    #[test]
+    fn review_start_targets_and_deliveries_match_the_pinned_contract() {
+        let cases = [
+            (
+                ReviewTarget::UncommittedChanges,
+                ReviewDelivery::Inline,
+                json!({ "type": "uncommittedChanges" }),
+                json!("inline"),
+            ),
+            (
+                ReviewTarget::BaseBranch {
+                    branch: "main".to_owned(),
+                },
+                ReviewDelivery::Detached,
+                json!({ "type": "baseBranch", "branch": "main" }),
+                json!("detached"),
+            ),
+            (
+                ReviewTarget::Commit {
+                    sha: "abc123".to_owned(),
+                    title: Some("Fix review flow".to_owned()),
+                },
+                ReviewDelivery::Inline,
+                json!({ "type": "commit", "sha": "abc123", "title": "Fix review flow" }),
+                json!("inline"),
+            ),
+            (
+                ReviewTarget::Custom {
+                    instructions: "Check error handling".to_owned(),
+                },
+                ReviewDelivery::Detached,
+                json!({ "type": "custom", "instructions": "Check error handling" }),
+                json!("detached"),
+            ),
+        ];
+
+        for (target, delivery, expected_target, expected_delivery) in cases {
+            assert_eq!(serde_json::to_value(target).ok(), Some(expected_target));
+            assert_eq!(serde_json::to_value(delivery).ok(), Some(expected_delivery));
+        }
+    }
+
+    #[test]
+    fn review_start_delivery_is_nullable_and_optional_when_deserializing() {
+        let params = ReviewStartParams {
+            thread_id: "thread-1".to_owned(),
+            target: ReviewTarget::Commit {
+                sha: "abc123".to_owned(),
+                title: None,
+            },
+            delivery: None,
+        };
+        assert_eq!(
+            serde_json::to_value(params).ok(),
+            Some(json!({
+                "threadId": "thread-1",
+                "target": { "type": "commit", "sha": "abc123", "title": null },
+                "delivery": null
+            }))
+        );
+
+        assert!(matches!(
+            serde_json::from_value::<ReviewStartParams>(json!({
+                "threadId": "thread-1",
+                "target": { "type": "uncommittedChanges" }
+            })),
+            Ok(ReviewStartParams {
+                thread_id,
+                target: ReviewTarget::UncommittedChanges,
+                delivery: None,
+            }) if thread_id == "thread-1"
+        ));
+    }
+
+    #[test]
+    fn review_start_response_matches_the_pinned_contract() {
+        assert!(matches!(
+            serde_json::from_value::<ReviewStartResponse>(json!({
+                "turn": { "id": "turn-1", "items": [], "status": "inProgress" },
+                "reviewThreadId": "review-thread-1"
+            })),
+            Ok(ReviewStartResponse { turn, review_thread_id })
+                if turn == json!({ "id": "turn-1", "items": [], "status": "inProgress" })
+                    && review_thread_id == "review-thread-1"
+        ));
+    }
+
+    #[test]
+    fn thread_resume_uses_a_bounded_initial_turns_page() {
+        assert_eq!(
+            serde_json::to_value(ThreadResumeParams {
+                thread_id: "thread-1".to_owned(),
+                exclude_turns: Some(true),
+                initial_turns_page: Some(ThreadResumeInitialTurnsPageParams {
+                    cursor: None,
+                    limit: 1,
+                    sort_direction: HistorySortDirection::Desc,
+                    items_view: Some("notLoaded".to_owned()),
+                }),
+            })
+            .ok(),
+            Some(json!({
+                "threadId": "thread-1",
+                "excludeTurns": true,
+                "initialTurnsPage": {
+                    "limit": 1,
+                    "sortDirection": "desc",
+                    "itemsView": "notLoaded"
+                }
+            }))
+        );
+        let response = serde_json::from_value::<ThreadResumeResponse>(json!({
+            "thread": { "id": "thread-1", "turns": [] },
+            "initialTurnsPage": {
+                "data": [{ "id": "turn-2", "items": [], "status": "inProgress" }],
+                "nextCursor": null,
+                "backwardsCursor": "turn-cursor"
+            }
+        }));
+        assert!(matches!(
+            response,
+            Ok(ThreadResumeResponse { thread, initial_turns_page: Some(page), .. })
+                if thread.turns.is_empty()
+                    && page.data.len() == 1
+                    && page.data[0].get("id").and_then(Value::as_str) == Some("turn-2")
+        ));
     }
 
     #[test]
