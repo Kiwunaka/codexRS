@@ -110,6 +110,15 @@ modifying or extracting the installed app.
 | Windows | partial | Core smoke path passes; complete packaging, signing, native browser/Computer Use integration, notifications, and accessibility |
 | Linux | platform | CI builds; Browser and Outputs resolve the bounded standard XDG Downloads directory; complete Wayland portals, desktop matrix, packaging, notifications, global shortcuts, and parity smoke tests |
 
+### Multi-file diff baseline
+
+Whole-source Changes views group bounded patches by file, keep every file
+expanded by default, and expose keyboard-focusable per-file fold controls.
+Unified and Split layouts apply across Last Turn, Uncommitted, Committed, and
+Branch sources; exact Unstaged and Staged file scopes retain their existing
+review and staging controls. Syntax highlighting, inline comments, per-hunk
+actions, and guarded revert controls remain open.
+
 ### Keyboard accessibility baseline
 
 Local project rows are native tab stops with Enter/Space activation and a
