@@ -12219,44 +12219,55 @@ impl WorkspaceView {
                         row.hover(|style| style.bg(cx.theme().list_hover))
                     })
                     .child(
-                        h_flex()
-                            .id(SharedString::from(format!("select-project-{key:016x}")))
+                        Button::new(SharedString::from(format!("select-project-{key:016x}")))
                             .flex_1()
                             .min_w_0()
-                            .gap_2()
+                            .h_full()
+                            .px_0()
                             .items_center()
+                            .justify_start()
+                            .custom(ButtonCustomVariant::new(cx))
+                            .high_contrast_focus()
                             .when(pointer_cursors_enabled(cx), |element| {
                                 element.cursor_pointer()
                             })
                             .child(
-                                Icon::new(if available {
-                                    IconName::FolderClosed
-                                } else {
-                                    IconName::TriangleAlert
-                                })
-                                .xsmall()
-                                .text_color(if available {
-                                    cx.theme().muted_foreground
-                                } else {
-                                    cx.theme().warning
-                                }),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
+                                h_flex()
+                                    .w_full()
                                     .min_w_0()
-                                    .text_sm()
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .truncate()
-                                    .child(name),
-                            )
-                            .when(pinned, |label| {
-                                label.child(
-                                    Icon::new(IconName::Star)
+                                    .gap_2()
+                                    .child(
+                                        Icon::new(if available {
+                                            IconName::FolderClosed
+                                        } else {
+                                            IconName::TriangleAlert
+                                        })
                                         .xsmall()
-                                        .text_color(cx.theme().muted_foreground),
-                                )
-                            })
+                                        .text_color(
+                                            if available {
+                                                cx.theme().muted_foreground
+                                            } else {
+                                                cx.theme().warning
+                                            },
+                                        ),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .text_sm()
+                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                            .truncate()
+                                            .child(name),
+                                    )
+                                    .when(pinned, |label| {
+                                        label.child(
+                                            Icon::new(IconName::Star)
+                                                .xsmall()
+                                                .text_color(cx.theme().muted_foreground),
+                                        )
+                                    }),
+                            )
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if available {
                                     this.dispatch(Action::SelectWorkspace(select_path.clone()), cx);
