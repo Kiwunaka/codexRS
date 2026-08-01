@@ -36742,9 +36742,6 @@ impl WorkspaceView {
                     .bg(cx.theme().popover)
                     .shadow_xl()
                     .occlude()
-                    .track_focus(&self.remote_confirmation_focus)
-                    .tab_group()
-                    .tab_stop(true)
                     .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
                     .child(
                         div()
@@ -36797,9 +36794,6 @@ impl WorkspaceView {
                     .bg(cx.theme().popover)
                     .shadow_xl()
                     .occlude()
-                    .track_focus(&self.remote_confirmation_focus)
-                    .tab_group()
-                    .tab_stop(true)
                     .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
                     .child(
                         div()
@@ -37023,9 +37017,6 @@ impl WorkspaceView {
                     .bg(cx.theme().popover)
                     .shadow_xl()
                     .occlude()
-                    .track_focus(&self.remote_confirmation_focus)
-                    .tab_group()
-                    .tab_stop(true)
                     .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
                     .child(
                         div()
@@ -37933,6 +37924,9 @@ impl WorkspaceView {
                     .bg(cx.theme().popover)
                     .shadow_xl()
                     .occlude()
+                    .track_focus(&self.remote_confirmation_focus)
+                    .tab_group()
+                    .tab_stop(true)
                     .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
                     .child(
                         div()
@@ -37980,6 +37974,9 @@ impl WorkspaceView {
                     .bg(cx.theme().popover)
                     .shadow_xl()
                     .occlude()
+                    .track_focus(&self.remote_confirmation_focus)
+                    .tab_group()
+                    .tab_stop(true)
                     .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
                     .child(
                         div()
@@ -38041,6 +38038,9 @@ impl WorkspaceView {
                     .bg(cx.theme().popover)
                     .shadow_xl()
                     .occlude()
+                    .track_focus(&self.remote_confirmation_focus)
+                    .tab_group()
+                    .tab_stop(true)
                     .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
                     .child(
                         div()
