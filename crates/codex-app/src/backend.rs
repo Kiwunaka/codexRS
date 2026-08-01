@@ -6251,7 +6251,10 @@ fn run_effect(
                 }
             }
         }
-        Effect::ResumeTask { task_id } => {
+        Effect::ResumeTask {
+            task_id,
+            generation,
+        } => {
             match app_server.resume_thread(ThreadResumeParams {
                 thread_id: task_id.clone(),
                 exclude_turns: Some(true),
@@ -6303,6 +6306,7 @@ fn run_effect(
                         events,
                         Action::TaskRuntimeLoaded {
                             task_id,
+                            generation,
                             active_turn_id,
                             active_turn_is_review,
                             run_status,
@@ -6918,8 +6922,10 @@ fn run_effect(
             approvals_reviewer,
             attachments,
             plan_mode,
+            goal_objective,
         } => {
-            if let Err(error) = start_turn(
+            let goal_task_id = task_id.clone();
+            match start_turn(
                 app_server,
                 StartTurnRequest {
                     task_id,
@@ -6941,10 +6947,51 @@ fn run_effect(
                 browser_permissions,
                 retryable_turns,
             ) {
-                emit(
-                    events,
-                    Action::SetStatus(format!("failed to start turn: {error}")),
-                );
+                Ok(()) => {
+                    if let Some(objective) = goal_objective {
+                        match app_server.set_thread_goal(ThreadGoalSetParams {
+                            thread_id: goal_task_id.clone(),
+                            objective: Some(objective),
+                            status: Some(ProtocolThreadGoalStatus::Active),
+                            token_budget: None,
+                        }) {
+                            Ok(response) => {
+                                emit(events, Action::GoalUpdated(map_thread_goal(response.goal)));
+                                emit(
+                                    events,
+                                    Action::MaybeContinueGoal {
+                                        task_id: goal_task_id,
+                                    },
+                                );
+                            }
+                            Err(error) => emit(
+                                events,
+                                Action::GoalLoadFailed {
+                                    task_id: goal_task_id,
+                                    message: format!(
+                                        "failed to set goal after starting attachment turn: {error}"
+                                    ),
+                                },
+                            ),
+                        }
+                    }
+                }
+                Err(error) => {
+                    if goal_objective.is_some() {
+                        emit(
+                            events,
+                            Action::GoalLoadFailed {
+                                task_id: goal_task_id,
+                                message: format!("failed to start Goal attachment turn: {error}"),
+                            },
+                        );
+                    } else {
+                        emit(
+                            events,
+                            Action::SetStatus(format!("failed to start turn: {error}")),
+                        );
+                    }
+                }
             }
         }
         Effect::SteerTurn {
@@ -16337,6 +16384,45 @@ mod tests {
         assert!(matches!(
             &input[1],
             UserInput::Skill { name, path } if name == "review" && path == &skill_path
+        ));
+    }
+
+    #[test]
+    fn composer_inputs_serialize_goal_file_attachments_as_public_user_inputs() {
+        let document_path = if cfg!(windows) {
+            PathBuf::from(r"C:\repo\AGENTS.md")
+        } else {
+            PathBuf::from("/repo/AGENTS.md")
+        };
+        let image_path = document_path.with_file_name("screen.png");
+        let input = composer_inputs(
+            "/goal Finish the release".to_owned(),
+            vec![
+                ComposerAttachment {
+                    path: document_path.clone(),
+                    name: "AGENTS.md".to_owned(),
+                    kind: ComposerAttachmentKind::Mention,
+                },
+                ComposerAttachment {
+                    path: image_path.clone(),
+                    name: "screen.png".to_owned(),
+                    kind: ComposerAttachmentKind::LocalImage,
+                },
+            ],
+        );
+
+        assert_eq!(input.len(), 3);
+        assert!(matches!(
+            &input[0],
+            UserInput::Text { text, .. } if text == "/goal Finish the release"
+        ));
+        assert!(matches!(
+            &input[1],
+            UserInput::Mention { name, path } if name == "AGENTS.md" && path == &document_path
+        ));
+        assert!(matches!(
+            &input[2],
+            UserInput::LocalImage { path, detail } if path == &image_path && detail.is_none()
         ));
     }
 
