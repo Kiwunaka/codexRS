@@ -168,9 +168,9 @@ use codex_protocol::{
     ThreadResumeInitialTurnsPageParams, ThreadResumeParams, ThreadRollbackParams,
     ThreadSearchParams, ThreadSetNameParams, ThreadSettingsUpdateParams, ThreadShellCommandParams,
     ThreadStartParams, ThreadTokenUsageUpdatedNotification, ThreadTurnsListParams,
-    ThreadUnarchiveParams, ThreadUnsubscribeParams, ThreadUnsubscribeResponse,
-    ToolRequestUserInputAnswer, ToolRequestUserInputParams, ToolRequestUserInputResponse,
-    TurnDiffUpdatedNotification, TurnInterruptParams, TurnStartParams, TurnSteerParams, UserInput,
+    ThreadUnarchiveParams, ThreadUnsubscribeParams, ToolRequestUserInputAnswer,
+    ToolRequestUserInputParams, ToolRequestUserInputResponse, TurnDiffUpdatedNotification,
+    TurnInterruptParams, TurnStartParams, TurnSteerParams, UserInput,
 };
 use codex_storage::{
     BrowserDownloadRecordStatus, MAX_BROWSER_DOWNLOAD_RECORDS, Store, StoredBrowserDownload,
@@ -8882,12 +8882,9 @@ fn structured_turn_error(status: &str, detail: Option<&str>) -> String {
 }
 
 fn unsubscribe_thread(app_server: &AppServerConnection, thread_id: &str) {
-    let _: Result<ThreadUnsubscribeResponse, _> = app_server.request(
-        "thread/unsubscribe",
-        ThreadUnsubscribeParams {
-            thread_id: thread_id.to_owned(),
-        },
-    );
+    let _ = app_server.unsubscribe_thread(ThreadUnsubscribeParams {
+        thread_id: thread_id.to_owned(),
+    });
 }
 
 fn composer_rich_mention(name: &str, path: &Path) -> String {

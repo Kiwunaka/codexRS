@@ -52,9 +52,10 @@ use codex_protocol::{
     ThreadSearchParams, ThreadSearchResponse, ThreadSetNameParams, ThreadSettingsUpdateParams,
     ThreadSettingsUpdateResponse, ThreadShellCommandParams, ThreadShellCommandResponse,
     ThreadStartParams, ThreadStartResponse, ThreadTurnsListParams, ThreadTurnsListResponse,
-    ThreadUnarchiveParams, ThreadUnarchiveResponse, TurnInterruptParams, TurnStartParams,
-    TurnStartResponse, TurnSteerParams, decode_incoming, decode_result, encode_error_response,
-    encode_json_line, encode_success_response, encode_unsupported_request, read_bounded_frame,
+    ThreadUnarchiveParams, ThreadUnarchiveResponse, ThreadUnsubscribeParams,
+    ThreadUnsubscribeResponse, TurnInterruptParams, TurnStartParams, TurnStartResponse,
+    TurnSteerParams, decode_incoming, decode_result, encode_error_response, encode_json_line,
+    encode_success_response, encode_unsupported_request, read_bounded_frame,
 };
 use crossbeam_channel::{
     Receiver as CrossbeamReceiver, SendTimeoutError, Sender as CrossbeamSender, TrySendError,
@@ -1063,6 +1064,14 @@ impl AppServerConnection {
     pub fn archive_thread(&self, params: ThreadArchiveParams) -> Result<Value, AppServerError> {
         self.require_initialized()?;
         self.request("thread/archive", params)
+    }
+
+    pub fn unsubscribe_thread(
+        &self,
+        params: ThreadUnsubscribeParams,
+    ) -> Result<ThreadUnsubscribeResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("thread/unsubscribe", params)
     }
 
     pub fn unarchive_thread(
@@ -2198,19 +2207,19 @@ mod tests {
     use codex_protocol::{
         RemoteControlClientsListParams, RemoteControlClientsRevokeParams,
         RemoteControlPairingStatusParams, ReviewDelivery, ReviewStartParams, ReviewStartResponse,
-        ReviewTarget,
+        ReviewTarget, ThreadUnsubscribeParams, ThreadUnsubscribeStatus,
     };
     use crossbeam_channel::bounded;
     use serde_json::{Value, json};
 
     use super::{
-        AppServerError, AppServerEvent, CodexHome, CodexHomeKind, EVENT_BACKPRESSURE_TIMEOUT,
-        MAX_REMOTE_CONTROL_CURSOR_BYTES, MAX_REMOTE_CONTROL_IDENTIFIER_BYTES,
-        MAX_REMOTE_CONTROL_PAIRING_CODE_BYTES, MAX_THREAD_PAGE_LIMIT, RoutedReaderEvent,
-        notification_requires_resync, publish_notification, send_routed_reader_event,
-        validate_remote_control_clients_list, validate_remote_control_clients_revoke,
-        validate_remote_control_pairing_status, validate_review_start_params,
-        validate_review_start_response,
+        AppServerConfig, AppServerConnection, AppServerError, AppServerEvent, CodexHome,
+        CodexHomeKind, EVENT_BACKPRESSURE_TIMEOUT, MAX_REMOTE_CONTROL_CURSOR_BYTES,
+        MAX_REMOTE_CONTROL_IDENTIFIER_BYTES, MAX_REMOTE_CONTROL_PAIRING_CODE_BYTES,
+        MAX_THREAD_PAGE_LIMIT, RoutedReaderEvent, RouterCommand, notification_requires_resync,
+        publish_notification, send_routed_reader_event, validate_remote_control_clients_list,
+        validate_remote_control_clients_revoke, validate_remote_control_pairing_status,
+        validate_review_start_params, validate_review_start_response,
     };
 
     #[test]
@@ -2233,6 +2242,82 @@ mod tests {
         assert!(home.path().is_absolute());
         assert_eq!(home.kind(), CodexHomeKind::Configured);
         assert_eq!(MAX_THREAD_PAGE_LIMIT, 100);
+    }
+
+    #[test]
+    fn unsubscribe_thread_requires_initialization_and_uses_the_typed_wire_contract() {
+        let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("target")
+            .join("test-fixtures")
+            .join("unsubscribe-thread-home");
+        if let Err(error) = fs::create_dir_all(&fixture) {
+            panic!("could not create test fixture: {error}");
+        }
+        let home = match CodexHome::resolve(Some(fixture)) {
+            Ok(home) => home,
+            Err(error) => panic!("could not resolve test home: {error}"),
+        };
+        let (commands, command_receiver) = bounded(1);
+        let (_events_sender, events) = bounded(1);
+        let connection = AppServerConnection {
+            config: AppServerConfig::new(PathBuf::from("codex"), home),
+            commands,
+            events,
+            next_request_id: std::sync::atomic::AtomicU64::new(0),
+            initialized: std::sync::atomic::AtomicBool::new(false),
+            closed: std::sync::atomic::AtomicBool::new(false),
+            router_thread: None,
+        };
+        let params = ThreadUnsubscribeParams {
+            thread_id: "thread-1".to_owned(),
+        };
+
+        assert!(matches!(
+            connection.unsubscribe_thread(params.clone()),
+            Err(AppServerError::NotInitialized)
+        ));
+
+        connection
+            .initialized
+            .store(true, std::sync::atomic::Ordering::Release);
+        let (observed_sender, observed_receiver) = bounded(1);
+        let router = std::thread::spawn(move || {
+            let command = match command_receiver.recv_timeout(Duration::from_secs(1)) {
+                Ok(command) => command,
+                Err(error) => panic!("did not receive unsubscribe request: {error}"),
+            };
+            match command {
+                RouterCommand::Request {
+                    method,
+                    frame,
+                    reply,
+                    ..
+                } => {
+                    assert!(observed_sender.send((method, frame)).is_ok());
+                    assert!(reply.send(Ok(json!({ "status": "unsubscribed" }))).is_ok());
+                }
+                RouterCommand::Frame(_) | RouterCommand::Shutdown(_) => {
+                    panic!("expected an unsubscribe request")
+                }
+            }
+        });
+
+        assert!(matches!(
+            connection.unsubscribe_thread(params),
+            Ok(response) if response.status == ThreadUnsubscribeStatus::Unsubscribed
+        ));
+        let (method, frame) = match observed_receiver.recv_timeout(Duration::from_secs(1)) {
+            Ok(observed) => observed,
+            Err(error) => panic!("did not observe unsubscribe request: {error}"),
+        };
+        assert_eq!(method, "thread/unsubscribe");
+        assert_eq!(
+            frame,
+            b"{\"method\":\"thread/unsubscribe\",\"id\":0,\"params\":{\"threadId\":\"thread-1\"}}\n"
+        );
+        assert!(router.join().is_ok());
     }
 
     #[test]
