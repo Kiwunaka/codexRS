@@ -1535,6 +1535,60 @@ impl SelectItem for PickerItem {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct PermissionPickerItem {
+    id: String,
+    title: SharedString,
+    description: Option<SharedString>,
+}
+
+impl PermissionPickerItem {
+    fn new(
+        id: impl Into<String>,
+        title: impl Into<SharedString>,
+        description: Option<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            title: title.into(),
+            description: description.map(SharedString::from),
+        }
+    }
+}
+
+impl SelectItem for PermissionPickerItem {
+    type Value = String;
+
+    fn title(&self) -> SharedString {
+        self.title.clone()
+    }
+
+    fn render(&self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        v_flex()
+            .w_full()
+            .h(px(52.0))
+            .min_w_0()
+            .justify_center()
+            .gap_0p5()
+            .overflow_hidden()
+            .child(div().child(self.title.clone()))
+            .when_some(self.description.clone(), |item, description| {
+                item.child(
+                    div()
+                        .text_xs()
+                        .line_height(px(17.0))
+                        .whitespace_normal()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(description),
+                )
+            })
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.id
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct ReviewBasePickerItem {
     value: String,
     custom: bool,
@@ -4515,7 +4569,7 @@ struct WorkspaceView {
     model_picker: Entity<SelectState<SearchableVec<PickerItem>>>,
     effort_picker: Entity<SelectState<SearchableVec<PickerItem>>>,
     service_tier_picker: Entity<SelectState<SearchableVec<PickerItem>>>,
-    permission_picker: Entity<SelectState<SearchableVec<PickerItem>>>,
+    permission_picker: Entity<SelectState<SearchableVec<PermissionPickerItem>>>,
     review_base_picker: Entity<SelectState<ReviewBasePickerDelegate>>,
     review_base_query: Rc<RefCell<String>>,
     review_start_base_picker: Entity<SelectState<ReviewBasePickerDelegate>>,
@@ -4523,7 +4577,7 @@ struct WorkspaceView {
     synced_model_items: Vec<PickerItem>,
     synced_effort_items: Vec<PickerItem>,
     synced_service_tier_items: Vec<PickerItem>,
-    synced_permission_items: Vec<PickerItem>,
+    synced_permission_items: Vec<PermissionPickerItem>,
     synced_review_base_items: Vec<ReviewBasePickerItem>,
     synced_review_start_base_items: Vec<ReviewBasePickerItem>,
     composer_file_search_selected: usize,
@@ -4823,7 +4877,7 @@ impl WorkspaceView {
         });
         let permission_picker = cx.new(|cx| {
             SelectState::new(
-                SearchableVec::new(Vec::<PickerItem>::new()),
+                SearchableVec::new(Vec::<PermissionPickerItem>::new()),
                 None,
                 window,
                 cx,
@@ -5306,7 +5360,7 @@ impl WorkspaceView {
             cx.subscribe_in(
                 &permission_picker,
                 window,
-                |this, _, event: &SelectEvent<SearchableVec<PickerItem>>, _, cx| {
+                |this, _, event: &SelectEvent<SearchableVec<PermissionPickerItem>>, _, cx| {
                     if let SelectEvent::Confirm(Some(mode_id)) = event {
                         this.dispatch(Action::SelectPermissionMode(mode_id.clone()), cx);
                     }
@@ -11233,7 +11287,13 @@ impl WorkspaceView {
             .permission_modes
             .iter()
             .filter(|mode| mode.allowed)
-            .map(|mode| PickerItem::new(mode.id.clone(), mode.label.clone()))
+            .map(|mode| {
+                PermissionPickerItem::new(
+                    mode.id.clone(),
+                    mode.label.clone(),
+                    mode.description.clone(),
+                )
+            })
             .collect::<Vec<_>>();
         if permission_items != self.synced_permission_items {
             let selected = self
@@ -21293,7 +21353,7 @@ impl WorkspaceView {
                                         Select::new(&self.permission_picker)
                                             .small()
                                             .w(px(permission_width))
-                                            .menu_width(px(240.0))
+                                            .menu_width(px(320.0))
                                             .placeholder("Permissions")
                                             .disabled(
                                                 shell_command_mode
