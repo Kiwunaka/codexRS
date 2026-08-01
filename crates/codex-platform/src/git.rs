@@ -1226,7 +1226,36 @@ fn valid_worktree_path(root: &Path, worktree_path: &Path) -> bool {
     let Some(worktree_path) = normalized_absolute_path(worktree_path) else {
         return false;
     };
+    #[cfg(windows)]
+    let Some(root) = canonicalize_windows_path(&root) else {
+        return false;
+    };
+    #[cfg(windows)]
+    let Some(worktree_path) = canonicalize_windows_path(&worktree_path) else {
+        return false;
+    };
     !worktree_path.starts_with(root)
+}
+
+#[cfg(windows)]
+fn canonicalize_windows_path(path: &Path) -> Option<PathBuf> {
+    let mut ancestor = path;
+    let mut missing = Vec::<OsString>::new();
+    loop {
+        match fs::canonicalize(ancestor) {
+            Ok(mut canonical) => {
+                for component in missing.into_iter().rev() {
+                    canonical.push(component);
+                }
+                return Some(canonical);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                missing.push(ancestor.file_name()?.to_owned());
+                ancestor = ancestor.parent()?;
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 fn normalized_absolute_path(path: &Path) -> Option<PathBuf> {
@@ -2342,6 +2371,28 @@ mod tests {
                 .join("worktrees/feature")
         ));
         assert!(!valid_worktree_path(root, Path::new("../repo-feature")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_worktree_paths_resolve_filesystem_aliases() -> Result<(), super::GitError> {
+        let directory = temporary_git_repository("codexrs-worktree-path-alias")?;
+        let root = directory.0.join("Répo");
+        fs::create_dir(&root)?;
+
+        let verbatim_root = fs::canonicalize(&root)?;
+        assert!(!valid_worktree_path(&root, &verbatim_root.join("feature")));
+        assert!(!valid_worktree_path(&verbatim_root, &root.join("feature")));
+
+        let case_alias = directory.0.join("répo");
+        if fs::canonicalize(&case_alias).is_ok() {
+            assert!(!valid_worktree_path(&root, &case_alias.join("feature")));
+        }
+        assert!(valid_worktree_path(
+            &root,
+            &directory.0.join("Répo-feature")
+        ));
+        Ok(())
     }
 
     #[test]
