@@ -21504,7 +21504,23 @@ impl WorkspaceView {
                                                 .disabled(true),
                                         )
                                         .item(
-                                            PopupMenuItem::new("New worktree")
+                                            PopupMenuItem::element(move |_, cx| {
+                                                v_flex()
+                                                    .w_full()
+                                                    .min_w_0()
+                                                    .gap_0p5()
+                                                    .child(div().text_sm().child("New worktree"))
+                                                    .child(
+                                                        div()
+                                                            .text_xs()
+                                                            .text_color(
+                                                                cx.theme().muted_foreground,
+                                                            )
+                                                            .child(
+                                                                "Create a copy of your local project to work in parallel",
+                                                            ),
+                                                    )
+                                            })
                                                 .icon(IconName::FolderOpen)
                                                 .disabled(new_worktree_pending)
                                                 .on_click(move |_, _, cx| {
