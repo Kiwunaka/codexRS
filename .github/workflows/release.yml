@@ -202,8 +202,11 @@ jobs:
           detect corruption after download; it is not an independent publisher
           signature.
 
-          There is no installer, uninstaller, desktop integration, URI handler,
-          or automatic updater. Extract into a directory you control. On
+          There is no installer, uninstaller, automatic desktop integration,
+          URI handler, or automatic updater. On Linux,
+          `codexrs --install-desktop-entry` explicitly creates a per-user
+          desktop entry for the current extracted binary and never changes an
+          existing entry. Extract into a directory you control. On
           Windows, keep `codexrs.exe` and `codex-computer-use-overlay.exe`
           together. Do not enable Computer Use from an archive whose source or
           checksum you do not trust.

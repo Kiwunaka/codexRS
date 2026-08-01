@@ -21,8 +21,10 @@ reports. They are test inputs, not behavior to reproduce.
 - Dynamic Computer Use tools are attached at `thread/start`; an existing task
   cannot gain them after creation.
 - Windows ZIP and Linux tar.gz release archives are unsigned portable previews.
-  Installers, uninstallers, desktop integration, URI registration, and in-app
-  updating are not provided.
+  Installers, uninstallers, automatic desktop integration, URI registration,
+  and in-app updating are not provided. Linux can explicitly create a
+  per-user desktop entry with `codexrs --install-desktop-entry`; it never
+  changes an existing entry.
 - Linux is validated by Ubuntu CI, but broader desktop-environment smoke
   coverage is still in progress.
 - Accessibility semantics and full keyboard-only navigation need a dedicated

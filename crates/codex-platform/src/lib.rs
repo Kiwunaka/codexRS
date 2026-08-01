@@ -26,6 +26,8 @@ mod computer_use;
 mod computer_use_helper;
 mod git;
 mod github;
+#[cfg(target_os = "linux")]
+mod linux_desktop_entry;
 mod process;
 mod terminal;
 
@@ -96,6 +98,8 @@ pub use github::{
     update_pull_request_body as github_update_pull_request_body,
     update_pull_request_title as github_update_pull_request_title,
 };
+#[cfg(target_os = "linux")]
+pub use linux_desktop_entry::{LinuxDesktopEntryError, install_linux_desktop_entry};
 pub use process::ProcessError;
 pub use terminal::{
     MAX_TERMINAL_INPUT_BYTES, TERMINAL_EVENT_CAPACITY, TerminalCommandError, TerminalConfig,
