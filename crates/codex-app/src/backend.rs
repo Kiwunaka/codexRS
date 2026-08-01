@@ -10752,6 +10752,7 @@ fn computer_use_policy_contains(
         .any(|configured| computer_app_id_matches(configured, application_id))
 }
 
+#[cfg(any(windows, test))]
 fn computer_use_allowed_app_ids(config: &ConfigReadResponse) -> Vec<String> {
     const MAX_CONFIG_LAYERS: usize = 64;
 
@@ -10791,6 +10792,7 @@ fn computer_use_allowed_app_ids(config: &ConfigReadResponse) -> Vec<String> {
     Vec::new()
 }
 
+#[cfg(any(windows, test))]
 fn computer_use_allowed_app_ids_value(app_ids: &[String]) -> Value {
     Value::Object(
         app_ids
