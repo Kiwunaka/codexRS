@@ -250,6 +250,7 @@ thread/shellCommand
 thread/start
 thread/turns/list
 thread/unarchive
+thread/unsubscribe
 turn/interrupt
 turn/start
 turn/steer
