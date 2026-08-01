@@ -2381,6 +2381,7 @@ struct TaskActionMenuTarget {
     title: String,
     cwd: PathBuf,
     is_pinned: bool,
+    worktree_fork_pending: bool,
 }
 
 #[derive(Clone)]
@@ -6454,11 +6455,11 @@ impl WorkspaceView {
         }
         if command == "/fork" {
             if self.composer_fork_picker_open {
-                self.select_fork_slash_destination(
-                    self.has_local_workspace() && !self.selected_workspace_is_linked_worktree(),
-                    window,
-                    cx,
-                );
+                let new_worktree =
+                    self.has_local_workspace() && !self.selected_workspace_is_linked_worktree();
+                if !new_worktree || self.state.pending_worktree_fork.is_none() {
+                    self.select_fork_slash_destination(new_worktree, window, cx);
+                }
             } else {
                 self.open_fork_slash_picker(window, cx);
             }
@@ -9752,6 +9753,7 @@ impl WorkspaceView {
             title,
             cwd,
             is_pinned,
+            worktree_fork_pending,
         } = target;
         let pin_view = view.clone();
         let pin_task_id = task_id.clone();
@@ -9807,7 +9809,7 @@ impl WorkspaceView {
             .item(
                 PopupMenuItem::new("Continue in new worktree")
                     .icon(IconName::FolderOpen)
-                    .disabled(!worktree_available)
+                    .disabled(!worktree_available || worktree_fork_pending)
                     .on_click(move |_, _, cx| {
                         let task_id = worktree_task_id.clone();
                         let _ = worktree_view.update(cx, |this, cx| {
@@ -12289,6 +12291,7 @@ impl WorkspaceView {
             .pinned_task_ids
             .iter()
             .any(|pinned_task_id| pinned_task_id == &task.id);
+        let worktree_fork_pending = self.state.pending_worktree_fork.is_some();
         let (status_icon, status_color) = task_status_icon(task.status, cx);
         let updated_at = relative_time(task.updated_at);
         let forked = task.forked_from_id.is_some();
@@ -12347,6 +12350,7 @@ impl WorkspaceView {
                         title: menu_title.clone(),
                         cwd: menu_cwd.clone(),
                         is_pinned,
+                        worktree_fork_pending,
                     },
                     false,
                     window,
@@ -14985,6 +14989,7 @@ impl WorkspaceView {
             title: title.clone(),
             cwd: task_cwd,
             is_pinned: task_actions_is_pinned,
+            worktree_fork_pending: self.state.pending_worktree_fork.is_some(),
         };
         let compact_task_actions_target = task_actions_target.clone();
         let compact_task_header = self.shell_width_class != Some(ShellWidthClass::Wide);
@@ -19465,6 +19470,7 @@ impl WorkspaceView {
         new_worktree: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let disabled = new_worktree && self.state.pending_worktree_fork.is_some();
         h_flex()
             .id(id)
             .w_full()
@@ -19472,10 +19478,24 @@ impl WorkspaceView {
             .gap_3()
             .items_center()
             .rounded_md()
-            .when(pointer_cursors_enabled(cx), |element| {
+            .when(!disabled && pointer_cursors_enabled(cx), |element| {
                 element.cursor_pointer()
             })
-            .hover(|style| style.bg(cx.theme().list_hover))
+            .when(!disabled, |element| {
+                element
+                    .hover(|style| style.bg(cx.theme().list_hover))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.select_fork_slash_destination(new_worktree, window, cx);
+                    }))
+            })
+            .when(disabled, |element| {
+                element
+                    .bg(cx.theme().muted.opacity(0.35))
+                    .tooltip(|window, cx| {
+                        Tooltip::new("Finish the current handoff before starting another")
+                            .build(window, cx)
+                    })
+            })
             .child(
                 Icon::new(icon)
                     .small()
@@ -19493,9 +19513,6 @@ impl WorkspaceView {
                             .child(description),
                     ),
             )
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.select_fork_slash_destination(new_worktree, window, cx);
-            }))
             .into_any_element()
     }
 

@@ -1608,21 +1608,24 @@ fn emit_agent_configuration_mutation(
 
 #[derive(Debug, Default)]
 struct GitRefreshDebouncer {
-    pending: Option<(PathBuf, Instant)>,
+    pending: Option<(u64, PathBuf, Instant)>,
 }
 
 impl GitRefreshDebouncer {
-    fn schedule(&mut self, cwd: PathBuf, now: Instant, delay: Duration) {
-        self.pending = Some((cwd, now + delay));
+    fn schedule(&mut self, generation: u64, cwd: PathBuf, now: Instant, delay: Duration) {
+        self.pending = Some((generation, cwd, now + delay));
     }
 
-    fn take_due(&mut self, now: Instant) -> Option<PathBuf> {
+    fn take_due(&mut self, now: Instant) -> Option<(u64, PathBuf)> {
         if self
             .pending
             .as_ref()
-            .is_some_and(|(_, deadline)| now >= *deadline)
+            .is_some_and(|(_, _, deadline)| now >= *deadline)
         {
-            return self.pending.take().map(|(cwd, _)| cwd);
+            return self
+                .pending
+                .take()
+                .map(|(generation, cwd, _)| (generation, cwd));
         }
         None
     }
@@ -3197,8 +3200,13 @@ fn run_backend(commands: Receiver<BackendCommand>, events: Sender<Action>) {
                         );
                     }
                 }
-                Effect::RefreshGit { cwd } => {
-                    git_refresh.schedule(cwd, Instant::now(), runtime_policy.git_debounce);
+                Effect::RefreshGit { generation, cwd } => {
+                    git_refresh.schedule(
+                        generation,
+                        cwd,
+                        Instant::now(),
+                        runtime_policy.git_debounce,
+                    );
                 }
                 Effect::ScheduleTaskSearch { generation, query } => {
                     task_search.schedule(generation, query, Instant::now(), TASK_SEARCH_DEBOUNCE);
@@ -3294,8 +3302,8 @@ fn run_backend(commands: Receiver<BackendCommand>, events: Sender<Action>) {
                 }
             }
         }
-        if let Some(cwd) = git_refresh.take_due(Instant::now()) {
-            refresh_git(&cwd, &events);
+        if let Some((generation, cwd)) = git_refresh.take_due(Instant::now()) {
+            refresh_git(generation, &cwd, &events);
         }
         if let Some((generation, query)) = task_search.take_due(Instant::now()) {
             emit(&events, Action::TaskSearchDue { generation, query });
@@ -4061,8 +4069,8 @@ fn run_effect(
             }
             return;
         }
-        Effect::RefreshGit { cwd } => {
-            refresh_git(cwd, events);
+        Effect::RefreshGit { generation, cwd } => {
+            refresh_git(*generation, cwd, events);
             return;
         }
         Effect::LoadDiff {
@@ -4522,14 +4530,15 @@ fn run_effect(
                     emit(
                         events,
                         Action::GitBranchMutationCompleted {
+                            root: root.clone(),
                             message: format!("Switched to branch {branch}"),
                         },
                     );
-                    emit(events, Action::RefreshGit);
                 }
                 Ok(GitBranchMutationOutcome::Blocked { paths, truncated }) => emit(
                     events,
                     Action::GitBranchSwitchBlocked {
+                        root: root.clone(),
                         branch: branch.clone(),
                         create_branch: false,
                         paths,
@@ -4539,6 +4548,7 @@ fn run_effect(
                 Err(error) => emit(
                     events,
                     Action::GitBranchMutationFailed {
+                        root: root.clone(),
                         message: format!("Failed to switch branch: {error}"),
                     },
                 ),
@@ -4551,14 +4561,15 @@ fn run_effect(
                     emit(
                         events,
                         Action::GitBranchMutationCompleted {
+                            root: root.clone(),
                             message: format!("Created and checked out {branch}"),
                         },
                     );
-                    emit(events, Action::RefreshGit);
                 }
                 Ok(GitBranchMutationOutcome::Blocked { paths, truncated }) => emit(
                     events,
                     Action::GitBranchSwitchBlocked {
+                        root: root.clone(),
                         branch: branch.clone(),
                         create_branch: true,
                         paths,
@@ -4568,6 +4579,7 @@ fn run_effect(
                 Err(error) => emit(
                     events,
                     Action::GitBranchMutationFailed {
+                        root: root.clone(),
                         message: format!("Failed to create branch: {error}"),
                     },
                 ),
@@ -9674,6 +9686,7 @@ fn map_git_snapshot(snapshot: GitSnapshot) -> GitState {
     let changed_files = snapshot.files.len();
     let staged_files = snapshot.files.iter().filter(|file| file.staged).count();
     GitState {
+        refresh_generation: 0,
         repository_root: Some(snapshot.repository_root),
         branch: snapshot.branch,
         default_branch: snapshot.default_branch,
@@ -12095,20 +12108,37 @@ fn handle_notification(method: &str, params: Value, events: &Sender<Action>) -> 
     false
 }
 
-fn refresh_git(cwd: &std::path::Path, events: &Sender<Action>) {
+fn refresh_git(generation: u64, cwd: &std::path::Path, events: &Sender<Action>) {
     match git_snapshot(cwd) {
         Ok(snapshot) => emit(
             events,
-            Action::GitSnapshotLoaded(Box::new(map_git_snapshot(snapshot))),
+            Action::GitSnapshotLoaded {
+                generation,
+                git: Box::new(map_git_snapshot(snapshot)),
+                error: None,
+            },
         ),
         Err(GitError::InvalidRepository) => {
-            emit(events, Action::GitSnapshotLoaded(Box::default()));
-        }
-        Err(error) => {
-            emit(events, Action::GitSnapshotLoaded(Box::default()));
             emit(
                 events,
-                Action::SetStatus(format!("failed to inspect Git repository: {error}")),
+                Action::GitSnapshotLoaded {
+                    generation,
+                    git: Box::default(),
+                    error: None,
+                },
+            );
+        }
+        Err(error) => {
+            emit(
+                events,
+                Action::GitSnapshotLoaded {
+                    generation,
+                    git: Box::default(),
+                    error: Some(bounded(
+                        format!("failed to inspect Git repository: {error}"),
+                        MAX_STATUS_BYTES,
+                    )),
+                },
             );
         }
     }
@@ -18708,8 +18738,9 @@ mod tests {
         let start = Instant::now();
         let delay = Duration::from_millis(300);
 
-        debouncer.schedule(PathBuf::from("first"), start, delay);
+        debouncer.schedule(1, PathBuf::from("first"), start, delay);
         debouncer.schedule(
+            2,
             PathBuf::from("latest"),
             start + Duration::from_millis(100),
             delay,
@@ -18718,7 +18749,7 @@ mod tests {
         assert_eq!(debouncer.take_due(start + Duration::from_millis(399)), None);
         assert_eq!(
             debouncer.take_due(start + Duration::from_millis(400)),
-            Some(PathBuf::from("latest"))
+            Some((2, PathBuf::from("latest")))
         );
         assert_eq!(debouncer.take_due(start + Duration::from_millis(500)), None);
     }
