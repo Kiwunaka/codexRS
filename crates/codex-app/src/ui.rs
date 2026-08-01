@@ -5423,6 +5423,12 @@ impl WorkspaceView {
             let key = keystroke.key.as_str();
             let modifiers = keystroke.modifiers;
             if key.eq_ignore_ascii_case("escape")
+                && !this.state.marketplace.apps_needing_auth.is_empty()
+            {
+                this.dispatch(Action::DismissPluginAuthApps, cx);
+                return;
+            }
+            if key.eq_ignore_ascii_case("escape")
                 && matches!(
                     this.workspace_modal,
                     Some(WorkspaceModal::KeyboardShortcuts)
@@ -25758,6 +25764,139 @@ impl WorkspaceView {
     }
 
     #[inline(never)]
+    fn render_plugin_auth_apps_modal(
+        &mut self,
+        apps: Vec<AppCard>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let rows = apps.into_iter().enumerate().map(|(index, app)| {
+            let connect_url = app
+                .install_url
+                .as_deref()
+                .and_then(|url| app_chatgpt_url(url, &app.id, true));
+            let can_connect = connect_url.is_some();
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .items_center()
+                .gap_3()
+                .p_3()
+                .rounded_lg()
+                .border_1()
+                .border_color(cx.theme().border)
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap_1()
+                        .child(
+                            div()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .truncate()
+                                .child(app.name),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .line_clamp(2)
+                                .text_color(cx.theme().muted_foreground)
+                                .child(if app.description.is_empty() {
+                                    "No description provided.".to_owned()
+                                } else {
+                                    app.description
+                                }),
+                        ),
+                )
+                .child(
+                    Button::new(SharedString::from(format!(
+                        "plugin-auth-app-connect-{index}"
+                    )))
+                    .label("Connect")
+                    .small()
+                    .disabled(!can_connect)
+                    .when(!can_connect, |button| {
+                        button.tooltip("This app does not provide a browser setup URL right now.")
+                    })
+                    .on_click(move |_, _, cx| {
+                        if let Some(url) = connect_url.as_deref() {
+                            cx.open_url(url);
+                        }
+                    }),
+                )
+        });
+        let panel = v_flex()
+            .w(px(modal_surface_width(self.shell_viewport_width, 560.0)))
+            .h(px(modal_surface_max_height(
+                self.shell_viewport_height,
+                560.0,
+            )))
+            .px_6()
+            .pt_6()
+            .pb_5()
+            .gap_4()
+            .rounded(px(20.0))
+            .bg(cx.theme().popover)
+            .shadow_xl()
+            .occlude()
+            .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .text_lg()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child("Connect apps to finish setup"),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(
+                        "The plugin was installed. Connect these apps in ChatGPT before using them.",
+                    ),
+            )
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .gap_2()
+                    .overflow_y_scrollbar()
+                    .children(rows),
+            )
+            .child(
+                h_flex().w_full().justify_end().child(
+                    Button::new("plugin-auth-apps-done")
+                        .label("Done")
+                        .primary()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.dispatch(Action::DismissPluginAuthApps, cx);
+                        })),
+                ),
+            );
+
+        div()
+            .absolute()
+            .top_0()
+            .right_0()
+            .bottom_0()
+            .left_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .occlude()
+            .bg(hsla(0.0, 0.0, 0.0, 0.133))
+            .on_action(cx.listener(|this, _: &Escape, _, cx| {
+                this.dispatch(Action::DismissPluginAuthApps, cx);
+            }))
+            .on_any_mouse_down(cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                if event.button == gpui::MouseButton::Left {
+                    this.dispatch(Action::DismissPluginAuthApps, cx);
+                }
+            }))
+            .child(panel)
+            .into_any_element()
+    }
+
+    #[inline(never)]
     fn render_app_detail_panel(
         &mut self,
         app_index: usize,
@@ -38881,6 +39020,7 @@ impl Render for WorkspaceView {
         let workspace_modal = self.workspace_modal.clone();
         let selected_app_id = self.state.marketplace.selected_app_id.clone();
         let selected_plugin_id = self.state.marketplace.selected_plugin_id.clone();
+        let apps_needing_auth = self.state.marketplace.apps_needing_auth.clone();
         let command_palette_top =
             ((f32::from(window.viewport_size().height) - 504.0) / 2.0).max(16.0);
         let command_palette_width = (viewport_width - 32.0).clamp(320.0, 520.0);
@@ -39010,6 +39150,9 @@ impl Render for WorkspaceView {
             })
             .when_some(workspace_modal, |root, modal| {
                 root.child(self.render_workspace_modal(modal, cx))
+            })
+            .when(!apps_needing_auth.is_empty(), |root| {
+                root.child(self.render_plugin_auth_apps_modal(apps_needing_auth, cx))
             });
         v_flex()
             .size_full()
