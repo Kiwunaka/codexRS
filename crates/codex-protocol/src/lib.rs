@@ -2419,6 +2419,8 @@ pub struct PluginSummary {
     #[serde(default)]
     pub install_policy: Option<String>,
     #[serde(default)]
+    pub must_show_installation_interstitial: Option<bool>,
+    #[serde(default)]
     pub version: Option<String>,
     #[serde(default)]
     pub local_version: Option<String>,
@@ -3495,7 +3497,7 @@ mod tests {
         PermissionProfileListParams, PermissionProfileListResponse,
         PermissionsRequestApprovalParams, PermissionsRequestApprovalResponse, PlanType,
         PluginListMarketplaceKind, PluginReadParams, PluginReadResponse,
-        PluginScheduledTaskSchedule, PluginScheduledTaskSummary, ProtocolError,
+        PluginScheduledTaskSchedule, PluginScheduledTaskSummary, PluginSummary, ProtocolError,
         RemoteControlClientsListOrder, RemoteControlClientsListParams,
         RemoteControlClientsListResponse, RemoteControlClientsRevokeParams,
         RemoteControlClientsRevokeResponse, RemoteControlConnectionStatus,
@@ -5294,6 +5296,7 @@ mod tests {
             response,
             Ok(response)
                 if response.plugin.summary.id == "gmail@openai-curated-remote"
+                    && response.plugin.summary.must_show_installation_interstitial.is_none()
                     && response.plugin.skills.len() == 1
                     && response.plugin.apps.len() == 1
                     && response.plugin.mcp_servers == ["gmail"]
@@ -5305,6 +5308,31 @@ mod tests {
                         }]) if time == "09:00"
                     )
         ));
+    }
+
+    #[test]
+    fn plugin_installation_interstitial_policy_preserves_true_false_null_and_absence() {
+        for (value, expected) in [
+            (Some(json!(true)), Some(true)),
+            (Some(json!(false)), Some(false)),
+            (Some(json!(null)), None),
+            (None, None),
+        ] {
+            let mut summary = json!({
+                "id": "example@marketplace",
+                "name": "example"
+            });
+            if let Some(value) = value {
+                summary["mustShowInstallationInterstitial"] = value;
+            }
+            let summary = serde_json::from_value::<PluginSummary>(summary);
+            assert_eq!(
+                summary
+                    .ok()
+                    .and_then(|summary| summary.must_show_installation_interstitial),
+                expected
+            );
+        }
     }
 
     #[test]

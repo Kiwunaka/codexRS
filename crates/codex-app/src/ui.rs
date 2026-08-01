@@ -4665,6 +4665,8 @@ struct WorkspaceView {
     remote_pairing_focus_requested: bool,
     remote_confirmation_focus: FocusHandle,
     remote_confirmation_focus_requested: bool,
+    plugin_install_confirmation_focus: FocusHandle,
+    plugin_install_confirmation_focus_requested: bool,
     remote_pairing_not_claimed: bool,
     command_palette: Option<Entity<CommandPaletteView>>,
     workspace_modal: Option<WorkspaceModal>,
@@ -4732,6 +4734,7 @@ impl WorkspaceView {
         let browser_focus = cx.focus_handle();
         let remote_pairing_focus = cx.focus_handle();
         let remote_confirmation_focus = cx.focus_handle();
+        let plugin_install_confirmation_focus = cx.focus_handle();
         let initial_appearance_preferences = AppearancePreferences::default();
         let initial_appearance_variant = active_appearance_variant(cx);
         let initial_appearance_palette = initial_appearance_preferences
@@ -5495,6 +5498,16 @@ impl WorkspaceView {
             let key = keystroke.key.as_str();
             let modifiers = keystroke.modifiers;
             if key.eq_ignore_ascii_case("escape")
+                && this
+                    .state
+                    .marketplace
+                    .pending_plugin_install_confirmation
+                    .is_some()
+            {
+                this.dispatch(Action::CancelPluginInstall, cx);
+                return;
+            }
+            if key.eq_ignore_ascii_case("escape")
                 && !this.state.marketplace.apps_needing_auth.is_empty()
             {
                 this.dispatch(Action::DismissPluginAuthApps, cx);
@@ -5693,6 +5706,8 @@ impl WorkspaceView {
             remote_pairing_focus_requested: false,
             remote_confirmation_focus,
             remote_confirmation_focus_requested: false,
+            plugin_install_confirmation_focus,
+            plugin_install_confirmation_focus_requested: false,
             remote_pairing_not_claimed: false,
             command_palette: None,
             workspace_modal: None,
@@ -26288,6 +26303,86 @@ impl WorkspaceView {
     }
 
     #[inline(never)]
+    fn render_plugin_install_confirmation_modal(
+        &mut self,
+        plugin_name: String,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let panel = v_flex()
+            .w(px(modal_surface_width(self.shell_viewport_width, 480.0)))
+            .px_6()
+            .pt_6()
+            .pb_5()
+            .gap_4()
+            .rounded(px(20.0))
+            .bg(cx.theme().popover)
+            .shadow_xl()
+            .occlude()
+            .track_focus(&self.plugin_install_confirmation_focus)
+            .tab_group()
+            .tab_stop(true)
+            .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .text_lg()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(format!("Install {plugin_name}?")),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(
+                        "Plugins can add capabilities to Codex. Continue only if you trust this plugin.",
+                    ),
+            )
+            .child(
+                h_flex()
+                    .w_full()
+                    .justify_end()
+                    .gap_2()
+                    .child(
+                        Button::new("plugin-install-confirmation-cancel")
+                            .label("Cancel")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.dispatch(Action::CancelPluginInstall, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("plugin-install-confirmation-confirm")
+                            .label("Install")
+                            .primary()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.dispatch(Action::ConfirmPluginInstall, cx);
+                            })),
+                    ),
+            );
+
+        div()
+            .absolute()
+            .top_0()
+            .right_0()
+            .bottom_0()
+            .left_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .occlude()
+            .bg(hsla(0.0, 0.0, 0.0, 0.133))
+            .on_action(cx.listener(|this, _: &Escape, _, cx| {
+                this.dispatch(Action::CancelPluginInstall, cx);
+            }))
+            .on_any_mouse_down(cx.listener(|this, event: &gpui::MouseDownEvent, _, cx| {
+                cx.stop_propagation();
+                if event.button == gpui::MouseButton::Left {
+                    this.dispatch(Action::CancelPluginInstall, cx);
+                }
+            }))
+            .child(panel)
+            .into_any_element()
+    }
+
+    #[inline(never)]
     fn render_app_detail_panel(
         &mut self,
         app_index: usize,
@@ -39560,6 +39655,19 @@ impl Render for WorkspaceView {
         } else {
             self.remote_confirmation_focus_requested = false;
         }
+        if self
+            .state
+            .marketplace
+            .pending_plugin_install_confirmation
+            .is_some()
+        {
+            if !self.plugin_install_confirmation_focus_requested {
+                self.plugin_install_confirmation_focus.focus(window);
+                self.plugin_install_confirmation_focus_requested = true;
+            }
+        } else {
+            self.plugin_install_confirmation_focus_requested = false;
+        }
         self.sync_browser_surface_state();
         let bottom_maximum = (viewport_height * 0.5).max(TERMINAL_BOTTOM_MIN_HEIGHT);
         self.terminal_bottom_height = self
@@ -39648,6 +39756,20 @@ impl Render for WorkspaceView {
         let selected_app_id = self.state.marketplace.selected_app_id.clone();
         let selected_plugin_id = self.state.marketplace.selected_plugin_id.clone();
         let apps_needing_auth = self.state.marketplace.apps_needing_auth.clone();
+        let plugin_install_confirmation = self
+            .state
+            .marketplace
+            .pending_plugin_install_confirmation
+            .as_deref()
+            .and_then(|plugin_id| {
+                self.state
+                    .marketplace
+                    .plugins
+                    .iter()
+                    .chain(&self.state.marketplace.composer_plugins)
+                    .find(|plugin| plugin.id == plugin_id)
+            })
+            .map(|plugin| plugin.name.clone());
         let command_palette_top =
             ((f32::from(window.viewport_size().height) - 504.0) / 2.0).max(16.0);
         let command_palette_width = (viewport_width - 32.0).clamp(320.0, 520.0);
@@ -39780,6 +39902,9 @@ impl Render for WorkspaceView {
             })
             .when(!apps_needing_auth.is_empty(), |root| {
                 root.child(self.render_plugin_auth_apps_modal(apps_needing_auth, cx))
+            })
+            .when_some(plugin_install_confirmation, |root, plugin_name| {
+                root.child(self.render_plugin_install_confirmation_modal(plugin_name, cx))
             });
         v_flex()
             .size_full()
@@ -43390,6 +43515,7 @@ mod tests {
             installed: false,
             enabled: false,
             installable: true,
+            requires_install_confirmation: false,
             featured: featured_rank.is_some(),
             featured_rank,
         }
