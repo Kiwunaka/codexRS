@@ -7438,6 +7438,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.marketplace.apps_status = Some(LoadStatus::Loading);
             state.computer_use_settings.status = LoadStatus::Loading;
             state.computer_use_settings.error = None;
+            state.account.status = LoadStatus::Loading;
+            state.account.error = None;
+            state.account.usage_error = None;
             let mut effects = vec![
                 Effect::LoadTasks {
                     generation: state.task_generation,
@@ -7460,6 +7463,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 },
                 Effect::LoadComposerDesktopApps,
                 Effect::LoadComputerUsePolicy,
+                Effect::LoadAccount,
             ];
             if let Some(effect) = load_pinned_tasks_effect(state) {
                 effects.push(effect);
@@ -7485,6 +7489,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         Action::ConnectionLost => {
             state.review_start.pending = None;
             state.review_start.terminal_events.clear();
+            state.account.auth_operation = AccountAuthOperation::Idle;
+            state.account.login_id = None;
+            state.account.auth_error = None;
             let reconnect = !matches!(
                 state.connection,
                 ConnectionStatus::Connecting | ConnectionStatus::Recovering { .. }
@@ -18288,9 +18295,11 @@ mod tests {
                 },
                 Effect::LoadComposerDesktopApps,
                 Effect::LoadComputerUsePolicy,
+                Effect::LoadAccount,
             ]
         );
         assert_eq!(state.composer_controls.models_status, LoadStatus::Loading);
+        assert_eq!(state.account.status, LoadStatus::Loading);
         assert_eq!(
             state.composer_controls.permission_profiles_status,
             LoadStatus::Loading
@@ -27147,6 +27156,9 @@ mod tests {
             connection: ConnectionStatus::Online,
             ..AppState::default()
         };
+        state.account.auth_operation = AccountAuthOperation::AwaitingLogin;
+        state.account.login_id = Some("stale-login".to_owned());
+        state.account.auth_error = Some("stale error".to_owned());
 
         assert_eq!(
             reduce(&mut state, Action::ConnectionLost),
@@ -27160,6 +27172,9 @@ mod tests {
                 last_error: None,
             }
         );
+        assert_eq!(state.account.auth_operation, AccountAuthOperation::Idle);
+        assert!(state.account.login_id.is_none());
+        assert!(state.account.auth_error.is_none());
         assert!(reduce(&mut state, Action::ConnectionLost).is_empty());
         assert!(
             reduce(
