@@ -14908,7 +14908,7 @@ impl WorkspaceView {
                     .label("Use this worktree")
                     .xsmall()
                     .ghost()
-                    .disabled(worktree.bare)
+                    .disabled(worktree_use_disabled(&worktree))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.use_git_worktree(path.clone(), window, cx);
                     })),
@@ -32733,7 +32733,7 @@ impl WorkspaceView {
                             .label("Use this worktree")
                             .small()
                             .ghost()
-                            .disabled(worktree.locked)
+                            .disabled(worktree_use_disabled(&worktree))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.use_git_worktree(use_path.clone(), window, cx);
                             })),
@@ -42168,6 +42168,10 @@ fn worktree_fork_queue_full(state: &AppState) -> bool {
         >= MAX_PENDING_WORKTREE_FORKS
 }
 
+fn worktree_use_disabled(worktree: &GitWorktreeState) -> bool {
+    worktree.bare
+}
+
 fn display_path(path: &Path) -> String {
     let rendered = path.display().to_string();
     #[cfg(windows)]
@@ -43785,19 +43789,19 @@ mod tests {
         split_diff_rows, startup_recovery_card, status_context_total_label,
         status_rate_limit_label, status_rate_limit_reset_metadata_at, task_slot_id,
         terminal_tab_label, timeline_activity_content, turn_diff_update_is_accepted,
-        validate_plugin_logo_dimensions, worktree_fork_queue_full,
+        validate_plugin_logo_dimensions, worktree_fork_queue_full, worktree_use_disabled,
     };
     use codex_core::{
         AccountAuthOperation, AccountKind, AccountProfile, AccountState, AppCard, AppState,
         AppearancePalette, AppearanceVariant, ApprovalContext, ApprovalKind, ApprovalRequest,
         ComposerAttachment, ComposerAttachmentKind, ComputerApplicationState, ConnectionStatus,
-        GitPullRequestState, IntegratedTerminalShell, KEYBOARD_SHORTCUT_COMMAND_IDS, LoadStatus,
-        MAX_PENDING_WORKTREE_FORKS, MainRoute, McpAuthStatus, ModelOption, PendingWorktreeFork,
-        PendingWorktreeForkPhase, PluginCard, ProcessManagerState, PullRequestCiStatus,
-        PullRequestDetail, PullRequestIdentity, PullRequestMutationKind, PullRequestState,
-        PullRequestSummary, ReasoningEffortOption, RemoteControlRuntimeStatus, ServiceTierOption,
-        SkillCard, SkillScope, TaskRunStatus, TaskSummary, TerminalTabState, TimelineItem,
-        TimelineKind, TurnDiffState,
+        GitPullRequestState, GitWorktreeState, IntegratedTerminalShell,
+        KEYBOARD_SHORTCUT_COMMAND_IDS, LoadStatus, MAX_PENDING_WORKTREE_FORKS, MainRoute,
+        McpAuthStatus, ModelOption, PendingWorktreeFork, PendingWorktreeForkPhase, PluginCard,
+        ProcessManagerState, PullRequestCiStatus, PullRequestDetail, PullRequestIdentity,
+        PullRequestMutationKind, PullRequestState, PullRequestSummary, ReasoningEffortOption,
+        RemoteControlRuntimeStatus, ServiceTierOption, SkillCard, SkillScope, TaskRunStatus,
+        TaskSummary, TerminalTabState, TimelineItem, TimelineKind, TurnDiffState,
     };
 
     fn task(id: &str, cwd: &str) -> TaskSummary {
@@ -46359,6 +46363,21 @@ mod tests {
         assert!(worktree_fork_queue_full(&state));
         state.queued_worktree_forks.pop_back();
         assert!(!worktree_fork_queue_full(&state));
+    }
+
+    #[test]
+    fn worktree_use_is_disabled_only_for_bare_worktrees() {
+        let worktree = |bare, detached, locked| GitWorktreeState {
+            path: PathBuf::from(r"C:\repo"),
+            branch: Some("main".to_owned()),
+            bare,
+            detached,
+            locked,
+        };
+
+        assert!(!worktree_use_disabled(&worktree(false, false, true)));
+        assert!(!worktree_use_disabled(&worktree(false, true, false)));
+        assert!(worktree_use_disabled(&worktree(true, false, false)));
     }
 
     #[test]
