@@ -40274,6 +40274,15 @@ impl Render for WorkspaceView {
         let main_content = self.render_main(window, cx);
         let main = h_flex().flex_1().min_w_0().h_full().child(main_content);
         let title_bar = self.render_title_bar(window, cx);
+        let background_completion_task_id = self.state.background_completion_task_id.clone();
+        let background_completion_task_exists = background_completion_task_id
+            .as_deref()
+            .is_some_and(|task_id| self.state.tasks.iter().any(|task| task.id == task_id));
+        let background_completion_bottom = if self.state.status_message.is_some() {
+            px(80.0)
+        } else {
+            px(16.0)
+        };
         let workspace = h_flex()
             .key_context("CodexWorkspace")
             .on_action(
@@ -40318,6 +40327,54 @@ impl Render for WorkspaceView {
                 )
             })
             .when_some(thread_find_bar, |root, find_bar| root.child(find_bar))
+            .when_some(background_completion_task_id, |root, _task_id| {
+                root.child(
+                    h_flex()
+                        .absolute()
+                        .left(px(status_left_offset + 24.0))
+                        .right(px(24.0))
+                        .bottom(background_completion_bottom)
+                        .p_3()
+                        .gap_3()
+                        .justify_between()
+                        .rounded_lg()
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .bg(cx.theme().popover)
+                        .shadow_lg()
+                        .child(
+                            div()
+                                .text_sm()
+                                .line_clamp(2)
+                                .text_color(cx.theme().popover_foreground)
+                                .child("A background chat completed."),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .when(background_completion_task_exists, |actions| {
+                                    actions.child(
+                                        Button::new("open-background-completion")
+                                            .label("Open")
+                                            .xsmall()
+                                            .ghost()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.dispatch(Action::OpenBackgroundCompletion, cx);
+                                            })),
+                                    )
+                                })
+                                .child(
+                                    Button::new("dismiss-background-completion")
+                                        .label("Dismiss")
+                                        .xsmall()
+                                        .ghost()
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.dispatch(Action::DismissBackgroundCompletion, cx);
+                                        })),
+                                ),
+                        ),
+                )
+            })
             .when_some(self.state.status_message.clone(), |root, message| {
                 root.child(
                     h_flex()

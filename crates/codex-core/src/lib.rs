@@ -4172,6 +4172,7 @@ pub struct AppState {
     pub chat_memory: ChatMemoryState,
     pub agent_configuration: AgentConfigurationState,
     pub feedback: FeedbackUploadState,
+    pub background_completion_task_id: Option<String>,
     pub status_message: Option<String>,
 }
 
@@ -4236,6 +4237,7 @@ impl Default for AppState {
             chat_memory: ChatMemoryState::default(),
             agent_configuration: AgentConfigurationState::default(),
             feedback: FeedbackUploadState::default(),
+            background_completion_task_id: None,
             status_message: None,
         }
     }
@@ -4451,6 +4453,8 @@ pub enum Action {
         message: String,
     },
     SelectTask(String),
+    OpenBackgroundCompletion,
+    DismissBackgroundCompletion,
     TaskRuntimeLoaded {
         task_id: String,
         generation: u64,
@@ -4738,6 +4742,7 @@ pub enum Action {
     TurnCompleted {
         task_id: String,
         turn_id: String,
+        completed: bool,
         failed: bool,
     },
     TurnInterrupted {
@@ -8689,6 +8694,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
         }
         Action::TaskArchived(task_id) => {
+            if state.background_completion_task_id.as_deref() == Some(task_id.as_str()) {
+                state.background_completion_task_id = None;
+            }
             let pinned_before = state.pinned_task_ids.len();
             state
                 .pinned_task_ids
@@ -9070,6 +9078,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::SelectTask(task_id) => {
+            if state.background_completion_task_id.as_deref() == Some(task_id.as_str()) {
+                state.background_completion_task_id = None;
+            }
             let previous_cwds = composer_workspace_roots(state);
             let previous_task_id = state.selected_task_id.clone();
             let previous_cwd = selected_task_cwds(state).into_iter().next();
@@ -9156,6 +9167,19 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             effects.insert(0, resume_task_effect(state, task_id));
             effects
+        }
+        Action::OpenBackgroundCompletion => {
+            let Some(task_id) = state.background_completion_task_id.take() else {
+                return Vec::new();
+            };
+            if !state.tasks.iter().any(|task| task.id == task_id) {
+                return Vec::new();
+            }
+            reduce(state, Action::SelectTask(task_id))
+        }
+        Action::DismissBackgroundCompletion => {
+            state.background_completion_task_id = None;
+            Vec::new()
         }
         Action::TaskSettingsLoaded {
             task_id,
@@ -11414,6 +11438,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         Action::TurnCompleted {
             task_id,
             turn_id,
+            completed,
             failed,
         } => {
             record_pending_review_terminal(state, &task_id, &turn_id);
@@ -11443,23 +11468,24 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             timeline.interrupt_pending = false;
             timeline.compaction_in_flight = false;
-            let task_exists =
+            let known_task_id =
                 if let Some(task) = state.tasks.iter_mut().find(|task| task.id == task_id) {
                     task.status = if failed {
                         TaskRunStatus::Failed
                     } else {
                         TaskRunStatus::Completed
                     };
-                    true
+                    (task.id.len() <= MAX_PINNED_TASK_ID_BYTES).then(|| task.id.clone())
                 } else {
-                    false
+                    None
                 };
             if completed_active
+                && completed
                 && !failed
-                && task_exists
                 && state.selected_task_id.as_deref() != Some(task_id.as_str())
+                && let Some(known_task_id) = known_task_id
             {
-                state.status_message = Some("A background chat completed.".to_owned());
+                state.background_completion_task_id = Some(known_task_id);
             }
             schedule_goal_continuation(state, task_id)
         }
@@ -17622,12 +17648,13 @@ mod tests {
         IntegratedTerminalShell, KeyboardShortcutPreferences, KeyboardShortcutUpdateTarget,
         LoadStatus, LocalProjectSummary, MAX_ACCOUNT_FIELD_BYTES, MAX_BROWSER_DOWNLOADS,
         MAX_COMPOSER_BYTES, MAX_GIT_BRANCH_BYTES, MAX_GIT_DIFF_BYTES, MAX_GIT_INSTRUCTIONS_BYTES,
-        MAX_GIT_SHA_BYTES, MAX_PLUGIN_DETAIL_ITEMS, MAX_REVIEW_START_ERROR_BYTES,
-        MAX_TIMELINE_ITEMS, MAX_TURN_DIFF_BYTES, MainRoute, MarketplaceManageTab,
-        MarketplaceSectionFilter, MarketplaceSourceCard, MarketplaceTab, MarketplaceUpgradeFailure,
-        McpAuthStatus, McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
-        McpElicitationContent, McpElicitationDecision, McpElicitationValue, McpFormElicitation,
-        McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpFormOption, McpFormStringFormat,
+        MAX_GIT_SHA_BYTES, MAX_PINNED_TASK_ID_BYTES, MAX_PLUGIN_DETAIL_ITEMS,
+        MAX_REVIEW_START_ERROR_BYTES, MAX_TIMELINE_ITEMS, MAX_TURN_DIFF_BYTES, MainRoute,
+        MarketplaceManageTab, MarketplaceSectionFilter, MarketplaceSourceCard, MarketplaceTab,
+        MarketplaceUpgradeFailure, McpAuthStatus, McpBrowserOriginElicitation,
+        McpBrowserResourceElicitation, McpElicitation, McpElicitationContent,
+        McpElicitationDecision, McpElicitationValue, McpFormElicitation, McpFormField,
+        McpFormFieldKind, McpFormImagePickerItem, McpFormOption, McpFormStringFormat,
         McpResourceCard, McpResourceContentCard, McpServerCard, McpServerDraft,
         McpServerStartupFailureReason, McpServerStartupState, McpTransportKind, McpUrlElicitation,
         ModelOption, OutputArtifact, OutputArtifactKind, PendingWorktreeForkPhase,
@@ -19421,6 +19448,7 @@ mod tests {
                 Action::TurnCompleted {
                     task_id: "t1".to_owned(),
                     turn_id: "turn-old".to_owned(),
+                    completed: true,
                     failed: false,
                 },
             )
@@ -19446,7 +19474,7 @@ mod tests {
     }
 
     #[test]
-    fn only_successful_background_turns_show_a_completion_banner() {
+    fn only_exact_successful_background_turns_show_a_completion_banner() {
         let mut state = AppState::default();
         reduce(&mut state, Action::TaskCreated(task("selected")));
         reduce(&mut state, Action::TaskCreated(task("background")));
@@ -19464,32 +19492,71 @@ mod tests {
             Action::TurnCompleted {
                 task_id: "background".to_owned(),
                 turn_id: "background-success".to_owned(),
+                completed: true,
                 failed: false,
             },
         );
         assert_eq!(
-            state.status_message.as_deref(),
-            Some("A background chat completed.")
+            state.background_completion_task_id.as_deref(),
+            Some("background")
         );
+        assert_eq!(state.status_message, None);
 
+        reduce(&mut state, Action::SetStatus("Unrelated status".to_owned()));
         reduce(&mut state, Action::ClearStatus);
+        assert_eq!(
+            state.background_completion_task_id.as_deref(),
+            Some("background")
+        );
+        reduce(&mut state, Action::DismissBackgroundCompletion);
         reduce(
             &mut state,
             Action::TurnCompleted {
                 task_id: "background".to_owned(),
                 turn_id: "background-success".to_owned(),
+                completed: true,
                 failed: false,
+            },
+        );
+        assert_eq!(state.background_completion_task_id, None);
+        reduce(
+            &mut state,
+            Action::TurnStarted {
+                task_id: "background".to_owned(),
+                turn_id: "background-unknown".to_owned(),
             },
         );
         reduce(
             &mut state,
             Action::TurnCompleted {
-                task_id: "unknown".to_owned(),
-                turn_id: "unknown-success".to_owned(),
+                task_id: "background".to_owned(),
+                turn_id: "background-unknown".to_owned(),
+                completed: false,
                 failed: false,
             },
         );
-        assert_eq!(state.status_message, None);
+        assert_eq!(state.background_completion_task_id, None);
+
+        let oversized_task_id = "x".repeat(MAX_PINNED_TASK_ID_BYTES + 1);
+        reduce(&mut state, Action::TaskCreated(task(&oversized_task_id)));
+        reduce(&mut state, Action::SelectTask("selected".to_owned()));
+        reduce(
+            &mut state,
+            Action::TurnStarted {
+                task_id: oversized_task_id.clone(),
+                turn_id: "oversized-success".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::TurnCompleted {
+                task_id: oversized_task_id,
+                turn_id: "oversized-success".to_owned(),
+                completed: true,
+                failed: false,
+            },
+        );
+        assert_eq!(state.background_completion_task_id, None);
 
         reduce(
             &mut state,
@@ -19503,10 +19570,11 @@ mod tests {
             Action::TurnCompleted {
                 task_id: "selected".to_owned(),
                 turn_id: "selected-success".to_owned(),
+                completed: true,
                 failed: false,
             },
         );
-        assert_eq!(state.status_message, None);
+        assert_eq!(state.background_completion_task_id, None);
 
         reduce(
             &mut state,
@@ -19520,10 +19588,11 @@ mod tests {
             Action::TurnCompleted {
                 task_id: "background".to_owned(),
                 turn_id: "background-failed".to_owned(),
+                completed: false,
                 failed: true,
             },
         );
-        assert_eq!(state.status_message, None);
+        assert_eq!(state.background_completion_task_id, None);
 
         reduce(
             &mut state,
@@ -19539,7 +19608,37 @@ mod tests {
                 turn_id: "background-interrupted".to_owned(),
             },
         );
-        assert_eq!(state.status_message, None);
+        assert_eq!(state.background_completion_task_id, None);
+    }
+
+    #[test]
+    fn background_completion_open_and_dismiss_are_independent_of_status() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("selected")));
+        reduce(&mut state, Action::TaskCreated(task("background")));
+        reduce(&mut state, Action::SelectTask("selected".to_owned()));
+
+        state.background_completion_task_id = Some("background".to_owned());
+        state.status_message = Some("Unrelated status".to_owned());
+        reduce(&mut state, Action::DismissBackgroundCompletion);
+        assert_eq!(state.background_completion_task_id, None);
+        assert_eq!(state.status_message.as_deref(), Some("Unrelated status"));
+
+        state.background_completion_task_id = Some("background".to_owned());
+        reduce(&mut state, Action::OpenBackgroundCompletion);
+        assert_eq!(state.background_completion_task_id, None);
+        assert_eq!(state.selected_task_id.as_deref(), Some("background"));
+
+        reduce(&mut state, Action::SelectTask("selected".to_owned()));
+        state.background_completion_task_id = Some("background".to_owned());
+        reduce(&mut state, Action::SelectTask("background".to_owned()));
+        assert_eq!(state.background_completion_task_id, None);
+
+        reduce(&mut state, Action::SelectTask("selected".to_owned()));
+        state.background_completion_task_id = Some("missing".to_owned());
+        reduce(&mut state, Action::OpenBackgroundCompletion);
+        assert_eq!(state.background_completion_task_id, None);
+        assert_eq!(state.selected_task_id.as_deref(), Some("selected"));
     }
 
     #[test]
@@ -22018,6 +22117,7 @@ mod tests {
                 Action::TurnCompleted {
                     task_id: "t1".to_owned(),
                     turn_id: "turn-1".to_owned(),
+                    completed: true,
                     failed: false,
                 }
             ),
@@ -23569,6 +23669,7 @@ mod tests {
             Action::TurnCompleted {
                 task_id: "source".to_owned(),
                 turn_id: "reused-after-reconnect".to_owned(),
+                completed: true,
                 failed: false,
             },
         );
@@ -23628,6 +23729,7 @@ mod tests {
             Action::TurnCompleted {
                 task_id: "source".to_owned(),
                 turn_id: "inline-terminal".to_owned(),
+                completed: true,
                 failed: false,
             },
         );
@@ -23674,6 +23776,7 @@ mod tests {
             Action::TurnCompleted {
                 task_id: "source".to_owned(),
                 turn_id: "inline".to_owned(),
+                completed: true,
                 failed: false,
             },
         );
@@ -23863,6 +23966,7 @@ mod tests {
             Action::TurnCompleted {
                 task_id: "terminal-before-detached-response".to_owned(),
                 turn_id: "detached-terminal-before-response".to_owned(),
+                completed: true,
                 failed: false,
             },
         );
@@ -24682,6 +24786,7 @@ mod tests {
     fn archive_removes_only_after_app_server_confirmation() {
         let mut state = AppState::default();
         reduce(&mut state, Action::TaskCreated(task("t1")));
+        state.background_completion_task_id = Some("t1".to_owned());
 
         assert_eq!(
             reduce(&mut state, Action::ArchiveTask("t1".to_owned())),
@@ -24696,6 +24801,7 @@ mod tests {
         assert!(state.tasks.is_empty());
         assert!(state.timelines.is_empty());
         assert_eq!(state.selected_task_id, None);
+        assert_eq!(state.background_completion_task_id, None);
     }
 
     #[test]
