@@ -2131,6 +2131,7 @@ enum SettingsSection {
     Import,
     Configuration,
     Git,
+    CodeReview,
     Hooks,
     Worktrees,
     Plugins,
@@ -28773,6 +28774,7 @@ impl WorkspaceView {
         let configuration_visible =
             settings_section_matches(SettingsSection::Configuration, &query);
         let git_visible = settings_section_matches(SettingsSection::Git, &query);
+        let code_review_visible = settings_section_matches(SettingsSection::CodeReview, &query);
         let hooks_visible = settings_section_matches(SettingsSection::Hooks, &query);
         let worktrees_visible = settings_section_matches(SettingsSection::Worktrees, &query);
         let plugins_visible = settings_section_matches(SettingsSection::Plugins, &query);
@@ -28793,8 +28795,11 @@ impl WorkspaceView {
             || browser_visible
             || computer_use_visible
             || connections_visible;
-        let coding_visible =
-            configuration_visible || hooks_visible || git_visible || worktrees_visible;
+        let coding_visible = configuration_visible
+            || git_visible
+            || code_review_visible
+            || hooks_visible
+            || worktrees_visible;
         let any_visible =
             personal_visible || integrations_visible || coding_visible || archived_chats_visible;
         let page = match self.settings_section {
@@ -28806,6 +28811,7 @@ impl WorkspaceView {
             SettingsSection::Import => self.render_import_settings(cx),
             SettingsSection::Configuration => self.render_agent_configuration_settings(cx),
             SettingsSection::Git => self.render_git_settings(cx),
+            SettingsSection::CodeReview => self.render_code_review_settings(cx),
             SettingsSection::Hooks => self.render_hooks_settings(cx),
             SettingsSection::Worktrees => self.render_worktrees_settings(cx),
             SettingsSection::Plugins => self.render_plugins_settings(cx),
@@ -29028,6 +29034,15 @@ impl WorkspaceView {
                                         "Git",
                                         IconName::GitHub,
                                         SettingsSection::Git,
+                                        cx,
+                                    ))
+                                })
+                                .when(code_review_visible, |group| {
+                                    group.child(self.render_settings_nav_item(
+                                        "settings-code-review",
+                                        "Code review",
+                                        IconName::GitHub,
+                                        SettingsSection::CodeReview,
                                         cx,
                                     ))
                                 })
@@ -33087,20 +33102,6 @@ impl WorkspaceView {
                 Self::git_pull_request_merge_method_menu(menu, merge_view.clone(), merge_method)
             })
             .into_any_element();
-        let review_delivery = preferences.review_delivery;
-        let review_delivery_view = cx.entity().downgrade();
-        let review_delivery_control = Button::new("git-review-delivery")
-            .label(match review_delivery {
-                ReviewDelivery::Inline => "Inline",
-                ReviewDelivery::Detached => "Detached",
-            })
-            .small()
-            .w(px(120.0))
-            .dropdown_caret(true)
-            .dropdown_menu(move |menu, _, _| {
-                Self::git_review_delivery_menu(menu, review_delivery_view.clone(), review_delivery)
-            })
-            .into_any_element();
         let branch_prefix_control = Input::new(&self.git_branch_prefix)
             .h(px(36.0))
             .w(px(224.0))
@@ -33126,12 +33127,6 @@ impl WorkspaceView {
                  to avoid git operations"
                     .into(),
                 review_mode_control,
-                cx,
-            ))
-            .child(self.render_browser_settings_row(
-                "Review delivery",
-                "Choose whether a review runs in this chat or a separate chat".into(),
-                review_delivery_control,
                 cx,
             ))
             .child(self.render_browser_settings_row(
@@ -33278,6 +33273,72 @@ impl WorkspaceView {
                     .child(general_card)
                     .child(commit_instructions_card)
                     .child(pull_request_instructions_card),
+            )
+            .into_any_element()
+    }
+
+    fn render_code_review_settings(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let review_delivery = self.state.git_preferences.review_delivery;
+        let review_delivery_view = cx.entity().downgrade();
+        let review_delivery_control = Button::new("git-review-delivery")
+            .label(match review_delivery {
+                ReviewDelivery::Inline => "Inline",
+                ReviewDelivery::Detached => "Detached",
+            })
+            .small()
+            .w(px(120.0))
+            .dropdown_caret(true)
+            .dropdown_menu(move |menu, _, _| {
+                Self::git_review_delivery_menu(menu, review_delivery_view.clone(), review_delivery)
+            })
+            .into_any_element();
+        let general_card = v_flex()
+            .w_full()
+            .max_w(px(760.0))
+            .overflow_hidden()
+            .rounded_lg()
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().sidebar)
+            .child(
+                h_flex().h(px(50.0)).px_4().items_center().child(
+                    div()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child("General"),
+                ),
+            )
+            .child(self.render_browser_settings_row(
+                "Review delivery",
+                "Start /review in the current chat when possible or launch a separate review chat"
+                    .into(),
+                review_delivery_control,
+                cx,
+            ));
+        v_flex()
+            .flex_1()
+            .h_full()
+            .min_w_0()
+            .child(
+                h_flex()
+                    .h(px(62.0))
+                    .px_6()
+                    .items_center()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        div()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("Code review"),
+                    ),
+            )
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .p_6()
+                    .gap_4()
+                    .child(general_card),
             )
             .into_any_element()
     }
@@ -41845,6 +41906,9 @@ fn settings_section_matches(section: SettingsSection, raw_query: &str) -> bool {
         SettingsSection::Git => {
             "git branches branch prefix push force pull requests draft merge squash commit instructions"
         }
+        SettingsSection::CodeReview => {
+            "code review review delivery inline detached git changes branch uncommitted"
+        }
         SettingsSection::Hooks => {
             "hooks lifecycle commands prompt agent trust config plugins coding"
         }
@@ -44069,6 +44133,10 @@ mod tests {
         assert!(settings_section_matches(
             SettingsSection::Git,
             "branch prefix"
+        ));
+        assert!(settings_section_matches(
+            SettingsSection::CodeReview,
+            "review inline"
         ));
         assert!(settings_section_matches(
             SettingsSection::Hooks,
