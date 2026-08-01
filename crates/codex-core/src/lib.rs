@@ -16458,6 +16458,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             if branch.is_empty()
                 || branch.len() > MAX_GIT_BRANCH_BYTES
                 || path.as_os_str().is_empty()
+                || !path.is_absolute()
             {
                 state.status_message =
                     Some("Enter a branch and an absolute worktree path.".to_owned());
@@ -24125,8 +24126,10 @@ mod tests {
 
     #[test]
     fn branch_mutations_are_scoped_to_the_detected_repository() {
+        let root = repository_path();
+        let worktree = root.with_file_name("repo-native-ui");
         let mut state = AppState::default();
-        state.git.repository_root = Some(PathBuf::from("C:\\repo"));
+        state.git.repository_root = Some(root.clone());
 
         assert_eq!(
             reduce(
@@ -24134,7 +24137,7 @@ mod tests {
                 Action::SwitchGitBranch("feature/native-ui".to_owned())
             ),
             [Effect::SwitchGitBranch {
-                root: PathBuf::from("C:\\repo"),
+                root: root.clone(),
                 branch: "feature/native-ui".to_owned(),
             }]
         );
@@ -24142,7 +24145,7 @@ mod tests {
         reduce(
             &mut state,
             Action::GitBranchMutationCompleted {
-                root: PathBuf::from("C:\\repo"),
+                root: root.clone(),
                 message: "Switched".to_owned(),
             },
         );
@@ -24152,14 +24155,14 @@ mod tests {
                 Action::CreateGitBranch("codex/new-native-ui".to_owned())
             ),
             [Effect::CreateGitBranch {
-                root: PathBuf::from("C:\\repo"),
+                root: root.clone(),
                 branch: "codex/new-native-ui".to_owned(),
             }]
         );
         reduce(
             &mut state,
             Action::GitBranchSwitchBlocked {
-                root: PathBuf::from("C:\\repo"),
+                root: root.clone(),
                 branch: "codex/new-native-ui".to_owned(),
                 create_branch: true,
                 paths: vec![PathBuf::from("src/lib.rs")],
@@ -24180,17 +24183,39 @@ mod tests {
             reduce(
                 &mut state,
                 Action::CreateGitWorktree {
-                    path: PathBuf::from("C:\\repo-native-ui"),
+                    path: worktree.clone(),
                     branch: "feature/native-ui".to_owned(),
                     create_branch: true,
                 }
             ),
             [Effect::CreateGitWorktree {
-                root: PathBuf::from("C:\\repo"),
-                path: PathBuf::from("C:\\repo-native-ui"),
+                root,
+                path: worktree,
                 branch: "feature/native-ui".to_owned(),
                 create_branch: true,
             }]
+        );
+    }
+
+    #[test]
+    fn create_git_worktree_rejects_relative_paths_before_backend() {
+        let mut state = AppState::default();
+        state.git.repository_root = Some(repository_path());
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::CreateGitWorktree {
+                    path: PathBuf::from("relative-worktree"),
+                    branch: "feature/native-ui".to_owned(),
+                    create_branch: true,
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.status_message.as_deref(),
+            Some("Enter a branch and an absolute worktree path.")
         );
     }
 
