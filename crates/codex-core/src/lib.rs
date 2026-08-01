@@ -2492,6 +2492,7 @@ pub struct MarketplaceState {
     pub plugin_mcp_servers: Vec<McpServerCard>,
     pub skills: Vec<SkillCard>,
     pub errors: Vec<String>,
+    pub marketplace_load_error_count: usize,
     pub app_errors: Vec<String>,
     pub mcp_errors: Vec<String>,
     pub skill_errors: Vec<String>,
@@ -5051,6 +5052,7 @@ pub enum Action {
     MarketplaceLoaded {
         plugins: Vec<PluginCard>,
         sources: Vec<MarketplaceSourceCard>,
+        marketplace_load_error_count: usize,
     },
     MarketplaceFailed(String),
     ComposerPluginsLoaded(Vec<PluginCard>),
@@ -13620,6 +13622,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         Action::MarketplaceLoaded {
             mut plugins,
             mut sources,
+            marketplace_load_error_count,
         } => {
             plugins.truncate(MAX_MARKETPLACE_ITEMS);
             sources.truncate(MAX_MARKETPLACE_SOURCES);
@@ -13633,6 +13636,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.marketplace.marketplace_sources = sources;
             state.marketplace.status = Some(LoadStatus::Ready);
             state.marketplace.errors.clear();
+            state.marketplace.marketplace_load_error_count =
+                marketplace_load_error_count.min(MAX_MARKETPLACE_SOURCES);
             if !marketplace_section_exists(
                 &state.marketplace.plugins,
                 state.marketplace.selected_section.as_ref(),
@@ -24828,6 +24833,41 @@ mod tests {
     }
 
     #[test]
+    fn partial_marketplace_load_warning_clears_only_after_a_clean_success() {
+        let mut state = AppState::default();
+
+        reduce(
+            &mut state,
+            Action::MarketplaceLoaded {
+                plugins: Vec::new(),
+                sources: Vec::new(),
+                marketplace_load_error_count: 2,
+            },
+        );
+        assert_eq!(state.marketplace.status, Some(LoadStatus::Ready));
+        assert_eq!(state.marketplace.marketplace_load_error_count, 2);
+
+        let _ = reduce(&mut state, Action::RefreshMarketplace);
+        assert_eq!(state.marketplace.marketplace_load_error_count, 2);
+
+        reduce(
+            &mut state,
+            Action::MarketplaceFailed("request failed".to_owned()),
+        );
+        assert_eq!(state.marketplace.marketplace_load_error_count, 2);
+
+        reduce(
+            &mut state,
+            Action::MarketplaceLoaded {
+                plugins: Vec::new(),
+                sources: Vec::new(),
+                marketplace_load_error_count: 0,
+            },
+        );
+        assert_eq!(state.marketplace.marketplace_load_error_count, 0);
+    }
+
+    #[test]
     fn plugin_directory_tabs_request_the_matching_stable_catalog() {
         let mut state = AppState::default();
         state.marketplace.selected_section = Some(MarketplaceSectionFilter::Featured);
@@ -25581,6 +25621,7 @@ mod tests {
             Action::MarketplaceLoaded {
                 plugins: vec![plugin],
                 sources: Vec::new(),
+                marketplace_load_error_count: 0,
             },
         );
 
@@ -25615,6 +25656,7 @@ mod tests {
             Action::MarketplaceLoaded {
                 plugins: Vec::new(),
                 sources: Vec::new(),
+                marketplace_load_error_count: 0,
             },
         );
         assert!(state.marketplace.selected_section.is_none());
@@ -25851,6 +25893,7 @@ mod tests {
             Action::MarketplaceLoaded {
                 plugins: vec![plugin],
                 sources: Vec::new(),
+                marketplace_load_error_count: 0,
             },
         );
         reduce(

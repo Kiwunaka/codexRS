@@ -25715,6 +25715,9 @@ impl WorkspaceView {
                                             })),
                                     ),
                             )
+                            .when_some(self.render_partial_marketplace_warning(cx), |catalog, warning| {
+                                catalog.child(warning)
+                            })
                             .when_some(mutation_error, |catalog, error| {
                                 catalog.child(
                                     div()
@@ -27464,7 +27467,7 @@ impl WorkspaceView {
             Some(LoadStatus::Idle | LoadStatus::Ready) if !has_plugins => {
                 let filtered = !self.state.marketplace.query.trim().is_empty()
                     || (!manage_mode && self.state.marketplace.selected_section.is_some());
-                self.render_catalog_message(
+                let message = self.render_catalog_message(
                     if filtered {
                         "No plugins match your filters"
                     } else if manage_mode {
@@ -27481,7 +27484,19 @@ impl WorkspaceView {
                     },
                     false,
                     cx,
-                )
+                );
+                if let Some(warning) = self.render_partial_marketplace_warning(cx) {
+                    v_flex()
+                        .flex_1()
+                        .min_h_0()
+                        .w_full()
+                        .px_5()
+                        .child(warning)
+                        .child(message)
+                        .into_any_element()
+                } else {
+                    message
+                }
             }
             Some(LoadStatus::Idle | LoadStatus::Ready) => {
                 let plugins_per_row = if manage_mode { 1 } else { 2 };
@@ -27547,6 +27562,10 @@ impl WorkspaceView {
                             .when(show_hero, |catalog| {
                                 catalog.child(self.render_plugin_directory_hero(cx))
                             })
+                            .when_some(
+                                self.render_partial_marketplace_warning(cx),
+                                |catalog, warning| catalog.child(warning),
+                            )
                             .children(rendered_sections),
                     )
                     .into_any_element()
@@ -28746,6 +28765,22 @@ impl WorkspaceView {
                     .into_any_element()
             }
         }
+    }
+
+    fn render_partial_marketplace_warning(&self, cx: &App) -> Option<AnyElement> {
+        (self.state.marketplace.marketplace_load_error_count > 0).then(|| {
+            h_flex()
+                .mt_3()
+                .p_3()
+                .rounded_lg()
+                .border_1()
+                .border_color(cx.theme().warning.opacity(0.45))
+                .bg(cx.theme().warning.opacity(0.08))
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child("Some plugin marketplaces could not be loaded. Refresh to retry.")
+                .into_any_element()
+        })
     }
 
     fn render_catalog_message(
