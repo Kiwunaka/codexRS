@@ -110,6 +110,13 @@ modifying or extracting the installed app.
 | Windows | partial | Core smoke path passes; complete packaging, signing, native browser/Computer Use integration, notifications, and accessibility |
 | Linux | platform | CI builds; complete Wayland portals, desktop matrix, packaging, notifications, global shortcuts, and parity smoke tests |
 
+### Keyboard accessibility baseline
+
+Local project rows are native tab stops with Enter/Space activation and a
+high-contrast focus outline. Their secondary New chat and Project actions
+controls remain separate following tab stops. Broader focus-order,
+screen-reader, reduced-motion, and contrast work remains open.
+
 ### In-app Browser permission status
 
 The stable-shaped Browser settings now include General Approval, bounded
