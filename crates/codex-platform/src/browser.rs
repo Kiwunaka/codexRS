@@ -64,6 +64,8 @@ const MAX_BROWSER_DOWNLOAD_ID_BYTES: usize = 256;
 const MAX_BROWSER_DOWNLOAD_PATH_BYTES: usize = 4 * 1024;
 const MAX_BROWSER_DOWNLOAD_HISTORY: usize = 200;
 const MAX_BROWSER_DOWNLOAD_WEBUI_RESOURCES: usize = 32;
+#[cfg(any(target_os = "linux", test))]
+const MAX_XDG_USER_DIRS_BYTES: usize = 16 * 1024;
 const MAX_DEVTOOLS_ACTIVE_PORT_BYTES: u64 = 4 * 1024;
 const MAX_DEVTOOLS_PATH_BYTES: usize = 512;
 const MAX_ERROR_BYTES: usize = 2 * 1024;
@@ -791,21 +793,121 @@ pub fn default_browser_download_dir() -> Option<PathBuf> {
 
     #[cfg(target_os = "linux")]
     {
-        std::env::var_os("XDG_DOWNLOAD_DIR")
+        let home = std::env::var_os("HOME")
             .map(PathBuf::from)
-            .filter(|path| path.is_absolute())
-            .or_else(|| {
-                std::env::var_os("HOME")
-                    .map(PathBuf::from)
-                    .filter(|path| path.is_absolute())
-                    .map(|path| path.join("Downloads"))
-            })
+            .filter(|path| path.is_absolute());
+        linux_user_dirs_config_path(
+            std::env::var_os("XDG_CONFIG_HOME")
+                .map(PathBuf::from)
+                .as_deref(),
+            home.as_deref(),
+        )
+        .and_then(|path| read_xdg_download_dir(&path, home.as_deref()))
+        .or_else(|| home.map(|path| path.join("Downloads")))
     }
 
     #[cfg(not(any(windows, target_os = "linux")))]
     {
         None
     }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_user_dirs_config_path(config_home: Option<&Path>, home: Option<&Path>) -> Option<PathBuf> {
+    config_home
+        .filter(|path| path.is_absolute())
+        .map(|path| path.join("user-dirs.dirs"))
+        .or_else(|| home.map(|path| path.join(".config").join("user-dirs.dirs")))
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn read_xdg_download_dir(path: &Path, home: Option<&Path>) -> Option<PathBuf> {
+    if !fs::metadata(path).ok()?.is_file() {
+        return None;
+    }
+    let file = File::open(path).ok()?;
+    let mut contents = Vec::with_capacity(MAX_XDG_USER_DIRS_BYTES.min(4 * 1024));
+    file.take((MAX_XDG_USER_DIRS_BYTES + 1) as u64)
+        .read_to_end(&mut contents)
+        .ok()?;
+    if contents.len() > MAX_XDG_USER_DIRS_BYTES {
+        return None;
+    }
+    parse_xdg_download_dir(&contents, home)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn parse_xdg_download_dir(contents: &[u8], home: Option<&Path>) -> Option<PathBuf> {
+    let contents = std::str::from_utf8(contents).ok()?;
+    let mut offset = 0_usize;
+    for raw_line in contents.split_inclusive('\n') {
+        let line = raw_line.trim_end_matches('\n');
+        let leading = line.len().saturating_sub(line.trim_start().len());
+        let line = &line[leading..];
+        let Some(value) = line.strip_prefix("XDG_DOWNLOAD_DIR=") else {
+            offset = offset.saturating_add(raw_line.len());
+            continue;
+        };
+        let value_offset = offset + leading + line.len().saturating_sub(value.len());
+        let raw_value = &contents[value_offset..];
+        let expands_home = raw_value.starts_with("\"$HOME\"") || raw_value.starts_with("\"$HOME/");
+        let value = decode_xdg_double_quoted(raw_value)?;
+        let path = if expands_home && value == "$HOME" {
+            home?.to_path_buf()
+        } else if expands_home && value.starts_with("$HOME/") {
+            let relative = value.strip_prefix("$HOME/")?;
+            home?.join(relative)
+        } else {
+            PathBuf::from(value)
+        };
+        return safe_absolute_path(path);
+    }
+    None
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn decode_xdg_double_quoted(value: &str) -> Option<String> {
+    let mut characters = value.chars();
+    (characters.next()? == '"').then_some(())?;
+    let mut decoded = String::with_capacity(value.len().min(256));
+    while let Some(character) = characters.next() {
+        match character {
+            '"' => {
+                let trailing = characters
+                    .by_ref()
+                    .take_while(|character| *character != '\n')
+                    .collect::<String>();
+                let trailing = trailing.trim();
+                return (trailing.is_empty() || trailing.starts_with('#')).then_some(decoded);
+            }
+            '\\' => match characters.next()? {
+                escaped @ ('\\' | '"' | '$' | '`') => decoded.push(escaped),
+                '\n' => {}
+                '\r' if characters.next()? == '\n' => {}
+                _ => return None,
+            },
+            character if character == '\n' || character == '\r' || character.is_control() => {
+                return None;
+            }
+            character => decoded.push(character),
+        }
+    }
+    None
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn safe_absolute_path(path: PathBuf) -> Option<PathBuf> {
+    path.is_absolute()
+        .then_some(path)
+        .filter(|path| {
+            !path
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+        })
+        .filter(|path| {
+            path.to_str()
+                .is_some_and(|value| !value.chars().any(char::is_control))
+        })
 }
 
 fn find_path_executable(names: &[&str]) -> Option<PathBuf> {
@@ -4538,9 +4640,11 @@ fn bounded_text(value: &str, max_bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
+    use std::error::Error;
     use std::fs;
     use std::io::{self, Read as _, Write as _};
     use std::net::TcpListener;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread;
@@ -4563,6 +4667,10 @@ mod tests {
         graceful_browser_exit, move_download_to_destination, normalize_browser_origin,
         parse_devtools_marker, resolve_browser_binary, safe_download_filename,
         wait_for_devtools_endpoint,
+    };
+    use super::{
+        MAX_XDG_USER_DIRS_BYTES, decode_xdg_double_quoted, linux_user_dirs_config_path,
+        parse_xdg_download_dir, read_xdg_download_dir,
     };
 
     fn runtime_value(
@@ -4591,6 +4699,108 @@ mod tests {
             .pointer("/result/value")
             .cloned()
             .ok_or_else(|| io::Error::other("Chromium did not return a WebUI value"))
+    }
+
+    #[test]
+    fn linux_xdg_download_dir_accepts_literal_and_home_paths() {
+        let home = std::env::temp_dir().join("codexrs-home");
+        let literal = std::env::temp_dir().join("codexrs-downloads");
+        let home_value = "XDG_DOWNLOAD_DIR=\"$HOME/Downloads\"\n".to_owned();
+        let literal = literal.to_string_lossy().replace('\\', "/");
+        let literal_value = format!("XDG_DOWNLOAD_DIR=\"{literal}\"\n");
+        assert_eq!(
+            parse_xdg_download_dir(home_value.as_bytes(), Some(&home)),
+            Some(home.join("Downloads"))
+        );
+        assert_eq!(
+            parse_xdg_download_dir(literal_value.as_bytes(), Some(&home)),
+            Some(PathBuf::from(literal))
+        );
+    }
+
+    #[test]
+    fn linux_xdg_download_dir_decodes_safe_shell_escapes_and_continuations() {
+        assert_eq!(
+            decode_xdg_double_quoted("\"/srv/\\\\folder/\\\"quoted\\\"/\\$cash/\\`tick\\`\""),
+            Some("/srv/\\folder/\"quoted\"/$cash/`tick`".to_owned())
+        );
+
+        let home = std::env::temp_dir().join("codexrs-home");
+        assert_eq!(
+            parse_xdg_download_dir(b"XDG_DOWNLOAD_DIR=\"$HOME/Down\\\nloads\"\n", Some(&home)),
+            Some(home.join("Downloads"))
+        );
+        assert_eq!(
+            parse_xdg_download_dir(
+                b"# generated\r\nXDG_DOWNLOAD_DIR=\"\\$HOME/Downloads\"\r\n",
+                Some(&home),
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn linux_xdg_download_dir_rejects_unsafe_or_unresolvable_values() {
+        let home = std::env::temp_dir().join("codexrs-home");
+        assert_eq!(
+            parse_xdg_download_dir(b"XDG_DOWNLOAD_DIR=\"Downloads\"\n", Some(&home)),
+            None
+        );
+        assert_eq!(
+            parse_xdg_download_dir(b"XDG_DOWNLOAD_DIR=\"$HOME/../other\"\n", Some(&home)),
+            None
+        );
+        assert_eq!(
+            parse_xdg_download_dir(b"XDG_DOWNLOAD_DIR=\"$HOME/Downloads\"\n", None),
+            None
+        );
+    }
+
+    #[test]
+    fn linux_xdg_download_dir_uses_absolute_xdg_config_or_home_config() {
+        let home = std::env::temp_dir().join("codexrs-home");
+        let config_home = std::env::temp_dir().join("codexrs-config");
+        assert_eq!(
+            linux_user_dirs_config_path(Some(&config_home), Some(&home)),
+            Some(config_home.join("user-dirs.dirs"))
+        );
+        assert_eq!(
+            linux_user_dirs_config_path(None, Some(&home)),
+            Some(home.join(".config").join("user-dirs.dirs"))
+        );
+        assert_eq!(
+            linux_user_dirs_config_path(Some(Path::new("relative-config")), Some(&home)),
+            Some(home.join(".config").join("user-dirs.dirs"))
+        );
+        assert_eq!(linux_user_dirs_config_path(None, None), None);
+    }
+
+    #[test]
+    fn linux_xdg_download_dir_bounds_config_reads() -> Result<(), Box<dyn Error>> {
+        let path = std::env::temp_dir().join(format!(
+            "codexrs-user-dirs-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+        ));
+        fs::write(&path, vec![b'x'; MAX_XDG_USER_DIRS_BYTES + 1])?;
+        let result = read_xdg_download_dir(&path, Some(&std::env::temp_dir()));
+        fs::remove_file(&path)?;
+        assert_eq!(result, None);
+        Ok(())
+    }
+
+    #[test]
+    fn linux_xdg_download_dir_rejects_directories() -> Result<(), Box<dyn Error>> {
+        let path = std::env::temp_dir().join(format!(
+            "codexrs-user-dirs-directory-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+        ));
+        fs::create_dir(&path)?;
+        let result = read_xdg_download_dir(&path, Some(&std::env::temp_dir()));
+        fs::remove_dir(&path)?;
+        assert_eq!(result, None);
+        Ok(())
     }
 
     #[test]
