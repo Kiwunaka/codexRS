@@ -2112,6 +2112,7 @@ pub struct PluginCard {
     pub installed: bool,
     pub enabled: bool,
     pub installable: bool,
+    pub requires_install_confirmation: bool,
     pub featured: bool,
     pub featured_rank: Option<usize>,
 }
@@ -2497,6 +2498,7 @@ pub struct MarketplaceState {
     pub mcp_errors: Vec<String>,
     pub skill_errors: Vec<String>,
     pub pending_plugin_id: Option<String>,
+    pub pending_plugin_install_confirmation: Option<String>,
     pub pending_app_id: Option<String>,
     pub pending_mcp_key: Option<String>,
     pub pending_mcp_auth_name: Option<String>,
@@ -5227,6 +5229,8 @@ pub enum Action {
         plugin_name: String,
         marketplace: String,
     },
+    ConfirmPluginInstall,
+    CancelPluginInstall,
     UninstallPlugin {
         plugin_id: String,
     },
@@ -7388,6 +7392,26 @@ fn resume_task_effect(state: &mut AppState, task_id: String) -> Effect {
     Effect::ResumeTask {
         task_id,
         generation: timeline.runtime_generation,
+    }
+}
+
+fn remove_composer_plugin_attachments(state: &mut AppState, plugin_id: &str) {
+    let plugin_uri = composer_plugin_uri(plugin_id);
+    let desktop_app_prefix = format!("{plugin_uri}?app=");
+    state.composer_attachments.retain(|attachment| {
+        if attachment.kind != ComposerAttachmentKind::Plugin {
+            return true;
+        }
+        attachment
+            .path
+            .to_str()
+            .is_none_or(|path| path != plugin_uri && !path.starts_with(desktop_app_prefix.as_str()))
+    });
+}
+
+fn clear_plugin_install_confirmation(state: &mut AppState) {
+    if let Some(plugin_id) = state.marketplace.pending_plugin_install_confirmation.take() {
+        remove_composer_plugin_attachments(state, &plugin_id);
     }
 }
 
@@ -13612,6 +13636,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::RefreshMarketplace => {
+            clear_plugin_install_confirmation(state);
             state.marketplace.status = Some(LoadStatus::Loading);
             vec![Effect::RefreshMarketplace {
                 cwds: selected_task_cwds(state),
@@ -13626,6 +13651,21 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             marketplace_load_error_count,
         } => {
             plugins.truncate(MAX_MARKETPLACE_ITEMS);
+            for plugin in &mut plugins {
+                plugin.id = bounded_string(plugin.id.trim().to_owned(), 512);
+                plugin.install_name = bounded_string(plugin.install_name.trim().to_owned(), 512);
+                plugin.marketplace = bounded_string(plugin.marketplace.trim().to_owned(), 512);
+                plugin.name = bounded_string(plugin.name.trim().to_owned(), 512);
+                plugin.description =
+                    bounded_string(plugin.description.trim().to_owned(), 16 * 1024);
+            }
+            let mut seen = HashSet::new();
+            plugins.retain(|plugin| {
+                !plugin.id.is_empty()
+                    && !plugin.install_name.is_empty()
+                    && !plugin.name.is_empty()
+                    && seen.insert(plugin.id.clone())
+            });
             sources.truncate(MAX_MARKETPLACE_SOURCES);
             for source in &mut sources {
                 source.name =
@@ -13634,6 +13674,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             sources.retain(|source| !source.name.is_empty());
             state.marketplace.plugins = plugins;
+            clear_plugin_install_confirmation(state);
             state.marketplace.marketplace_sources = sources;
             state.marketplace.status = Some(LoadStatus::Ready);
             state.marketplace.errors.clear();
@@ -13688,6 +13729,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     && seen.insert(plugin.id.clone())
             });
             state.marketplace.composer_plugins = plugins;
+            clear_plugin_install_confirmation(state);
             Vec::new()
         }
         Action::ComposerDesktopAppsLoaded(mut applications) => {
@@ -13723,6 +13765,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.marketplace.plugin_detail_status = None;
             state.marketplace.plugin_detail = None;
             state.marketplace.plugin_detail_error = None;
+            clear_plugin_install_confirmation(state);
             state.marketplace.selected_app_id = None;
             state.marketplace.app_detail_status = None;
             state.marketplace.app_detail = None;
@@ -14049,6 +14092,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.marketplace.plugin_detail = None;
             state.marketplace.plugin_detail_error = None;
             state.marketplace.pending_plugin_skill_name = None;
+            clear_plugin_install_confirmation(state);
             state.marketplace.selected_app_id = None;
             state.marketplace.app_detail_status = None;
             state.marketplace.app_detail = None;
@@ -14955,17 +14999,25 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             plugin_name,
             marketplace,
         } => {
+            let plugin = state
+                .marketplace
+                .plugins
+                .iter()
+                .chain(&state.marketplace.composer_plugins)
+                .find(|plugin| plugin.id == plugin_id && !plugin.installed && plugin.installable);
             let can_install = state.marketplace.pending_plugin_id.is_none()
                 && state.marketplace.pending_plugin_skill_name.is_none()
                 && state
                     .marketplace
-                    .plugins
-                    .iter()
-                    .chain(&state.marketplace.composer_plugins)
-                    .any(|plugin| {
-                        plugin.id == plugin_id && !plugin.installed && plugin.installable
-                    });
+                    .pending_plugin_install_confirmation
+                    .is_none()
+                && plugin.is_some();
             if !can_install {
+                return Vec::new();
+            }
+            if plugin.is_some_and(|plugin| plugin.requires_install_confirmation) {
+                state.marketplace.pending_plugin_install_confirmation =
+                    plugin.map(|plugin| plugin.id.clone());
                 return Vec::new();
             }
             state.marketplace.apps_needing_auth.clear();
@@ -14975,6 +15027,40 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 plugin_name,
                 marketplace,
             }]
+        }
+        Action::ConfirmPluginInstall => {
+            let Some(plugin_id) = state.marketplace.pending_plugin_install_confirmation.take()
+            else {
+                return Vec::new();
+            };
+            if state.marketplace.pending_plugin_id.is_some()
+                || state.marketplace.pending_plugin_skill_name.is_some()
+            {
+                remove_composer_plugin_attachments(state, &plugin_id);
+                return Vec::new();
+            }
+            let Some(plugin) = state
+                .marketplace
+                .plugins
+                .iter()
+                .chain(&state.marketplace.composer_plugins)
+                .find(|plugin| plugin.id == plugin_id && !plugin.installed && plugin.installable)
+                .cloned()
+            else {
+                remove_composer_plugin_attachments(state, &plugin_id);
+                return Vec::new();
+            };
+            state.marketplace.apps_needing_auth.clear();
+            state.marketplace.pending_plugin_id = Some(plugin.id.clone());
+            vec![Effect::InstallPlugin {
+                plugin_id: plugin.id,
+                plugin_name: plugin.install_name,
+                marketplace: plugin.marketplace,
+            }]
+        }
+        Action::CancelPluginInstall => {
+            clear_plugin_install_confirmation(state);
+            Vec::new()
         }
         Action::UninstallPlugin { plugin_id } => {
             let can_uninstall = state.marketplace.pending_plugin_id.is_none()
@@ -19579,6 +19665,7 @@ mod tests {
                 installed: true,
                 enabled: true,
                 installable: true,
+                requires_install_confirmation: false,
                 featured: false,
                 featured_rank: None,
             }]),
@@ -25654,6 +25741,7 @@ mod tests {
             installed: false,
             enabled: false,
             installable: true,
+            requires_install_confirmation: false,
             featured: true,
             featured_rank: Some(0),
         };
@@ -25722,6 +25810,7 @@ mod tests {
             installed: false,
             enabled: true,
             installable: true,
+            requires_install_confirmation: false,
             featured: true,
             featured_rank: Some(0),
         }];
@@ -25823,6 +25912,7 @@ mod tests {
             installed: true,
             enabled: true,
             installable: true,
+            requires_install_confirmation: false,
             featured: false,
             featured_rank: None,
         }];
@@ -25901,6 +25991,160 @@ mod tests {
     }
 
     #[test]
+    fn plugin_install_interstitial_blocks_until_confirmation_and_revalidates() {
+        let plugin = PluginCard {
+            id: "plugin@marketplace".to_owned(),
+            install_name: "plugin".to_owned(),
+            marketplace: "marketplace".to_owned(),
+            name: "Plugin".to_owned(),
+            description: String::new(),
+            category: None,
+            developer: None,
+            logo_url: None,
+            logo_url_dark: None,
+            default_prompt: None,
+            version: None,
+            installed: false,
+            enabled: false,
+            installable: true,
+            requires_install_confirmation: true,
+            featured: false,
+            featured_rank: None,
+        };
+        let install = || Action::InstallPlugin {
+            plugin_id: "plugin@marketplace".to_owned(),
+            plugin_name: "plugin".to_owned(),
+            marketplace: "marketplace".to_owned(),
+        };
+        let mut state = AppState::default();
+        state.marketplace.plugins = vec![plugin.clone()];
+
+        assert!(reduce(&mut state, install()).is_empty());
+        assert_eq!(
+            state
+                .marketplace
+                .pending_plugin_install_confirmation
+                .as_deref(),
+            Some("plugin@marketplace")
+        );
+        assert!(state.marketplace.pending_plugin_id.is_none());
+        state.composer_attachments = vec![
+            ComposerAttachment {
+                path: PathBuf::from("plugin://plugin@marketplace"),
+                name: "Plugin".to_owned(),
+                kind: ComposerAttachmentKind::Plugin,
+            },
+            ComposerAttachment {
+                path: PathBuf::from("plugin://plugin@marketplace?app=example"),
+                name: "Example".to_owned(),
+                kind: ComposerAttachmentKind::Plugin,
+            },
+            ComposerAttachment {
+                path: PathBuf::from("mention.txt"),
+                name: "mention.txt".to_owned(),
+                kind: ComposerAttachmentKind::Mention,
+            },
+        ];
+        assert!(reduce(&mut state, Action::CancelPluginInstall).is_empty());
+        assert!(
+            state
+                .marketplace
+                .pending_plugin_install_confirmation
+                .is_none()
+        );
+        assert_eq!(state.composer_attachments.len(), 1);
+        assert_eq!(
+            state.composer_attachments[0].kind,
+            ComposerAttachmentKind::Mention
+        );
+
+        assert!(reduce(&mut state, install()).is_empty());
+        state.composer_attachments.push(ComposerAttachment {
+            path: PathBuf::from("plugin://plugin@marketplace"),
+            name: "Plugin".to_owned(),
+            kind: ComposerAttachmentKind::Plugin,
+        });
+        state.marketplace.plugins.clear();
+        assert!(reduce(&mut state, Action::ConfirmPluginInstall).is_empty());
+        assert!(
+            state
+                .marketplace
+                .pending_plugin_install_confirmation
+                .is_none()
+        );
+        assert!(state.marketplace.pending_plugin_id.is_none());
+        assert_eq!(state.composer_attachments.len(), 1);
+
+        state.marketplace.plugins = vec![plugin];
+        assert!(reduce(&mut state, install()).is_empty());
+        assert_eq!(
+            reduce(&mut state, Action::ConfirmPluginInstall),
+            [Effect::InstallPlugin {
+                plugin_id: "plugin@marketplace".to_owned(),
+                plugin_name: "plugin".to_owned(),
+                marketplace: "marketplace".to_owned(),
+            }]
+        );
+        assert_eq!(
+            state.marketplace.pending_plugin_id.as_deref(),
+            Some("plugin@marketplace")
+        );
+    }
+
+    #[test]
+    fn marketplace_plugin_id_is_bounded_before_install_confirmation() {
+        let plugin = PluginCard {
+            id: "p".repeat(600),
+            install_name: "plugin".to_owned(),
+            marketplace: "marketplace".to_owned(),
+            name: "Plugin".to_owned(),
+            description: String::new(),
+            category: None,
+            developer: None,
+            logo_url: None,
+            logo_url_dark: None,
+            default_prompt: None,
+            version: None,
+            installed: false,
+            enabled: false,
+            installable: true,
+            requires_install_confirmation: true,
+            featured: false,
+            featured_rank: None,
+        };
+        let mut state = AppState::default();
+        assert!(
+            reduce(
+                &mut state,
+                Action::MarketplaceLoaded {
+                    plugins: vec![plugin],
+                    sources: Vec::new(),
+                    marketplace_load_error_count: 0,
+                },
+            )
+            .is_empty()
+        );
+        let plugin_id = state.marketplace.plugins[0].id.clone();
+        assert_eq!(plugin_id.len(), 512);
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::InstallPlugin {
+                    plugin_id: plugin_id.clone(),
+                    plugin_name: "plugin".to_owned(),
+                    marketplace: "marketplace".to_owned(),
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.marketplace.pending_plugin_install_confirmation,
+            Some(plugin_id)
+        );
+    }
+
+    #[test]
     fn plugin_and_skill_mutations_are_single_flight_and_refresh_actual_state() {
         let plugin = PluginCard {
             id: "computer-use@openai".to_owned(),
@@ -25917,6 +26161,7 @@ mod tests {
             installed: false,
             enabled: false,
             installable: true,
+            requires_install_confirmation: false,
             featured: true,
             featured_rank: Some(0),
         };
