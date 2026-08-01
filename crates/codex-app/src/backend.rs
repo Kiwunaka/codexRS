@@ -43,14 +43,16 @@ use codex_core::{
     MAX_KEYBOARD_SHORTCUTS_PER_COMMAND, MAX_LOCAL_PROJECTS, MAX_MCP_FORM_FIELDS,
     MAX_MCP_FORM_IMAGE_DATA_URL_BYTES, MAX_MCP_FORM_OPTIONS, MAX_MCP_FORM_VALUE_BYTES,
     MAX_MCP_SERVER_FIELD_BYTES, MAX_MCP_SERVER_LIST_ITEMS, MAX_PENDING_APPROVALS,
-    MAX_RETRYABLE_TURN_MESSAGES, MAX_TERMINAL_TABS, MAX_TURN_DIFF_BYTES, MAX_USER_INPUT_OPTIONS,
-    MAX_USER_INPUT_QUESTIONS, MAX_USER_INPUT_VALUE_BYTES, MAX_VISIBLE_THREADS,
-    MAX_WORKTREE_ROOT_BYTES, MainRoute, MarketplaceSourceCard, MarketplaceUpgradeFailure,
-    McpAuthStatus as CoreMcpAuthStatus, McpBrowserOriginElicitation, McpBrowserResourceElicitation,
-    McpElicitation, McpElicitationContent, McpElicitationDecision, McpElicitationValue,
-    McpFormElicitation, McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpFormOption,
-    McpFormStringFormat, McpResourceCard, McpResourceContentCard, McpResourceTemplateCard,
-    McpServerCard, McpServerDraft, McpServerInfoCard,
+    MAX_REMOTE_CURSOR_BYTES, MAX_REMOTE_DEVICE_ID_BYTES, MAX_REMOTE_DEVICE_LABEL_BYTES,
+    MAX_REMOTE_ENVIRONMENT_ID_BYTES, MAX_REMOTE_PAIRING_CODE_BYTES, MAX_RETRYABLE_TURN_MESSAGES,
+    MAX_TERMINAL_TABS, MAX_TURN_DIFF_BYTES, MAX_USER_INPUT_OPTIONS, MAX_USER_INPUT_QUESTIONS,
+    MAX_USER_INPUT_VALUE_BYTES, MAX_VISIBLE_THREADS, MAX_WORKTREE_ROOT_BYTES, MainRoute,
+    MarketplaceSourceCard, MarketplaceUpgradeFailure, McpAuthStatus as CoreMcpAuthStatus,
+    McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
+    McpElicitationContent, McpElicitationDecision, McpElicitationValue, McpFormElicitation,
+    McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpFormOption, McpFormStringFormat,
+    McpResourceCard, McpResourceContentCard, McpResourceTemplateCard, McpServerCard,
+    McpServerDraft, McpServerInfoCard,
     McpServerStartupFailureReason as CoreMcpServerStartupFailureReason,
     McpServerStartupState as CoreMcpServerStartupState, McpToolCard, McpTransportKind,
     McpUrlElicitation, ModelOption, NetworkApprovalContext as CoreNetworkApprovalContext,
@@ -65,11 +67,12 @@ use codex_core::{
     PullRequestIdentity, PullRequestLifecycle, PullRequestMergeMethod, PullRequestMutation,
     PullRequestRelationship, PullRequestReviewEvent, PullRequestState, PullRequestSummary,
     ReasoningEffortOption as CoreReasoningEffortOption, ReducedMotionPreference,
-    RetryableTurnSubmission, RetryableUserMessage, STANDARD_SERVICE_TIER_ID, ServiceTierOption,
-    SkillCard, SkillScope as CoreSkillScope, StartedImport, TaskRunStatus, TaskSearchResult,
-    TaskSummary, TerminalDockLocation, ThreadGoal as CoreThreadGoal,
-    ThreadGoalStatus as CoreThreadGoalStatus, TimelineCitation, TimelineItem, TimelineKind,
-    TimelineSource, UsageLimitWindow, UserInputAnswers, UserInputOption as CoreUserInputOption,
+    RemoteControlRuntimeStatus, RemoteDevice, RemotePairing, RetryableTurnSubmission,
+    RetryableUserMessage, STANDARD_SERVICE_TIER_ID, ServiceTierOption, SkillCard,
+    SkillScope as CoreSkillScope, StartedImport, TaskRunStatus, TaskSearchResult, TaskSummary,
+    TerminalDockLocation, ThreadGoal as CoreThreadGoal, ThreadGoalStatus as CoreThreadGoalStatus,
+    TimelineCitation, TimelineItem, TimelineKind, TimelineSource, UsageLimitWindow,
+    UserInputAnswers, UserInputOption as CoreUserInputOption,
     UserInputQuestion as CoreUserInputQuestion, UserInputRequest,
     appearance_code_theme_supports_variant, computer_app_id_matches, is_appearance_code_theme_id,
 };
@@ -115,32 +118,31 @@ use codex_protocol::{
     CommandExecutionRequestApprovalResponse, ConfigBatchWriteParams, ConfigEdit,
     ConfigMergeStrategy, ConfigReadParams, ConfigReadResponse, ConfigWriteStatus,
     DynamicToolCallOutputContentItem, DynamicToolCallParams, DynamicToolCallResponse,
-    DynamicToolFunction, DynamicToolNamespaceTool, DynamicToolSpec, ExecpolicyAmendment,
-    ExternalAgentConfigDetectParams, ExternalAgentConfigImportCompletedNotification,
-    ExternalAgentConfigImportHistoriesReadResponse, ExternalAgentConfigImportItemTypeFailure,
-    ExternalAgentConfigImportItemTypeSuccess, ExternalAgentConfigImportParams,
-    ExternalAgentConfigImportProgressNotification, ExternalAgentConfigImportTypeResult,
-    ExternalAgentConfigMigrationItem, ExternalAgentConfigMigrationItemType,
-    ExternalAgentImportedConnectorCandidate, ExternalAgentImportedConnectorSource,
-    ExternalAgentMigrationDetails, ExternalAgentNamedMigration, ExternalAgentPluginsMigration,
-    ExternalAgentSessionMigration, FeedbackUploadParams, FileChangeApprovalDecision,
-    FileChangeRequestApprovalParams, FileChangeRequestApprovalResponse, FileSystemAccessMode,
-    FileSystemPath, FileSystemSpecialPath, FuzzyFileSearchMatchType, FuzzyFileSearchParams,
-    FuzzyFileSearchResponse, FuzzyFileSearchResult as ProtocolFuzzyFileResult,
-    FuzzyFileSearchSessionCompletedNotification, FuzzyFileSearchSessionStartParams,
-    FuzzyFileSearchSessionStopParams, FuzzyFileSearchSessionUpdateParams,
-    FuzzyFileSearchSessionUpdatedNotification, GetAccountParams, GetAuthStatusParams,
-    GitDiffToRemoteParams, HistorySortDirection, HookEventName as ProtocolHookEventName,
-    HookHandlerType as ProtocolHookHandlerType, HookSource as ProtocolHookSource,
-    HookTrustStatus as ProtocolHookTrustStatus, HooksListParams, InitializeCapabilities,
-    ListMcpServerStatusParams, LoginAccountParams, LoginAccountResponse, MarketplaceAddParams,
-    MarketplaceRemoveParams, MarketplaceUpgradeParams, McpAuthStatus as ProtocolMcpAuthStatus,
-    McpElicitationArrayItems, McpElicitationPrimitiveSchema, McpElicitationStringFormat,
-    McpOpenAiElicitationFieldSchema, McpOpenAiImagePickerSchema, McpResourceReadParams,
-    McpServerConfig, McpServerElicitationAction as ProtocolMcpServerElicitationAction,
-    McpServerElicitationRequest, McpServerElicitationRequestParams,
-    McpServerElicitationRequestResponse, McpServerOauthLoginCompletedNotification,
-    McpServerOauthLoginParams,
+    ExecpolicyAmendment, ExternalAgentConfigDetectParams,
+    ExternalAgentConfigImportCompletedNotification, ExternalAgentConfigImportHistoriesReadResponse,
+    ExternalAgentConfigImportItemTypeFailure, ExternalAgentConfigImportItemTypeSuccess,
+    ExternalAgentConfigImportParams, ExternalAgentConfigImportProgressNotification,
+    ExternalAgentConfigImportTypeResult, ExternalAgentConfigMigrationItem,
+    ExternalAgentConfigMigrationItemType, ExternalAgentImportedConnectorCandidate,
+    ExternalAgentImportedConnectorSource, ExternalAgentMigrationDetails,
+    ExternalAgentNamedMigration, ExternalAgentPluginsMigration, ExternalAgentSessionMigration,
+    FeedbackUploadParams, FileChangeApprovalDecision, FileChangeRequestApprovalParams,
+    FileChangeRequestApprovalResponse, FileSystemAccessMode, FileSystemPath, FileSystemSpecialPath,
+    FuzzyFileSearchMatchType, FuzzyFileSearchParams, FuzzyFileSearchResponse,
+    FuzzyFileSearchResult as ProtocolFuzzyFileResult, FuzzyFileSearchSessionCompletedNotification,
+    FuzzyFileSearchSessionStartParams, FuzzyFileSearchSessionStopParams,
+    FuzzyFileSearchSessionUpdateParams, FuzzyFileSearchSessionUpdatedNotification,
+    GetAccountParams, GetAuthStatusParams, GitDiffToRemoteParams, HistorySortDirection,
+    HookEventName as ProtocolHookEventName, HookHandlerType as ProtocolHookHandlerType,
+    HookSource as ProtocolHookSource, HookTrustStatus as ProtocolHookTrustStatus, HooksListParams,
+    InitializeCapabilities, ListMcpServerStatusParams, LoginAccountParams, LoginAccountResponse,
+    MarketplaceAddParams, MarketplaceRemoveParams, MarketplaceUpgradeParams,
+    McpAuthStatus as ProtocolMcpAuthStatus, McpElicitationArrayItems,
+    McpElicitationPrimitiveSchema, McpElicitationStringFormat, McpOpenAiElicitationFieldSchema,
+    McpOpenAiImagePickerSchema, McpResourceReadParams, McpServerConfig,
+    McpServerElicitationAction as ProtocolMcpServerElicitationAction, McpServerElicitationRequest,
+    McpServerElicitationRequestParams, McpServerElicitationRequestResponse,
+    McpServerOauthLoginCompletedNotification, McpServerOauthLoginParams,
     McpServerStartupFailureReason as ProtocolMcpServerStartupFailureReason,
     McpServerStartupState as ProtocolMcpServerStartupState,
     McpServerStatus as ProtocolMcpServerStatus, McpServerStatusDetail,
@@ -150,8 +152,11 @@ use codex_protocol::{
     PermissionGrantScope, PermissionProfile, PermissionProfileListParams,
     PermissionsRequestApprovalParams, PermissionsRequestApprovalResponse, PlanType,
     PluginInstallParams, PluginListMarketplaceKind, PluginListParams, PluginReadParams,
-    PluginUninstallParams, SkillScope as ProtocolSkillScope, SkillsConfigWriteParams,
-    SkillsListParams, ThreadArchiveParams, ThreadBackgroundTerminal,
+    PluginUninstallParams, RemoteControlClient, RemoteControlClientsListParams,
+    RemoteControlClientsRevokeParams, RemoteControlConnectionStatus,
+    RemoteControlPairingStartParams, RemoteControlPairingStatusParams,
+    RemoteControlStatusChangedNotification, SkillScope as ProtocolSkillScope,
+    SkillsConfigWriteParams, SkillsListParams, ThreadArchiveParams, ThreadBackgroundTerminal,
     ThreadBackgroundTerminalsCleanParams, ThreadBackgroundTerminalsListParams,
     ThreadBackgroundTerminalsTerminateParams, ThreadCompactStartParams, ThreadDeleteParams,
     ThreadForkParams, ThreadGoalClearParams, ThreadGoalClearedNotification, ThreadGoalGetParams,
@@ -161,15 +166,18 @@ use codex_protocol::{
     ThreadResumeInitialTurnsPageParams, ThreadResumeParams, ThreadRollbackParams,
     ThreadSearchParams, ThreadSetNameParams, ThreadSettingsUpdateParams, ThreadShellCommandParams,
     ThreadStartParams, ThreadTokenUsageUpdatedNotification, ThreadTurnsListParams,
-    ThreadUnarchiveParams, ToolRequestUserInputAnswer, ToolRequestUserInputParams,
-    ToolRequestUserInputResponse, TurnDiffUpdatedNotification, TurnInterruptParams,
-    TurnStartParams, TurnSteerParams, UserInput,
+    ThreadUnarchiveParams, ThreadUnsubscribeParams, ThreadUnsubscribeResponse,
+    ToolRequestUserInputAnswer, ToolRequestUserInputParams, ToolRequestUserInputResponse,
+    TurnDiffUpdatedNotification, TurnInterruptParams, TurnStartParams, TurnSteerParams, UserInput,
 };
 use codex_storage::{
     BrowserDownloadRecordStatus, MAX_BROWSER_DOWNLOAD_RECORDS, Store, StoredBrowserDownload,
 };
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use serde_json::{Value, json};
+
+#[cfg(any(windows, test))]
+use codex_protocol::{DynamicToolFunction, DynamicToolNamespaceTool, DynamicToolSpec};
 
 const BACKEND_COMMAND_CAPACITY: usize = 64;
 const BACKEND_EVENT_CAPACITY: usize = 1_024;
@@ -193,6 +201,11 @@ const MAX_SOURCE_URL_BYTES: usize = 8 * 1024;
 const TRUSTED_ACCESS_FOR_CYBER_WARNING: &str = "Your conversations have multiple flags for possible cybersecurity risk. Responses may take longer because extra safety checks are on. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber";
 const TRUSTED_ACCESS_FOR_CYBER_URL: &str = "https://chatgpt.com/cyber";
 const MAX_STATUS_BYTES: usize = 16 * 1024;
+const REMOTE_CONTROL_INVALID_RESPONSE: &str = "Remote Control returned an invalid response.";
+const REMOTE_CONTROL_STATUS_FAILED: &str = "Remote Control is unavailable. Try again.";
+const REMOTE_CONTROL_MUTATION_FAILED: &str = "Remote Control could not be updated. Try again.";
+const REMOTE_PAIRING_FAILED: &str = "Remote pairing could not be completed. Try again.";
+const REMOTE_DEVICES_FAILED: &str = "Remote devices could not be loaded. Try again.";
 const MAX_CONFIG_PATH_BYTES: usize = 32 * 1024;
 const MAX_CONFIG_VERSION_BYTES: usize = 512;
 const MAX_INTERRUPTED_COMPUTER_TURNS: usize = 64;
@@ -3095,11 +3108,13 @@ fn run_backend(commands: Receiver<BackendCommand>, events: Sender<Action>) {
                         }
                     }
                     Ok(None) => break,
-                    Err(error) => {
+                    Err(_) => {
                         emit(
                             &events,
-                            Action::SetStatus(format!("app-server event error: {error}")),
+                            Action::SetStatus("app-server event channel closed".to_owned()),
                         );
+                        emit(&events, Action::ConnectionLost);
+                        disconnected = true;
                         break;
                     }
                 }
@@ -4700,6 +4715,43 @@ fn run_effect(
 
     let Some(app_server) = connection.as_ref() else {
         match effect {
+            Effect::LoadRemoteControlStatus { generation } => emit(
+                events,
+                Action::RemoteControlStatusFailed {
+                    generation,
+                    message: REMOTE_CONTROL_STATUS_FAILED.to_owned(),
+                },
+            ),
+            Effect::SetRemoteControlEnabled { generation, .. }
+            | Effect::RevokeRemoteDevice { generation, .. } => emit(
+                events,
+                Action::RemoteControlMutationFailed {
+                    generation,
+                    message: REMOTE_CONTROL_MUTATION_FAILED.to_owned(),
+                },
+            ),
+            Effect::StartRemotePairing { generation, .. }
+            | Effect::CheckRemotePairing { generation, .. } => emit(
+                events,
+                Action::RemotePairingFailed {
+                    generation,
+                    message: REMOTE_PAIRING_FAILED.to_owned(),
+                },
+            ),
+            Effect::LoadRemoteDevices {
+                generation,
+                environment_id,
+                append,
+                ..
+            } => emit(
+                events,
+                Action::RemoteDevicesFailed {
+                    generation,
+                    environment_id,
+                    message: REMOTE_DEVICES_FAILED.to_owned(),
+                    append,
+                },
+            ),
             Effect::LoadBranchDiff { generation, .. } => emit(
                 events,
                 Action::BranchDiffFailed {
@@ -4757,6 +4809,205 @@ fn run_effect(
                 ),
             }
         }
+        Effect::LoadRemoteControlStatus { generation } => {
+            match app_server.read_remote_control_status() {
+                Ok(response) => {
+                    match map_remote_control_snapshot(response.status, response.environment_id) {
+                        Ok((status, environment_id)) => emit(
+                            events,
+                            Action::RemoteControlStatusLoaded {
+                                generation,
+                                status,
+                                environment_id,
+                            },
+                        ),
+                        Err(()) => emit(
+                            events,
+                            Action::RemoteControlStatusFailed {
+                                generation,
+                                message: REMOTE_CONTROL_INVALID_RESPONSE.to_owned(),
+                            },
+                        ),
+                    }
+                }
+                Err(_) => emit(
+                    events,
+                    Action::RemoteControlStatusFailed {
+                        generation,
+                        message: REMOTE_CONTROL_STATUS_FAILED.to_owned(),
+                    },
+                ),
+            }
+        }
+        Effect::SetRemoteControlEnabled {
+            generation,
+            enabled,
+        } => {
+            let result = if enabled {
+                app_server.enable_remote_control(None)
+            } else {
+                app_server.disable_remote_control(None)
+            };
+            match result {
+                Ok(response) => {
+                    match map_remote_control_snapshot(response.status, response.environment_id) {
+                        Ok((status, environment_id)) => emit(
+                            events,
+                            Action::RemoteControlEnabledChanged {
+                                generation,
+                                enabled,
+                                status,
+                                environment_id,
+                            },
+                        ),
+                        Err(()) => emit(
+                            events,
+                            Action::RemoteControlMutationFailed {
+                                generation,
+                                message: REMOTE_CONTROL_INVALID_RESPONSE.to_owned(),
+                            },
+                        ),
+                    }
+                }
+                Err(_) => emit(
+                    events,
+                    Action::RemoteControlMutationFailed {
+                        generation,
+                        message: REMOTE_CONTROL_MUTATION_FAILED.to_owned(),
+                    },
+                ),
+            }
+        }
+        Effect::StartRemotePairing {
+            generation,
+            manual_code,
+        } => {
+            match app_server
+                .start_remote_control_pairing(RemoteControlPairingStartParams { manual_code })
+            {
+                Ok(response) => match map_remote_pairing(
+                    response.pairing_code,
+                    response.manual_pairing_code,
+                    response.environment_id,
+                    response.expires_at,
+                ) {
+                    Ok(pairing) => emit(
+                        events,
+                        Action::RemotePairingStarted {
+                            generation,
+                            pairing,
+                        },
+                    ),
+                    Err(()) => emit(
+                        events,
+                        Action::RemotePairingFailed {
+                            generation,
+                            message: REMOTE_CONTROL_INVALID_RESPONSE.to_owned(),
+                        },
+                    ),
+                },
+                Err(_) => emit(
+                    events,
+                    Action::RemotePairingFailed {
+                        generation,
+                        message: REMOTE_PAIRING_FAILED.to_owned(),
+                    },
+                ),
+            }
+        }
+        Effect::CheckRemotePairing {
+            generation,
+            pairing,
+        } => match app_server
+            .read_remote_control_pairing_status(remote_pairing_status_params(&pairing))
+        {
+            Ok(response) => emit(
+                events,
+                Action::RemotePairingChecked {
+                    generation,
+                    claimed: response.claimed,
+                },
+            ),
+            Err(_) => emit(
+                events,
+                Action::RemotePairingFailed {
+                    generation,
+                    message: REMOTE_PAIRING_FAILED.to_owned(),
+                },
+            ),
+        },
+        Effect::LoadRemoteDevices {
+            generation,
+            environment_id,
+            cursor,
+            limit,
+            append,
+        } => {
+            let params = RemoteControlClientsListParams {
+                environment_id: environment_id.clone(),
+                cursor,
+                limit: Some(limit),
+                order: None,
+            };
+            match app_server.list_remote_control_clients(params) {
+                Ok(response) => {
+                    match map_remote_devices_page(response.data, response.next_cursor, limit) {
+                        Ok((devices, next_cursor)) => emit(
+                            events,
+                            Action::RemoteDevicesLoaded {
+                                generation,
+                                environment_id,
+                                devices,
+                                next_cursor,
+                                append,
+                            },
+                        ),
+                        Err(()) => emit(
+                            events,
+                            Action::RemoteDevicesFailed {
+                                generation,
+                                environment_id,
+                                message: REMOTE_CONTROL_INVALID_RESPONSE.to_owned(),
+                                append,
+                            },
+                        ),
+                    }
+                }
+                Err(_) => emit(
+                    events,
+                    Action::RemoteDevicesFailed {
+                        generation,
+                        environment_id,
+                        message: REMOTE_DEVICES_FAILED.to_owned(),
+                        append,
+                    },
+                ),
+            }
+        }
+        Effect::RevokeRemoteDevice {
+            generation,
+            environment_id,
+            client_id,
+        } => match app_server.revoke_remote_control_client(RemoteControlClientsRevokeParams {
+            environment_id: environment_id.clone(),
+            client_id: client_id.clone(),
+        }) {
+            Ok(_) => emit(
+                events,
+                Action::RemoteDeviceRevoked {
+                    generation,
+                    environment_id,
+                    client_id,
+                },
+            ),
+            Err(_) => emit(
+                events,
+                Action::RemoteControlMutationFailed {
+                    generation,
+                    message: REMOTE_CONTROL_MUTATION_FAILED.to_owned(),
+                },
+            ),
+        },
         Effect::LoadAccount => {
             match app_server.read_account(GetAccountParams {
                 refresh_token: Some(false),
@@ -5408,6 +5659,9 @@ fn run_effect(
                                     })
                                     .collect(),
                                 requirements: PermissionRequirements {
+                                    managed_allow_remote_control: requirements
+                                        .as_ref()
+                                        .and_then(|requirements| requirements.allow_remote_control),
                                     allowed_approval_policies: requirements
                                         .as_ref()
                                         .and_then(|requirements| {
@@ -5662,6 +5916,10 @@ fn run_effect(
             memory_preferences,
         } => {
             let runtime_workspace_roots = cwd.clone().map(|path| vec![path]);
+            #[cfg(windows)]
+            let dynamic_tools = Some(computer_use_dynamic_tools());
+            #[cfg(not(windows))]
+            let dynamic_tools = None;
             match app_server.start_thread(ThreadStartParams {
                 model: model.clone(),
                 service_tier: Some(service_tier.clone()),
@@ -5670,7 +5928,7 @@ fn run_effect(
                 permissions: permissions.clone(),
                 approval_policy: approval_policy.clone(),
                 approvals_reviewer: approvals_reviewer.map(protocol_approvals_reviewer),
-                dynamic_tools: Some(computer_use_dynamic_tools()),
+                dynamic_tools,
                 config: memory_preferences.map(|preferences| {
                     json!({
                         "memories.generate_memories": preferences.generate_memories,
@@ -5683,6 +5941,7 @@ fn run_effect(
                 Ok(response) => {
                     let task = map_task(response.thread);
                     let task_id = task.id.clone();
+                    #[cfg(windows)]
                     computer_capable_threads.insert(task_id.clone());
                     emit(events, Action::TaskCreated(task));
                     if let Some(preferences) = memory_preferences {
@@ -5694,6 +5953,7 @@ fn run_effect(
                             },
                         );
                     }
+                    #[cfg(windows)]
                     emit(
                         events,
                         Action::ComputerUseAvailable {
@@ -8519,8 +8779,12 @@ fn structured_turn_error(status: &str, detail: Option<&str>) -> String {
 }
 
 fn unsubscribe_thread(app_server: &AppServerConnection, thread_id: &str) {
-    let _: Result<Value, _> =
-        app_server.request("thread/unsubscribe", json!({ "threadId": thread_id }));
+    let _: Result<ThreadUnsubscribeResponse, _> = app_server.request(
+        "thread/unsubscribe",
+        ThreadUnsubscribeParams {
+            thread_id: thread_id.to_owned(),
+        },
+    );
 }
 
 fn composer_rich_mention(name: &str, path: &Path) -> String {
@@ -9438,6 +9702,7 @@ fn connect(
     }
 }
 
+#[cfg(any(windows, test))]
 fn computer_use_dynamic_tools() -> Vec<DynamicToolSpec> {
     vec![DynamicToolSpec::Namespace {
         name: "computer_use".to_owned(),
@@ -9632,6 +9897,7 @@ fn computer_use_dynamic_tools() -> Vec<DynamicToolSpec> {
     }]
 }
 
+#[cfg(any(windows, test))]
 fn computer_window_schema() -> Value {
     json!({
         "type": "object",
@@ -9645,6 +9911,7 @@ fn computer_window_schema() -> Value {
     })
 }
 
+#[cfg(any(windows, test))]
 fn dynamic_tool(name: &str, description: &str, input_schema: Value) -> DynamicToolNamespaceTool {
     DynamicToolNamespaceTool::new(DynamicToolFunction {
         name: name.to_owned(),
@@ -11408,6 +11675,25 @@ fn handle_notification(method: &str, params: Value, events: &Sender<Action>) -> 
         return true;
     }
     match method {
+        "remoteControl/status/changed" => {
+            if let Ok(notification) =
+                serde_json::from_value::<RemoteControlStatusChangedNotification>(params)
+            {
+                match map_remote_control_snapshot(notification.status, notification.environment_id)
+                {
+                    Ok((status, environment_id)) => emit(
+                        events,
+                        Action::RemoteControlStatusChanged {
+                            status,
+                            environment_id,
+                        },
+                    ),
+                    Err(()) => emit(events, Action::RefreshRemoteControlStatus),
+                }
+            } else {
+                emit(events, Action::RefreshRemoteControlStatus);
+            }
+        }
         "turn/started" => {
             if let (Some(task_id), Some(turn_id)) = (
                 string_field(&params, "threadId"),
@@ -11627,7 +11913,9 @@ fn handle_notification(method: &str, params: Value, events: &Sender<Action>) -> 
                     Action::McpServerAuthenticationCompleted {
                         name: notification.name,
                         success: notification.success,
-                        error: notification.error,
+                        error: notification
+                            .error
+                            .map(|_| "MCP server authentication failed. Try again.".to_owned()),
                     },
                 );
             }
@@ -11641,7 +11929,10 @@ fn handle_notification(method: &str, params: Value, events: &Sender<Action>) -> 
                     Action::McpServerStartupStatusUpdated {
                         name: notification.name,
                         status: map_mcp_startup_state(notification.status),
-                        error: notification.error,
+                        error: notification.error.map(|_| {
+                            "MCP server could not start. Check its configuration and try again."
+                                .to_owned()
+                        }),
                         failure_reason: notification
                             .failure_reason
                             .map(map_mcp_startup_failure_reason),
@@ -15119,6 +15410,108 @@ fn string_array(value: &Value, key: &str) -> String {
         .unwrap_or_default()
 }
 
+const fn map_remote_control_status(
+    status: RemoteControlConnectionStatus,
+) -> RemoteControlRuntimeStatus {
+    match status {
+        RemoteControlConnectionStatus::Disabled => RemoteControlRuntimeStatus::Disabled,
+        RemoteControlConnectionStatus::Connecting => RemoteControlRuntimeStatus::Connecting,
+        RemoteControlConnectionStatus::Connected => RemoteControlRuntimeStatus::Connected,
+        RemoteControlConnectionStatus::Errored => RemoteControlRuntimeStatus::Errored,
+    }
+}
+
+fn bounded_remote_identifier(value: String, limit: usize) -> Option<String> {
+    (!value.is_empty() && value.len() <= limit && !value.chars().any(char::is_control))
+        .then_some(value)
+}
+
+fn map_remote_control_snapshot(
+    status: RemoteControlConnectionStatus,
+    value: Option<String>,
+) -> Result<(RemoteControlRuntimeStatus, Option<String>), ()> {
+    let status = map_remote_control_status(status);
+    let environment_id = value
+        .map(|value| bounded_remote_identifier(value, MAX_REMOTE_ENVIRONMENT_ID_BYTES).ok_or(()))
+        .transpose()?;
+    match (status, environment_id.is_some()) {
+        (RemoteControlRuntimeStatus::Connected, true)
+        | (RemoteControlRuntimeStatus::Disabled, false)
+        | (RemoteControlRuntimeStatus::Connecting, _)
+        | (RemoteControlRuntimeStatus::Errored, _) => {}
+        _ => return Err(()),
+    }
+    Ok((status, environment_id))
+}
+
+fn map_remote_pairing(
+    pairing_code: String,
+    manual_pairing_code: Option<String>,
+    environment_id: String,
+    expires_at: i64,
+) -> Result<RemotePairing, ()> {
+    let pairing_code =
+        bounded_remote_identifier(pairing_code, MAX_REMOTE_PAIRING_CODE_BYTES).ok_or(())?;
+    let manual_pairing_code = manual_pairing_code
+        .map(|code| bounded_remote_identifier(code, MAX_REMOTE_PAIRING_CODE_BYTES).ok_or(()))
+        .transpose()?;
+    let environment_id =
+        bounded_remote_identifier(environment_id, MAX_REMOTE_ENVIRONMENT_ID_BYTES).ok_or(())?;
+    Ok(RemotePairing {
+        pairing_code,
+        manual_pairing_code,
+        environment_id,
+        expires_at,
+    })
+}
+
+fn remote_pairing_status_params(pairing: &RemotePairing) -> RemoteControlPairingStatusParams {
+    // `pairingCode` is always returned by pairing/start. The core state deliberately
+    // does not retain which UI path started pairing, so it is the stable canonical
+    // choice; `manualPairingCode` remains a display-only fallback.
+    RemoteControlPairingStatusParams {
+        pairing_code: Some(pairing.pairing_code.clone()),
+        manual_pairing_code: None,
+    }
+}
+
+fn map_remote_devices_page(
+    devices: Vec<RemoteControlClient>,
+    next_cursor: Option<String>,
+    limit: u32,
+) -> Result<(Vec<RemoteDevice>, Option<String>), ()> {
+    let page_limit = usize::try_from(limit).map_err(|_| ())?;
+    if page_limit == 0 || devices.len() > page_limit {
+        return Err(());
+    }
+    let mut seen = HashSet::new();
+    let mut mapped = Vec::with_capacity(devices.len());
+    for device in devices {
+        let client_id =
+            bounded_remote_identifier(device.client_id, MAX_REMOTE_DEVICE_ID_BYTES).ok_or(())?;
+        let display_name = device
+            .display_name
+            .map(|name| {
+                let name = name.trim().to_owned();
+                (name.len() <= MAX_REMOTE_DEVICE_LABEL_BYTES && !name.chars().any(char::is_control))
+                    .then_some(name)
+                    .ok_or(())
+            })
+            .transpose()?
+            .filter(|name| !name.is_empty());
+        if seen.insert(client_id.clone()) {
+            mapped.push(RemoteDevice {
+                client_id,
+                display_name,
+            });
+        }
+    }
+    let next_cursor = next_cursor
+        .map(|cursor| bounded_remote_identifier(cursor, MAX_REMOTE_CURSOR_BYTES).ok_or(()))
+        .transpose()?;
+    Ok((mapped, next_cursor))
+}
+
 fn bounded(mut value: String, limit: usize) -> String {
     if value.len() <= limit {
         return value;
@@ -15164,15 +15557,16 @@ mod tests {
         McpServerDraft, McpServerStartupFailureReason, McpServerStartupState, McpTransportKind,
         NetworkPolicyAction, OutputArtifactKind, PermissionFileSystemAccess,
         PermissionRequestDetail, Personality, PluginDirectoryTab, PrimaryWindowPlacement,
-        PullRequestMergeMethod, ReducedMotionPreference, RetryableTurnSubmission,
-        RetryableUserMessage, TimelineItem, TimelineKind, TimelineSource, UserInputAnswer,
-        UserInputAnswers,
+        PullRequestMergeMethod, ReducedMotionPreference, RemoteControlRuntimeStatus, RemotePairing,
+        RetryableTurnSubmission, RetryableUserMessage, TimelineItem, TimelineKind, TimelineSource,
+        UserInputAnswer, UserInputAnswers,
     };
     use codex_platform::{AppServerEvent, ComputerApplication, ComputerKey};
     use codex_protocol::{
         AppInfo, AppToolSummary, ConfigReadResponse, ConnectorMetadata, FuzzyFileSearchMatchType,
         FuzzyFileSearchResult as ProtocolFuzzyFileResult,
-        McpServerStatus as ProtocolMcpServerStatus, PluginListMarketplaceKind, UserInput,
+        McpServerStatus as ProtocolMcpServerStatus, PluginListMarketplaceKind, RemoteControlClient,
+        RemoteControlConnectionStatus, UserInput,
     };
     use crossbeam_channel::bounded;
     use serde_json::{Value, json};
@@ -15184,21 +15578,22 @@ mod tests {
         GoalContinuationScheduler, MAX_ITEM_TEXT_BYTES, McpElicitationMapError, PendingApproval,
         STABLE_OPT_OUT_NOTIFICATION_METHODS, TASK_SEARCH_DEBOUNCE, TRUSTED_ACCESS_FOR_CYBER_URL,
         TRUSTED_ACCESS_FOR_CYBER_WARNING, TaskSearchDebouncer, TerminalParserCallbacks,
-        agent_configuration_snapshot, appearance_theme_key, browser_origin_auto_decision,
-        browser_origin_elicitation_response, browser_policy_target, browser_resource_auto_decision,
-        browser_resource_elicitation_response, combined_git_generation_prompt,
-        combined_git_output_schema, commit_generation_prompt, commit_message_output_schema,
-        composer_config_key, composer_inputs, computer_application_value,
-        computer_tool_request_meta, computer_tool_requires_interruption_monitor,
-        computer_use_allowed_app_ids, computer_use_allowed_app_ids_value,
-        computer_use_app_authorized, computer_use_dynamic_tools, computer_window_argument,
-        computer_window_schema, drag_coordinates, encode_appearance_preferences,
-        encode_browser_download_preferences, encode_browser_permissions, encode_git_preferences,
-        encode_keyboard_shortcut_preferences, encode_primary_window_placement,
-        forbidden_computer_target_message, handle_notification, hook_state_config_value,
-        index_app_logos, initialize_capabilities, is_hidden_timeline_item, map_app_detail,
-        map_app_server_approval, map_apps, map_fuzzy_file_search_results, map_mcp_elicitation,
-        map_mcp_resource_contents, map_mcp_runtime_catalog, map_timeline_item,
+        agent_configuration_snapshot, appearance_theme_key, bounded_remote_identifier,
+        browser_origin_auto_decision, browser_origin_elicitation_response, browser_policy_target,
+        browser_resource_auto_decision, browser_resource_elicitation_response,
+        combined_git_generation_prompt, combined_git_output_schema, commit_generation_prompt,
+        commit_message_output_schema, composer_config_key, composer_inputs,
+        computer_application_value, computer_tool_request_meta,
+        computer_tool_requires_interruption_monitor, computer_use_allowed_app_ids,
+        computer_use_allowed_app_ids_value, computer_use_app_authorized,
+        computer_use_dynamic_tools, computer_window_argument, computer_window_schema,
+        drag_coordinates, encode_appearance_preferences, encode_browser_download_preferences,
+        encode_browser_permissions, encode_git_preferences, encode_keyboard_shortcut_preferences,
+        encode_primary_window_placement, forbidden_computer_target_message, handle_notification,
+        hook_state_config_value, index_app_logos, initialize_capabilities, is_hidden_timeline_item,
+        map_app_detail, map_app_server_approval, map_apps, map_fuzzy_file_search_results,
+        map_mcp_elicitation, map_mcp_resource_contents, map_mcp_runtime_catalog,
+        map_remote_control_snapshot, map_remote_devices_page, map_timeline_item,
         map_user_input_request, mcp_elicitation_content_json, mcp_server_config_value,
         parse_appearance_preferences, parse_appearance_theme, parse_browser_download_preferences,
         parse_browser_permissions, parse_computer_key_chord, parse_generated_commit_message,
@@ -15206,10 +15601,145 @@ mod tests {
         parse_git_preferences, parse_keyboard_shortcut_preferences, parse_primary_window_placement,
         personalization_snapshot, plugin_directory_includes_marketplace,
         plugin_directory_marketplace_kinds, pull_request_generation_prompt,
-        pull_request_output_schema, record_retryable_steer, restored_browser_download,
-        retryable_submission_inputs, run_computer_tool, safety_retry_fork_point,
-        stored_browser_download, user_input_response,
+        pull_request_output_schema, record_retryable_steer, remote_pairing_status_params,
+        restored_browser_download, retryable_submission_inputs, run_computer_tool,
+        safety_retry_fork_point, stored_browser_download, user_input_response,
     };
+
+    #[test]
+    fn remote_pairing_status_uses_only_the_canonical_pairing_code() {
+        let params = remote_pairing_status_params(&RemotePairing {
+            pairing_code: "pairing-code".to_owned(),
+            manual_pairing_code: Some("manual-code".to_owned()),
+            environment_id: "environment-1".to_owned(),
+            expires_at: 1_900_000_000,
+        });
+
+        assert_eq!(params.pairing_code.as_deref(), Some("pairing-code"));
+        assert!(params.manual_pairing_code.is_none());
+    }
+
+    #[test]
+    fn remote_status_notification_is_typed_and_drops_provider_identity() {
+        let (events, receiver) = bounded(1);
+        assert!(!handle_notification(
+            "remoteControl/status/changed",
+            json!({
+                "status": "connected",
+                "serverName": "private-hostname",
+                "installationId": "private-installation-id",
+                "environmentId": "environment-1"
+            }),
+            &events,
+        ));
+
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(Action::RemoteControlStatusChanged {
+                status: RemoteControlRuntimeStatus::Connected,
+                environment_id: Some(environment_id),
+            }) if environment_id == "environment-1"
+        ));
+    }
+
+    #[test]
+    fn opaque_remote_identifiers_are_not_normalized() {
+        assert_eq!(
+            bounded_remote_identifier(" environment-1 ".to_owned(), 32),
+            Some(" environment-1 ".to_owned())
+        );
+        assert!(bounded_remote_identifier("environment\n1".to_owned(), 32).is_none());
+    }
+
+    #[test]
+    fn remote_environment_status_contract_preserves_opaque_values() {
+        assert!(
+            map_remote_control_snapshot(RemoteControlConnectionStatus::Connected, None).is_err()
+        );
+        assert!(matches!(
+            map_remote_control_snapshot(RemoteControlConnectionStatus::Disabled, None),
+            Ok((RemoteControlRuntimeStatus::Disabled, None))
+        ));
+        assert!(matches!(
+            map_remote_control_snapshot(
+                RemoteControlConnectionStatus::Connected,
+                Some(" environment-1 ".to_owned()),
+            ),
+            Ok((RemoteControlRuntimeStatus::Connected, Some(environment_id)))
+                if environment_id == " environment-1 "
+        ));
+        assert!(matches!(
+            map_remote_control_snapshot(RemoteControlConnectionStatus::Connecting, None),
+            Ok((RemoteControlRuntimeStatus::Connecting, None))
+        ));
+        assert!(matches!(
+            map_remote_control_snapshot(
+                RemoteControlConnectionStatus::Connecting,
+                Some(" environment-1 ".to_owned()),
+            ),
+            Ok((RemoteControlRuntimeStatus::Connecting, Some(environment_id)))
+                if environment_id == " environment-1 "
+        ));
+        assert!(matches!(
+            map_remote_control_snapshot(
+                RemoteControlConnectionStatus::Errored,
+                Some(" environment-1 ".to_owned()),
+            ),
+            Ok((RemoteControlRuntimeStatus::Errored, Some(environment_id)))
+                if environment_id == " environment-1 "
+        ));
+        assert!(
+            map_remote_control_snapshot(
+                RemoteControlConnectionStatus::Disabled,
+                Some("environment-1".to_owned()),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn remote_device_page_is_bounded_before_the_action_channel() {
+        let page = map_remote_devices_page(
+            vec![RemoteControlClient {
+                client_id: "client-1".to_owned(),
+                display_name: Some("Phone".to_owned()),
+                device_type: Some("mobile".to_owned()),
+                device_model: Some("private-model".to_owned()),
+                platform: Some("android".to_owned()),
+                os_version: Some("1".to_owned()),
+                app_version: Some("2".to_owned()),
+                last_seen_at: Some(1),
+            }],
+            Some("next-1".to_owned()),
+            1,
+        );
+        assert!(matches!(
+            page,
+            Ok((devices, Some(cursor)))
+                if devices.len() == 1
+                    && devices[0].client_id == "client-1"
+                    && devices[0].display_name.as_deref() == Some("Phone")
+                    && cursor == "next-1"
+        ));
+
+        assert!(
+            map_remote_devices_page(
+                vec![RemoteControlClient {
+                    client_id: "x".repeat(257),
+                    display_name: None,
+                    device_type: None,
+                    device_model: None,
+                    platform: None,
+                    os_version: None,
+                    app_version: None,
+                    last_seen_at: None,
+                }],
+                None,
+                1,
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn hook_state_writes_preserve_the_stable_nested_config_shape() {
@@ -17911,8 +18441,8 @@ mod tests {
             json!({
                 "name": "calendar",
                 "threadId": null,
-                "success": true,
-                "error": null
+                "success": false,
+                "error": "provider token=secret"
             }),
             &sender,
         ));
@@ -17923,9 +18453,10 @@ mod tests {
             action,
             Action::McpServerAuthenticationCompleted {
                 name,
-                success: true,
-                error: None,
+                success: false,
+                error: Some(error),
             } if name == "calendar"
+                && error == "MCP server authentication failed. Try again."
         ));
     }
 
@@ -17965,7 +18496,7 @@ mod tests {
                 "threadId": null,
                 "name": "remote",
                 "status": "failed",
-                "error": "OAuth token expired",
+                "error": "OAuth token expired: secret=do-not-expose",
                 "failureReason": "reauthenticationRequired"
             }),
             &sender,
@@ -17982,7 +18513,8 @@ mod tests {
                 failure_reason: Some(
                     McpServerStartupFailureReason::ReauthenticationRequired
                 ),
-            } if name == "remote" && error == "OAuth token expired"
+            } if name == "remote"
+                && error == "MCP server could not start. Check its configuration and try again."
         ));
     }
 

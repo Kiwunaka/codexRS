@@ -1,10 +1,8 @@
 use std::io;
+use std::sync::{Arc, Mutex};
 
 #[cfg(windows)]
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(windows)]
 use std::thread::{self, JoinHandle};
 #[cfg(windows)]
@@ -25,7 +23,6 @@ pub struct ComputerUseInterruptionMonitor {
     interrupted: Receiver<ComputerUseTurnKey>,
     #[cfg(windows)]
     user_input: Receiver<ComputerUseTurnKey>,
-    #[cfg(windows)]
     shared: Arc<Mutex<MonitorState>>,
     #[cfg(windows)]
     shutdown: Arc<AtomicBool>,
@@ -33,7 +30,6 @@ pub struct ComputerUseInterruptionMonitor {
     thread: Option<JoinHandle<()>>,
 }
 
-#[cfg(windows)]
 #[derive(Default)]
 struct MonitorState {
     generation: u64,
@@ -44,9 +40,9 @@ impl ComputerUseInterruptionMonitor {
     pub fn new() -> io::Result<Self> {
         #[cfg(windows)]
         {
+            let shared = Arc::new(Mutex::new(MonitorState::default()));
             let (interrupted_tx, interrupted) = bounded(1);
             let (user_input_tx, user_input) = bounded(1);
-            let shared = Arc::new(Mutex::new(MonitorState::default()));
             let shutdown = Arc::new(AtomicBool::new(false));
             let thread_shared = Arc::clone(&shared);
             let thread_shutdown = Arc::clone(&shutdown);
@@ -107,7 +103,10 @@ impl ComputerUseInterruptionMonitor {
         }
 
         #[cfg(not(windows))]
-        Ok(Self {})
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Computer Use interruption monitoring is not supported on this platform",
+        ))
     }
 
     pub fn arm(
@@ -116,7 +115,6 @@ impl ComputerUseInterruptionMonitor {
         turn_id: impl Into<String>,
         window_id: Option<String>,
     ) {
-        #[cfg(windows)]
         if let Ok(mut state) = self.shared.lock() {
             state.generation = state.generation.wrapping_add(1);
             state.turn = Some(ComputerUseTurnKey {
@@ -125,15 +123,9 @@ impl ComputerUseInterruptionMonitor {
                 window_id,
             });
         }
-
-        #[cfg(not(windows))]
-        {
-            let _ = (thread_id.into(), turn_id.into(), window_id);
-        }
     }
 
     pub fn disarm(&self) {
-        #[cfg(windows)]
         if let Ok(mut state) = self.shared.lock() {
             state.generation = state.generation.wrapping_add(1);
             state.turn = None;
@@ -141,7 +133,6 @@ impl ComputerUseInterruptionMonitor {
     }
 
     pub fn disarm_turn(&self, thread_id: &str, turn_id: &str) {
-        #[cfg(windows)]
         if let Ok(mut state) = self.shared.lock()
             && state
                 .turn
@@ -151,20 +142,11 @@ impl ComputerUseInterruptionMonitor {
             state.generation = state.generation.wrapping_add(1);
             state.turn = None;
         }
-
-        #[cfg(not(windows))]
-        let _ = (thread_id, turn_id);
     }
 
     #[must_use]
     pub fn active_turn(&self) -> Option<ComputerUseTurnKey> {
-        #[cfg(windows)]
-        {
-            self.shared.lock().ok().and_then(|state| state.turn.clone())
-        }
-
-        #[cfg(not(windows))]
-        None
+        self.shared.lock().ok().and_then(|state| state.turn.clone())
     }
 
     #[must_use]
@@ -414,9 +396,9 @@ impl EscapeEdge {
 
 #[cfg(test)]
 mod tests {
-    use super::EscapeEdge;
+    use super::{ComputerUseInterruptionMonitor, EscapeEdge};
     #[cfg(windows)]
-    use super::{MONITORED_INPUT_KEYS, PhysicalInputEdge, PhysicalInputSample};
+    use super::{ComputerUseTurnKey, MONITORED_INPUT_KEYS, PhysicalInputEdge, PhysicalInputSample};
 
     #[test]
     fn escape_interrupts_only_on_a_fresh_physical_press() {
@@ -426,6 +408,42 @@ mod tests {
         assert!(!edge.observe(false));
         assert!(edge.observe(true));
         assert!(!edge.observe(true));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn active_turn_tracks_the_windows_global_input_hook() -> std::io::Result<()> {
+        let monitor = ComputerUseInterruptionMonitor::new()?;
+        monitor.arm("thread-1", "turn-1", Some("window-1".to_owned()));
+        assert_eq!(
+            monitor.active_turn(),
+            Some(ComputerUseTurnKey {
+                thread_id: "thread-1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                window_id: Some("window-1".to_owned()),
+            })
+        );
+
+        monitor.disarm_turn("thread-1", "other-turn");
+        assert!(monitor.active_turn().is_some());
+        monitor.disarm_turn("thread-1", "turn-1");
+        assert!(monitor.active_turn().is_none());
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn non_windows_interruption_constructor_is_unsupported() -> std::io::Result<()> {
+        let error = match ComputerUseInterruptionMonitor::new() {
+            Err(error) => error,
+            Ok(_) => {
+                return Err(std::io::Error::other(
+                    "non-Windows platforms must not report an interruption hook as ready",
+                ));
+            }
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+        Ok(())
     }
 
     #[cfg(windows)]

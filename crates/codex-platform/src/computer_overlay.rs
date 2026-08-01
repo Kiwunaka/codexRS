@@ -50,11 +50,19 @@ pub struct ComputerUseSystemOverlay {
 
 impl ComputerUseSystemOverlay {
     pub fn new() -> io::Result<Self> {
-        Ok(Self {
-            active: None,
-            #[cfg(windows)]
-            renderer: windows::WindowsOverlayProcess::new()?,
-        })
+        #[cfg(windows)]
+        {
+            Ok(Self {
+                active: None,
+                renderer: windows::WindowsOverlayProcess::new()?,
+            })
+        }
+
+        #[cfg(not(windows))]
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Computer Use system overlay is not supported on this platform",
+        ))
     }
 
     pub fn begin_turn(
@@ -1224,6 +1232,21 @@ mod tests {
         assert!(validate_id("turn-1", "turn").is_ok());
         assert!(validate_id("", "turn").is_err());
         assert!(validate_id(&"x".repeat(1_025), "turn").is_err());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn non_windows_overlay_constructor_is_unsupported() -> std::io::Result<()> {
+        let error = match super::ComputerUseSystemOverlay::new() {
+            Err(error) => error,
+            Ok(_) => {
+                return Err(std::io::Error::other(
+                    "non-Windows platforms must not report a system overlay as ready",
+                ));
+            }
+        };
+        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
+        Ok(())
     }
 
     #[cfg(windows)]

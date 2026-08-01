@@ -1220,7 +1220,37 @@ fn run_branch_mutation(command: &mut Command) -> Result<GitBranchMutationOutcome
 }
 
 fn valid_worktree_path(root: &Path, worktree_path: &Path) -> bool {
-    worktree_path.is_absolute() && !worktree_path.starts_with(root)
+    let Some(root) = normalized_absolute_path(root) else {
+        return false;
+    };
+    let Some(worktree_path) = normalized_absolute_path(worktree_path) else {
+        return false;
+    };
+    !worktree_path.starts_with(root)
+}
+
+fn normalized_absolute_path(path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute() {
+        return None;
+    }
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
+                normalized.push(component.as_os_str());
+            }
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(component) => normalized.push(component),
+            std::path::Component::ParentDir => {
+                if normalized.file_name().is_some() {
+                    normalized.pop();
+                } else {
+                    return None;
+                }
+            }
+        }
+    }
+    Some(normalized)
 }
 
 fn push_remote(root: &Path, branch: &str) -> Result<Option<String>, GitError> {
@@ -1573,6 +1603,14 @@ fn untracked_diff_with_limit(
             if output_truncated {
                 break;
             }
+        }
+        if !input_truncated && !text.is_empty() && !text.ends_with('\n') {
+            push_bounded_text(
+                &mut output,
+                "\\ No newline at end of file\n",
+                limit,
+                &mut output_truncated,
+            );
         }
     }
     Ok(GitDiff {
@@ -2040,6 +2078,54 @@ mod tests {
     }
 
     #[test]
+    fn untracked_text_diff_marks_a_missing_final_newline() -> Result<(), super::GitError> {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| super::GitError::InvalidOutput)?
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "codexrs-untracked-no-final-newline-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir(&root)?;
+        let directory = TemporaryDirectory(root);
+        fs::write(directory.0.join("new file.txt"), "first\nsecond")?;
+
+        let diff = untracked_diff(&directory.0, Path::new("new file.txt"))?;
+
+        assert!(!diff.truncated);
+        assert!(
+            diff.text
+                .ends_with("+first\n+second\n\\ No newline at end of file\n")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn untracked_empty_file_diff_has_no_final_newline_marker() -> Result<(), super::GitError> {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| super::GitError::InvalidOutput)?
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "codexrs-untracked-empty-file-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir(&root)?;
+        let directory = TemporaryDirectory(root);
+        fs::write(directory.0.join("empty.txt"), [])?;
+
+        let diff = untracked_diff(&directory.0, Path::new("empty.txt"))?;
+
+        assert!(!diff.truncated);
+        assert_eq!(
+            diff.text,
+            "diff --git a/empty.txt b/empty.txt\nnew file mode 100644\n--- /dev/null\n+++ b/empty.txt\n"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn commit_context_and_include_unstaged_commit_are_bounded_and_isolated()
     -> Result<(), super::GitError> {
         let directory = temporary_git_repository("codexrs-commit")?;
@@ -2240,7 +2326,21 @@ mod tests {
             Path::new("/repo-feature")
         };
         assert!(valid_worktree_path(root, sibling));
+        assert!(valid_worktree_path(
+            root,
+            &root.join("..").join("repo-feature")
+        ));
         assert!(!valid_worktree_path(root, &root.join("worktrees/feature")));
+        assert!(!valid_worktree_path(
+            root,
+            &root
+                .parent()
+                .unwrap_or(root)
+                .join("repo-alias")
+                .join("..")
+                .join(root.file_name().unwrap_or_default())
+                .join("worktrees/feature")
+        ));
         assert!(!valid_worktree_path(root, Path::new("../repo-feature")));
     }
 

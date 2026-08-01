@@ -7,7 +7,7 @@ The product goal is a native Rust replacement with full Codex Desktop
 behavioral and UX parity. The detailed contract lives in the
 [parity matrix](docs/parity-matrix.md).
 
-## v0.1.0-rc.1
+## v0.1.0-rc.2
 
 - [x] Bounded official app-server supervisor and typed protocol.
 - [x] Native GPUI task browser, composer, streaming timeline, forks, and approvals.
@@ -54,7 +54,9 @@ behavioral and UX parity. The detailed contract lives in the
 - [ ] Match activity, diff review, Git, worktrees, terminal, outputs, and pull
   request workflows.
 - [ ] Match Computer Use, browser, skills, plugins, MCP apps, scheduled tasks,
-  remote control, cloud environments, and notifications.
+  cloud environments, and notifications.
+- [ ] Complete remote control beyond the current native public-RPC UI; keep-awake,
+  SSH profiles, remote chats, and handoff require a public app-server contract.
 - [ ] Match artifacts, files, Sites, visualizations, appshots, image/audio/voice,
   previews, and the output library.
 - [ ] Match all settings, onboarding, account, usage, update, accessibility,

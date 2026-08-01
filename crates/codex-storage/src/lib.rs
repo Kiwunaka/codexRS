@@ -587,6 +587,10 @@ fn validate_browser_download(download: &StoredBrowserDownload) -> Result<(), Sto
         || path.is_empty()
         || path.len() > MAX_BROWSER_DOWNLOAD_PATH_BYTES
         || path.contains('\0')
+        || download.received_bytes > i64::MAX as u64
+        || download.started_at_ms > i64::MAX as u64
+        || download.total_bytes > i64::MAX as u64
+        || download.updated_at_ms > i64::MAX as u64
     {
         return Err(StoreError::BrowserDownloadInvalid);
     }
@@ -594,7 +598,7 @@ fn validate_browser_download(download: &StoredBrowserDownload) -> Result<(), Sto
 }
 
 fn sqlite_u64(value: u64) -> i64 {
-    i64::try_from(value).unwrap_or(i64::MAX)
+    value as i64
 }
 
 #[cfg(windows)]
@@ -657,7 +661,7 @@ mod tests {
 
     use super::{
         BrowserDownloadRecordStatus, DEFAULT_HISTORY_PAGE_SIZE, MAX_BROWSER_DOWNLOAD_RECORDS,
-        MAX_HISTORY_PAGE_SIZE, MAX_INLINE_EVENT_BYTES, MAX_LOCAL_PROJECTS, Store,
+        MAX_HISTORY_PAGE_SIZE, MAX_INLINE_EVENT_BYTES, MAX_LOCAL_PROJECTS, Store, StoreError,
         StoredBrowserDownload, bounded_history_page_size, validate_inline_event_size,
     };
 
@@ -804,6 +808,35 @@ mod tests {
                 .map(|item| item.id.as_str()),
             Some("download-199")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_browser_download_values_that_do_not_fit_sqlite_integers()
+    -> Result<(), Box<dyn Error>> {
+        let mut store = Store::open_in_memory()?;
+        let path = if cfg!(windows) {
+            Path::new(r"C:\Downloads\overflow.txt")
+        } else {
+            Path::new("/tmp/downloads/overflow.txt")
+        };
+        let error = match store.upsert_browser_download(&StoredBrowserDownload {
+            context_id: "chat".to_owned(),
+            filename: "overflow.txt".to_owned(),
+            id: "overflow".to_owned(),
+            path: path.to_path_buf(),
+            received_bytes: 0,
+            started_at_ms: 0,
+            status: BrowserDownloadRecordStatus::Complete,
+            total_bytes: i64::MAX as u64 + 1,
+            updated_at_ms: 0,
+            user_initiated: true,
+        }) {
+            Err(error) => error,
+            Ok(()) => panic!("values above SQLite's signed integer range were accepted"),
+        };
+        assert!(matches!(error, StoreError::BrowserDownloadInvalid));
+        assert!(store.browser_downloads(1, 0)?.items.is_empty());
         Ok(())
     }
 

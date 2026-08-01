@@ -14,11 +14,13 @@ reports. They are test inputs, not behavior to reproduce.
 
 ## Active release-candidate limitations
 
-- Linux Computer Use window discovery currently requires an X11 or XWayland
-  session. Pure Wayland input is not release-qualified.
+- Linux Computer Use is unavailable in RC2: the platform gate fails closed.
+  X11/XWayland and portal-backed pure-Wayland support remain future work.
 - Dynamic Computer Use tools are attached at `thread/start`; an existing task
   cannot gain them after creation.
-- Windows and Linux installers are not yet signed.
+- Windows ZIP and Linux tar.gz release archives are unsigned portable previews.
+  Installers, uninstallers, desktop integration, URI registration, and in-app
+  updating are not provided.
 - Linux is validated by Ubuntu CI, but broader desktop-environment smoke
   coverage is still in progress.
 - Accessibility semantics and full keyboard-only navigation need a dedicated

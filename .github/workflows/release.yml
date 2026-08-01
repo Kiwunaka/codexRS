@@ -17,25 +17,37 @@ jobs:
   licenses:
     name: Third-party licenses
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+
+      - name: Validate release tag
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          set -euo pipefail
+          CARGO_PKG_VERSION="$(cargo metadata --locked --manifest-path crates/codex-app/Cargo.toml --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "codex-app") | .version')"
+          test -n "${CARGO_PKG_VERSION}"
+          test "${GITHUB_REF_NAME}" = "v${CARGO_PKG_VERSION}"
 
       - name: Install cargo-about
         run: cargo install --locked --features cli --version 0.9.1 cargo-about
 
       - name: Generate license inventory
-        run: cargo about generate about.hbs --output-file THIRD_PARTY_LICENSES.html
+        run: cargo about generate --locked about.hbs --output-file THIRD_PARTY_LICENSES.html
 
       - uses: actions/upload-artifact@v7
         with:
           name: third-party-licenses
           path: THIRD_PARTY_LICENSES.html
           if-no-files-found: error
+          retention-days: 7
 
   build:
     name: Package ${{ matrix.label }}
     needs: licenses
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -103,17 +115,17 @@ jobs:
       - name: Patched Markdown renderer
         run: |
           rustfmt --edition 2024 --check third_party/gpui-component/src/text/text_view.rs third_party/gpui-component/src/text/node.rs third_party/gpui-component/src/text/format/markdown.rs
-          cargo clippy --manifest-path third_party/gpui-component/Cargo.toml --target-dir target --lib -- -D warnings
-          cargo test --manifest-path third_party/gpui-component/Cargo.toml --target-dir target source_highlights_preserve_nested_markdown_marks
+          cargo clippy --locked --manifest-path third_party/gpui-component/Cargo.toml --target-dir target --lib -- -D warnings
+          cargo test --locked --manifest-path third_party/gpui-component/Cargo.toml --target-dir target source_highlights_preserve_nested_markdown_marks
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --locked --workspace
 
       - name: Release build
-        run: cargo build --release -p codex-app
+        run: cargo build --locked --release -p codex-app
 
       - name: Package Windows
         if: runner.os == 'Windows'
@@ -146,12 +158,14 @@ jobs:
             dist/*.zip
             dist/*.tar.gz
           if-no-files-found: error
+          retention-days: 7
 
   publish:
     name: Publish GitHub release
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
@@ -174,6 +188,28 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          notes="$(cat <<'EOF'
+          ## Unsigned portable technical preview
+
+          These Windows ZIP and Linux tar.gz assets are unsigned portable
+          previews. Download only from this GitHub Release and verify the
+          matching `SHA256SUMS.txt` entry before extraction. The checksum helps
+          detect corruption after download; it is not an independent publisher
+          signature.
+
+          There is no installer, uninstaller, desktop integration, URI handler,
+          or automatic updater. Extract into a directory you control. On
+          Windows, keep `codexrs.exe` and `codex-computer-use-overlay.exe`
+          together. Do not enable Computer Use from an archive whose source or
+          checksum you do not trust.
+
+          The Linux tar.gz is not a system package and does not install runtime
+          dependencies. Ubuntu CI builds and tests the binary; the extracted
+          archive has not yet received a desktop smoke test. Linux Computer Use
+          is unavailable in RC2; X11/XWayland and pure-Wayland support remain
+          future work.
+          EOF
+          )"
           options=()
           if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
             options+=(--prerelease)
@@ -181,5 +217,6 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" dist/* \
             --repo "${GITHUB_REPOSITORY}" \
             --title "codexRS ${GITHUB_REF_NAME}" \
+            --notes "$notes" \
             --generate-notes \
             "${options[@]}"

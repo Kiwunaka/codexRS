@@ -45,6 +45,15 @@ pub const MAX_COMPUTER_WINDOWS: usize = 100;
 pub const MAX_COMPUTER_APPLICATIONS: usize = 40;
 pub const MAX_COMPUTER_ALLOWED_APPS: usize = 100;
 pub const MAX_COMPUTER_APP_ID_BYTES: usize = 512;
+pub const REMOTE_DEVICE_PAGE_LIMIT: u32 = 64;
+pub const MAX_REMOTE_DEVICE_PAGE_ITEMS: usize = REMOTE_DEVICE_PAGE_LIMIT as usize;
+pub const MAX_REMOTE_DEVICES: usize = 256;
+pub const MAX_REMOTE_DEVICE_ID_BYTES: usize = 256;
+pub const MAX_REMOTE_DEVICE_LABEL_BYTES: usize = 512;
+pub const MAX_REMOTE_ENVIRONMENT_ID_BYTES: usize = 256;
+pub const MAX_REMOTE_PAIRING_CODE_BYTES: usize = 512;
+pub const MAX_REMOTE_CURSOR_BYTES: usize = 1_024;
+pub const MAX_REMOTE_ERROR_BYTES: usize = 4 * 1024;
 pub const MAX_BROWSER_CONTEXT_ID_BYTES: usize = 256;
 pub const MAX_BROWSER_TABS: usize = 16;
 pub const MAX_BROWSER_URL_BYTES: usize = 8 * 1024;
@@ -1119,7 +1128,8 @@ impl ContextWindowUsage {
 pub struct TimelineState {
     pub status: LoadStatus,
     pub generation: u64,
-    pub items: Vec<TimelineItem>,
+    items: Vec<TimelineItem>,
+    item_indices: HashMap<String, usize>,
     pub next_cursor: Option<String>,
     pub active_turn_id: Option<String>,
     pub interrupt_pending: bool,
@@ -1138,6 +1148,7 @@ impl Default for TimelineState {
             status: LoadStatus::Idle,
             generation: 0,
             items: Vec::new(),
+            item_indices: HashMap::new(),
             next_cursor: None,
             active_turn_id: None,
             interrupt_pending: false,
@@ -1188,6 +1199,33 @@ pub struct TurnDiffState {
 }
 
 impl TimelineState {
+    fn rebuild_item_indices(&mut self) {
+        let mut item_indices = HashMap::with_capacity(self.items.len());
+        for (index, item) in self.items.iter().enumerate() {
+            item_indices.entry(item.id.clone()).or_insert(index);
+        }
+        self.item_indices = item_indices;
+    }
+
+    fn item_index(&self, item_id: &str) -> Option<usize> {
+        self.item_indices.get(item_id).copied()
+    }
+
+    fn trim_items(&mut self, limit: usize) -> bool {
+        let overflow = self.items.len().saturating_sub(limit);
+        if overflow == 0 {
+            return false;
+        }
+        self.items.drain(..overflow);
+        self.rebuild_item_indices();
+        true
+    }
+
+    #[must_use]
+    pub fn items(&self) -> &[TimelineItem] {
+        &self.items
+    }
+
     #[must_use]
     pub fn output_artifacts(&self) -> Vec<OutputArtifact> {
         let mut seen = HashSet::new();
@@ -1877,6 +1915,161 @@ pub struct ComputerUseSettingsState {
     pub always_allowed_app_ids: Vec<String>,
     pub pending_removal_app_id: Option<String>,
     pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RemoteControlRuntimeStatus {
+    #[default]
+    Disabled,
+    Connecting,
+    Connected,
+    Errored,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct RemoteDevice {
+    pub client_id: String,
+    pub display_name: Option<String>,
+}
+
+impl std::fmt::Debug for RemoteDevice {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RemoteDevice")
+            .field("has_display_name", &self.display_name.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct RemotePairing {
+    pub pairing_code: String,
+    pub manual_pairing_code: Option<String>,
+    pub environment_id: String,
+    pub expires_at: i64,
+}
+
+impl std::fmt::Debug for RemotePairing {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RemotePairing")
+            .field(
+                "has_manual_pairing_code",
+                &self.manual_pairing_code.is_some(),
+            )
+            .field("expires_at", &self.expires_at)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub enum RemoteControlBusy {
+    Status { generation: u64 },
+    SetEnabled { generation: u64, enabled: bool },
+    StartPairing { generation: u64 },
+    CheckPairing { generation: u64 },
+    RevokeDevice { generation: u64, client_id: String },
+}
+
+impl std::fmt::Debug for RemoteControlBusy {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Status { generation } => formatter
+                .debug_struct("Status")
+                .field("generation", generation)
+                .finish(),
+            Self::SetEnabled {
+                generation,
+                enabled,
+            } => formatter
+                .debug_struct("SetEnabled")
+                .field("generation", generation)
+                .field("enabled", enabled)
+                .finish(),
+            Self::StartPairing { generation } => formatter
+                .debug_struct("StartPairing")
+                .field("generation", generation)
+                .finish(),
+            Self::CheckPairing { generation } => formatter
+                .debug_struct("CheckPairing")
+                .field("generation", generation)
+                .finish(),
+            Self::RevokeDevice { generation, .. } => formatter
+                .debug_struct("RevokeDevice")
+                .field("generation", generation)
+                .finish_non_exhaustive(),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct RemoteControlState {
+    pub managed_allow_remote_control: Option<bool>,
+    pub policy_status: LoadStatus,
+    pub runtime_status: RemoteControlRuntimeStatus,
+    pub status_generation: u64,
+    pub environment_id: Option<String>,
+    pub devices_status: LoadStatus,
+    pub devices_generation: u64,
+    pub devices: Vec<RemoteDevice>,
+    pub next_cursor: Option<String>,
+    pub pending_cursor: Option<String>,
+    pub loading_more: bool,
+    pub status_refresh_pending: bool,
+    pub mutation_generation: u64,
+    pub pairing_generation: u64,
+    pub busy: Option<RemoteControlBusy>,
+    pub pairing: Option<RemotePairing>,
+    pub error: Option<String>,
+}
+
+impl Default for RemoteControlState {
+    fn default() -> Self {
+        Self {
+            managed_allow_remote_control: None,
+            policy_status: LoadStatus::Idle,
+            runtime_status: RemoteControlRuntimeStatus::Disabled,
+            status_generation: 0,
+            environment_id: None,
+            devices_status: LoadStatus::Idle,
+            devices_generation: 0,
+            devices: Vec::new(),
+            next_cursor: None,
+            pending_cursor: None,
+            loading_more: false,
+            status_refresh_pending: false,
+            mutation_generation: 0,
+            pairing_generation: 0,
+            busy: None,
+            pairing: None,
+            error: None,
+        }
+    }
+}
+
+impl std::fmt::Debug for RemoteControlState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RemoteControlState")
+            .field(
+                "managed_allow_remote_control",
+                &self.managed_allow_remote_control,
+            )
+            .field("policy_status", &self.policy_status)
+            .field("runtime_status", &self.runtime_status)
+            .field("status_generation", &self.status_generation)
+            .field("devices_status", &self.devices_status)
+            .field("devices_generation", &self.devices_generation)
+            .field("device_count", &self.devices.len())
+            .field("loading_more", &self.loading_more)
+            .field("status_refresh_pending", &self.status_refresh_pending)
+            .field("mutation_generation", &self.mutation_generation)
+            .field("pairing_generation", &self.pairing_generation)
+            .field("busy", &self.busy)
+            .field("has_pairing", &self.pairing.is_some())
+            .field("has_error", &self.error.is_some())
+            .finish()
+    }
 }
 
 impl Default for ComputerUseSettingsState {
@@ -3580,6 +3773,7 @@ pub enum ApprovalsReviewer {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PermissionRequirements {
+    pub managed_allow_remote_control: Option<bool>,
     pub allowed_approval_policies: Option<Vec<String>>,
     pub allowed_approvals_reviewers: Option<Vec<ApprovalsReviewer>>,
     pub default_permissions: Option<String>,
@@ -3870,6 +4064,7 @@ pub struct AppState {
     pub user_input_requests: VecDeque<UserInputRequest>,
     pub computer_use: HashMap<String, ComputerUseState>,
     pub computer_use_settings: ComputerUseSettingsState,
+    pub remote_control: RemoteControlState,
     pub browser: HashMap<String, BrowserState>,
     pub browser_downloads: BrowserDownloadsState,
     pub browser_download_preferences: BrowserDownloadPreferences,
@@ -3930,6 +4125,7 @@ impl Default for AppState {
             user_input_requests: VecDeque::new(),
             computer_use: HashMap::new(),
             computer_use_settings: ComputerUseSettingsState::default(),
+            remote_control: RemoteControlState::default(),
             browser: HashMap::new(),
             browser_downloads: BrowserDownloadsState::default(),
             browser_download_preferences: BrowserDownloadPreferences::default(),
@@ -4572,6 +4768,70 @@ pub enum Action {
     ComputerUsePolicyMutationFailed {
         app_id: String,
         message: String,
+    },
+    RefreshRemoteControlStatus,
+    RemoteControlStatusLoaded {
+        generation: u64,
+        status: RemoteControlRuntimeStatus,
+        environment_id: Option<String>,
+    },
+    RemoteControlStatusFailed {
+        generation: u64,
+        message: String,
+    },
+    RemoteControlStatusChanged {
+        status: RemoteControlRuntimeStatus,
+        environment_id: Option<String>,
+    },
+    EnableRemoteControl,
+    DisableRemoteControl,
+    RemoteControlEnabledChanged {
+        generation: u64,
+        enabled: bool,
+        status: RemoteControlRuntimeStatus,
+        environment_id: Option<String>,
+    },
+    RemoteControlMutationFailed {
+        generation: u64,
+        message: String,
+    },
+    StartRemotePairing {
+        manual_code: bool,
+    },
+    RemotePairingStarted {
+        generation: u64,
+        pairing: RemotePairing,
+    },
+    CheckRemotePairing,
+    RemotePairingChecked {
+        generation: u64,
+        claimed: bool,
+    },
+    RemotePairingFailed {
+        generation: u64,
+        message: String,
+    },
+    CloseRemotePairing,
+    RefreshRemoteDevices,
+    LoadMoreRemoteDevices,
+    RemoteDevicesLoaded {
+        generation: u64,
+        environment_id: String,
+        devices: Vec<RemoteDevice>,
+        next_cursor: Option<String>,
+        append: bool,
+    },
+    RemoteDevicesFailed {
+        generation: u64,
+        environment_id: String,
+        message: String,
+        append: bool,
+    },
+    RevokeRemoteDevice(String),
+    RemoteDeviceRevoked {
+        generation: u64,
+        environment_id: String,
+        client_id: String,
     },
     OpenBrowserTab,
     ToggleBrowserPanel,
@@ -5598,6 +5858,33 @@ pub enum Effect {
         id: String,
     },
     LoadComputerUsePolicy,
+    LoadRemoteControlStatus {
+        generation: u64,
+    },
+    SetRemoteControlEnabled {
+        generation: u64,
+        enabled: bool,
+    },
+    StartRemotePairing {
+        generation: u64,
+        manual_code: bool,
+    },
+    CheckRemotePairing {
+        generation: u64,
+        pairing: RemotePairing,
+    },
+    LoadRemoteDevices {
+        generation: u64,
+        environment_id: String,
+        cursor: Option<String>,
+        limit: u32,
+        append: bool,
+    },
+    RevokeRemoteDevice {
+        generation: u64,
+        environment_id: String,
+        client_id: String,
+    },
     LoadAccount,
     StartAccountLogin,
     CancelAccountLogin {
@@ -6724,6 +7011,139 @@ fn refresh_import_effects(state: &mut AppState) -> Vec<Effect> {
     ]
 }
 
+fn remote_control_permitted(state: &AppState) -> bool {
+    state.remote_control.policy_status == LoadStatus::Ready
+        && state.remote_control.managed_allow_remote_control != Some(false)
+}
+
+fn remote_control_action_allowed(state: &AppState) -> bool {
+    remote_control_permitted(state)
+        && state.connection == ConnectionStatus::Online
+        && state.remote_control.busy.is_none()
+}
+
+fn invalidate_remote_devices(remote: &mut RemoteControlState) {
+    remote.devices_generation = remote.devices_generation.saturating_add(1);
+    remote.devices_status = LoadStatus::Idle;
+    remote.devices.clear();
+    remote.next_cursor = None;
+    remote.pending_cursor = None;
+    remote.loading_more = false;
+}
+
+fn invalidate_remote_pairing(remote: &mut RemoteControlState) {
+    remote.pairing_generation = remote.pairing_generation.saturating_add(1);
+    remote.pairing = None;
+}
+
+fn clear_remote_control_runtime(remote: &mut RemoteControlState) {
+    remote.status_generation = remote.status_generation.saturating_add(1);
+    remote.mutation_generation = remote.mutation_generation.saturating_add(1);
+    remote.runtime_status = RemoteControlRuntimeStatus::Disabled;
+    remote.environment_id = None;
+    remote.busy = None;
+    remote.status_refresh_pending = false;
+    remote.error = None;
+    invalidate_remote_pairing(remote);
+    invalidate_remote_devices(remote);
+}
+
+fn set_remote_control_runtime(
+    remote: &mut RemoteControlState,
+    status: RemoteControlRuntimeStatus,
+    environment_id: Option<String>,
+) {
+    let environment_id = if status == RemoteControlRuntimeStatus::Connected {
+        environment_id.and_then(normalize_remote_environment_id)
+    } else {
+        None
+    };
+    let environment_changed = remote.environment_id != environment_id;
+    remote.runtime_status = status;
+    remote.environment_id = environment_id;
+    if status != RemoteControlRuntimeStatus::Connected || environment_changed {
+        invalidate_remote_pairing(remote);
+        invalidate_remote_devices(remote);
+    }
+}
+
+fn normalize_remote_environment_id(value: String) -> Option<String> {
+    (!value.is_empty() && value.len() <= MAX_REMOTE_ENVIRONMENT_ID_BYTES).then_some(value)
+}
+
+fn normalize_remote_client_id(value: String) -> Option<String> {
+    (!value.is_empty() && value.len() <= MAX_REMOTE_DEVICE_ID_BYTES).then_some(value)
+}
+
+fn normalize_remote_pairing(pairing: RemotePairing) -> Option<RemotePairing> {
+    if pairing.pairing_code.is_empty()
+        || pairing.pairing_code.len() > MAX_REMOTE_PAIRING_CODE_BYTES
+        || pairing
+            .manual_pairing_code
+            .as_ref()
+            .is_some_and(|code| code.is_empty() || code.len() > MAX_REMOTE_PAIRING_CODE_BYTES)
+    {
+        return None;
+    }
+    let environment_id = normalize_remote_environment_id(pairing.environment_id)?;
+    Some(RemotePairing {
+        pairing_code: pairing.pairing_code,
+        manual_pairing_code: pairing.manual_pairing_code,
+        environment_id,
+        expires_at: pairing.expires_at,
+    })
+}
+
+fn normalize_remote_devices(devices: Vec<RemoteDevice>) -> Vec<RemoteDevice> {
+    let mut seen = HashSet::new();
+    let mut normalized = devices
+        .into_iter()
+        .filter_map(|device| {
+            let client_id = normalize_remote_client_id(device.client_id)?;
+            seen.insert(client_id.clone()).then(|| RemoteDevice {
+                client_id,
+                display_name: device.display_name.and_then(|name| {
+                    let name =
+                        bounded_string(name.trim().to_owned(), MAX_REMOTE_DEVICE_LABEL_BYTES);
+                    (!name.is_empty()).then_some(name)
+                }),
+            })
+        })
+        .collect::<Vec<_>>();
+    normalized.truncate(MAX_REMOTE_DEVICE_PAGE_ITEMS);
+    normalized
+}
+
+fn bounded_remote_cursor(cursor: Option<String>) -> Option<String> {
+    cursor.and_then(|cursor| {
+        (!cursor.is_empty() && cursor.len() <= MAX_REMOTE_CURSOR_BYTES).then_some(cursor)
+    })
+}
+
+fn begin_remote_status_refresh(state: &mut AppState) -> Vec<Effect> {
+    if !remote_control_permitted(state) || state.connection != ConnectionStatus::Online {
+        return Vec::new();
+    }
+    let remote = &mut state.remote_control;
+    if remote.busy.is_some() {
+        remote.status_refresh_pending = true;
+        return Vec::new();
+    }
+    remote.status_generation = remote.status_generation.saturating_add(1);
+    let generation = remote.status_generation;
+    remote.busy = Some(RemoteControlBusy::Status { generation });
+    remote.status_refresh_pending = false;
+    vec![Effect::LoadRemoteControlStatus { generation }]
+}
+
+fn finish_remote_status_refresh_if_pending(state: &mut AppState) -> Vec<Effect> {
+    if state.remote_control.status_refresh_pending {
+        begin_remote_status_refresh(state)
+    } else {
+        Vec::new()
+    }
+}
+
 pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
     match action {
         Action::Connect | Action::RetryConnection => {
@@ -6739,6 +7159,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.task_status = LoadStatus::Loading;
             state.composer_controls.models_status = LoadStatus::Loading;
             state.composer_controls.permission_profiles_status = LoadStatus::Loading;
+            state.remote_control.policy_status = LoadStatus::Loading;
             state.personalization.status = LoadStatus::Loading;
             state.personalization.pending = false;
             state.personalization.error = None;
@@ -6818,6 +7239,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             state.imports.active_import_ids.clear();
             state.mcp_elicitations.clear();
+            clear_remote_control_runtime(&mut state.remote_control);
             let generation = state.fuzzy_file_search.generation;
             state.fuzzy_file_search = FuzzyFileSearchState {
                 generation,
@@ -8421,7 +8843,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             } else {
                 timeline.items = items;
             }
-            trim_front(&mut timeline.items, MAX_TIMELINE_ITEMS);
+            if !timeline.trim_items(MAX_TIMELINE_ITEMS) {
+                timeline.rebuild_item_indices();
+            }
             timeline.next_cursor = next_cursor;
             timeline.status = LoadStatus::Ready;
             Vec::new()
@@ -8760,6 +9184,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 .is_some_and(|edit| edit.turn_id == turn_id)
             {
                 timeline.items.retain(|item| item.turn_id != turn_id);
+                timeline.rebuild_item_indices();
                 timeline.message_edit = None;
             }
             Vec::new()
@@ -9036,6 +9461,12 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             mut profiles,
             requirements,
         } => {
+            state.remote_control.managed_allow_remote_control =
+                requirements.managed_allow_remote_control;
+            state.remote_control.policy_status = LoadStatus::Ready;
+            if state.remote_control.managed_allow_remote_control == Some(false) {
+                clear_remote_control_runtime(&mut state.remote_control);
+            }
             profiles.truncate(MAX_COMPOSER_OPTIONS);
             let modes = permission_mode_options(&profiles, &requirements);
             let selected = state
@@ -9071,10 +9502,12 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.composer_controls.permission_modes = modes;
             state.composer_controls.selected_permission_mode = selected;
             state.composer_controls.permission_profiles_status = LoadStatus::Ready;
-            Vec::new()
+            begin_remote_status_refresh(state)
         }
         Action::PermissionProfilesFailed(message) => {
             state.composer_controls.permission_profiles_status = LoadStatus::Failed;
+            state.remote_control.policy_status = LoadStatus::Failed;
+            clear_remote_control_runtime(&mut state.remote_control);
             state.status_message = Some(message);
             Vec::new()
         }
@@ -10482,6 +10915,13 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             failed,
         } => {
             let timeline = state.timelines.entry(task_id.clone()).or_default();
+            if timeline
+                .active_turn_id
+                .as_deref()
+                .is_some_and(|active_turn_id| active_turn_id != turn_id)
+            {
+                return Vec::new();
+            }
             let completed_active = timeline.active_turn_id.as_deref() == Some(turn_id.as_str());
             if completed_active {
                 timeline.active_turn_id = None;
@@ -10507,6 +10947,13 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::TurnInterrupted { task_id, turn_id } => {
             let timeline = state.timelines.entry(task_id.clone()).or_default();
+            if timeline
+                .active_turn_id
+                .as_deref()
+                .is_some_and(|active_turn_id| active_turn_id != turn_id)
+            {
+                return Vec::new();
+            }
             let interrupted_active = timeline.active_turn_id.as_deref() == Some(turn_id.as_str());
             if interrupted_active {
                 timeline.active_turn_id = None;
@@ -10701,7 +11148,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 timeline.retryable_turn = None;
                 timeline.safety_buffering = None;
             }
-            if let Some(item) = timeline.items.iter_mut().find(|item| item.id == item_id) {
+            if let Some(index) = timeline.item_index(&item_id) {
+                let item = &mut timeline.items[index];
                 if item.kind == TimelineKind::Command {
                     append_bounded(
                         item.detail.get_or_insert_default(),
@@ -10734,7 +11182,11 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     edit_supported: false,
                     completed: false,
                 });
-                trim_front(&mut timeline.items, MAX_TIMELINE_ITEMS);
+                if !timeline.trim_items(MAX_TIMELINE_ITEMS) {
+                    let index = timeline.items.len() - 1;
+                    let item_id = timeline.items[index].id.clone();
+                    timeline.item_indices.insert(item_id, index);
+                }
             }
             Vec::new()
         }
@@ -10749,21 +11201,22 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             if item.kind == TimelineKind::ContextCompaction && item.completed {
                 timeline.compaction_in_flight = false;
             }
-            if let Some(existing) = timeline
-                .items
-                .iter_mut()
-                .find(|existing| existing.id == item.id)
-            {
-                *existing = item;
+            if let Some(index) = timeline.item_index(&item.id) {
+                timeline.items[index] = item;
             } else {
                 timeline.items.push(item);
-                trim_front(&mut timeline.items, MAX_TIMELINE_ITEMS);
+                if !timeline.trim_items(MAX_TIMELINE_ITEMS) {
+                    let index = timeline.items.len() - 1;
+                    let item_id = timeline.items[index].id.clone();
+                    timeline.item_indices.insert(item_id, index);
+                }
             }
             Vec::new()
         }
         Action::TimelineItemCompleted { task_id, item_id } => {
             let timeline = state.timelines.entry(task_id).or_default();
-            if let Some(item) = timeline.items.iter_mut().find(|item| item.id == item_id) {
+            if let Some(index) = timeline.item_index(&item_id) {
+                let item = &mut timeline.items[index];
                 item.completed = true;
                 if item.kind == TimelineKind::ContextCompaction {
                     timeline.compaction_in_flight = false;
@@ -11333,6 +11786,454 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             state.computer_use_settings.error = Some(bounded_string(message, MAX_COMPOSER_BYTES));
             Vec::new()
+        }
+        Action::RefreshRemoteControlStatus => {
+            state.remote_control.error = None;
+            begin_remote_status_refresh(state)
+        }
+        Action::RemoteControlStatusLoaded {
+            generation,
+            status,
+            environment_id,
+        } => {
+            let permitted = remote_control_permitted(state);
+            let remote = &mut state.remote_control;
+            if !permitted
+                || !matches!(remote.busy, Some(RemoteControlBusy::Status { generation: pending }) if pending == generation)
+                || remote.status_generation != generation
+            {
+                return Vec::new();
+            }
+            remote.busy = None;
+            remote.error = None;
+            set_remote_control_runtime(remote, status, environment_id);
+            finish_remote_status_refresh_if_pending(state)
+        }
+        Action::RemoteControlStatusFailed {
+            generation,
+            message,
+        } => {
+            let remote = &mut state.remote_control;
+            if !matches!(remote.busy, Some(RemoteControlBusy::Status { generation: pending }) if pending == generation)
+                || remote.status_generation != generation
+            {
+                return Vec::new();
+            }
+            remote.busy = None;
+            remote.runtime_status = RemoteControlRuntimeStatus::Errored;
+            remote.environment_id = None;
+            invalidate_remote_pairing(remote);
+            invalidate_remote_devices(remote);
+            remote.error = Some(bounded_string(message, MAX_REMOTE_ERROR_BYTES));
+            finish_remote_status_refresh_if_pending(state)
+        }
+        Action::RemoteControlStatusChanged {
+            status,
+            environment_id,
+        } => {
+            if !remote_control_permitted(state) || state.connection != ConnectionStatus::Online {
+                return Vec::new();
+            }
+            if state.remote_control.busy.is_some() {
+                state.remote_control.status_refresh_pending = true;
+                return Vec::new();
+            }
+            let remote = &mut state.remote_control;
+            remote.status_generation = remote.status_generation.saturating_add(1);
+            remote.error = None;
+            set_remote_control_runtime(remote, status, environment_id);
+            Vec::new()
+        }
+        Action::EnableRemoteControl => {
+            if !remote_control_action_allowed(state)
+                || !matches!(
+                    state.remote_control.runtime_status,
+                    RemoteControlRuntimeStatus::Disabled | RemoteControlRuntimeStatus::Errored
+                )
+            {
+                return Vec::new();
+            }
+            let remote = &mut state.remote_control;
+            remote.mutation_generation = remote.mutation_generation.saturating_add(1);
+            let generation = remote.mutation_generation;
+            remote.busy = Some(RemoteControlBusy::SetEnabled {
+                generation,
+                enabled: true,
+            });
+            remote.error = None;
+            vec![Effect::SetRemoteControlEnabled {
+                generation,
+                enabled: true,
+            }]
+        }
+        Action::DisableRemoteControl => {
+            if !remote_control_action_allowed(state)
+                || state.remote_control.runtime_status == RemoteControlRuntimeStatus::Disabled
+            {
+                return Vec::new();
+            }
+            let remote = &mut state.remote_control;
+            remote.mutation_generation = remote.mutation_generation.saturating_add(1);
+            let generation = remote.mutation_generation;
+            remote.busy = Some(RemoteControlBusy::SetEnabled {
+                generation,
+                enabled: false,
+            });
+            remote.error = None;
+            vec![Effect::SetRemoteControlEnabled {
+                generation,
+                enabled: false,
+            }]
+        }
+        Action::RemoteControlEnabledChanged {
+            generation,
+            enabled,
+            status,
+            environment_id,
+        } => {
+            let permitted = remote_control_permitted(state);
+            let remote = &mut state.remote_control;
+            if !permitted
+                || !matches!(remote.busy, Some(RemoteControlBusy::SetEnabled { generation: pending, enabled: pending_enabled }) if pending == generation && pending_enabled == enabled)
+                || remote.mutation_generation != generation
+            {
+                return Vec::new();
+            }
+            remote.busy = None;
+            remote.error = None;
+            set_remote_control_runtime(remote, status, environment_id);
+            finish_remote_status_refresh_if_pending(state)
+        }
+        Action::RemoteControlMutationFailed {
+            generation,
+            message,
+        } => {
+            let remote = &mut state.remote_control;
+            if !matches!(
+                remote.busy,
+                Some(
+                    RemoteControlBusy::SetEnabled { generation: pending, .. }
+                    | RemoteControlBusy::RevokeDevice { generation: pending, .. }
+                ) if pending == generation
+            ) || remote.mutation_generation != generation
+            {
+                return Vec::new();
+            }
+            remote.busy = None;
+            remote.error = Some(bounded_string(message, MAX_REMOTE_ERROR_BYTES));
+            finish_remote_status_refresh_if_pending(state)
+        }
+        Action::StartRemotePairing { manual_code } => {
+            if !remote_control_action_allowed(state)
+                || state.remote_control.runtime_status != RemoteControlRuntimeStatus::Connected
+                || state.remote_control.environment_id.is_none()
+            {
+                return Vec::new();
+            }
+            let remote = &mut state.remote_control;
+            remote.pairing_generation = remote.pairing_generation.saturating_add(1);
+            let generation = remote.pairing_generation;
+            remote.pairing = None;
+            remote.busy = Some(RemoteControlBusy::StartPairing { generation });
+            remote.error = None;
+            vec![Effect::StartRemotePairing {
+                generation,
+                manual_code,
+            }]
+        }
+        Action::RemotePairingStarted {
+            generation,
+            pairing,
+        } => {
+            let permitted = remote_control_permitted(state);
+            let remote = &mut state.remote_control;
+            if !permitted
+                || !matches!(remote.busy, Some(RemoteControlBusy::StartPairing { generation: pending }) if pending == generation)
+                || remote.pairing_generation != generation
+            {
+                return Vec::new();
+            }
+            let Some(pairing) = normalize_remote_pairing(pairing) else {
+                remote.busy = None;
+                remote.error = Some("Remote pairing response was invalid.".to_owned());
+                return finish_remote_status_refresh_if_pending(state);
+            };
+            if remote.runtime_status != RemoteControlRuntimeStatus::Connected
+                || remote.environment_id.as_deref() != Some(pairing.environment_id.as_str())
+            {
+                remote.busy = None;
+                remote.error = Some("Remote pairing response was invalid.".to_owned());
+                return finish_remote_status_refresh_if_pending(state);
+            }
+            remote.busy = None;
+            remote.pairing = Some(pairing);
+            remote.error = None;
+            finish_remote_status_refresh_if_pending(state)
+        }
+        Action::CheckRemotePairing => {
+            if !remote_control_action_allowed(state)
+                || state.remote_control.runtime_status != RemoteControlRuntimeStatus::Connected
+            {
+                return Vec::new();
+            }
+            let remote = &mut state.remote_control;
+            let Some(pairing) = remote.pairing.clone() else {
+                return Vec::new();
+            };
+            if remote.environment_id.as_deref() != Some(pairing.environment_id.as_str()) {
+                return Vec::new();
+            }
+            let generation = remote.pairing_generation;
+            remote.busy = Some(RemoteControlBusy::CheckPairing { generation });
+            remote.error = None;
+            vec![Effect::CheckRemotePairing {
+                generation,
+                pairing,
+            }]
+        }
+        Action::RemotePairingChecked {
+            generation,
+            claimed,
+        } => {
+            let remote = &mut state.remote_control;
+            if !matches!(remote.busy, Some(RemoteControlBusy::CheckPairing { generation: pending }) if pending == generation)
+                || remote.pairing_generation != generation
+            {
+                return Vec::new();
+            }
+            remote.busy = None;
+            remote.error = None;
+            if claimed {
+                invalidate_remote_pairing(remote);
+            }
+            finish_remote_status_refresh_if_pending(state)
+        }
+        Action::RemotePairingFailed {
+            generation,
+            message,
+        } => {
+            let remote = &mut state.remote_control;
+            if !matches!(
+                remote.busy,
+                Some(
+                    RemoteControlBusy::StartPairing { generation: pending }
+                    | RemoteControlBusy::CheckPairing { generation: pending }
+                ) if pending == generation
+            ) || remote.pairing_generation != generation
+            {
+                return Vec::new();
+            }
+            remote.busy = None;
+            invalidate_remote_pairing(remote);
+            remote.error = Some(bounded_string(message, MAX_REMOTE_ERROR_BYTES));
+            finish_remote_status_refresh_if_pending(state)
+        }
+        Action::CloseRemotePairing => {
+            let remote = &mut state.remote_control;
+            let cancelled_busy_pairing = matches!(
+                remote.busy,
+                Some(
+                    RemoteControlBusy::StartPairing { .. } | RemoteControlBusy::CheckPairing { .. }
+                )
+            );
+            if cancelled_busy_pairing {
+                remote.busy = None;
+            }
+            invalidate_remote_pairing(remote);
+            remote.error = None;
+            if cancelled_busy_pairing {
+                finish_remote_status_refresh_if_pending(state)
+            } else {
+                Vec::new()
+            }
+        }
+        Action::RefreshRemoteDevices => {
+            if !remote_control_action_allowed(state)
+                || state.remote_control.runtime_status != RemoteControlRuntimeStatus::Connected
+                || state.remote_control.devices_status == LoadStatus::Loading
+            {
+                return Vec::new();
+            }
+            let remote = &mut state.remote_control;
+            let Some(environment_id) = remote.environment_id.clone() else {
+                return Vec::new();
+            };
+            remote.devices_generation = remote.devices_generation.saturating_add(1);
+            let generation = remote.devices_generation;
+            remote.devices_status = LoadStatus::Loading;
+            remote.devices.clear();
+            remote.next_cursor = None;
+            remote.pending_cursor = None;
+            remote.loading_more = false;
+            remote.error = None;
+            vec![Effect::LoadRemoteDevices {
+                generation,
+                environment_id,
+                cursor: None,
+                limit: REMOTE_DEVICE_PAGE_LIMIT,
+                append: false,
+            }]
+        }
+        Action::LoadMoreRemoteDevices => {
+            if !remote_control_action_allowed(state)
+                || state.remote_control.runtime_status != RemoteControlRuntimeStatus::Connected
+                || state.remote_control.loading_more
+                || state.remote_control.devices_status != LoadStatus::Ready
+                || state.remote_control.devices.len() >= MAX_REMOTE_DEVICES
+            {
+                return Vec::new();
+            }
+            let remote = &mut state.remote_control;
+            let (Some(environment_id), Some(cursor)) =
+                (remote.environment_id.clone(), remote.next_cursor.clone())
+            else {
+                return Vec::new();
+            };
+            remote.loading_more = true;
+            remote.pending_cursor = Some(cursor.clone());
+            remote.error = None;
+            vec![Effect::LoadRemoteDevices {
+                generation: remote.devices_generation,
+                environment_id,
+                cursor: Some(cursor),
+                limit: REMOTE_DEVICE_PAGE_LIMIT,
+                append: true,
+            }]
+        }
+        Action::RemoteDevicesLoaded {
+            generation,
+            environment_id,
+            devices,
+            next_cursor,
+            append,
+        } => {
+            let remote = &mut state.remote_control;
+            let Some(environment_id) = normalize_remote_environment_id(environment_id) else {
+                return Vec::new();
+            };
+            if remote.devices_generation != generation
+                || remote.runtime_status != RemoteControlRuntimeStatus::Connected
+                || remote.environment_id.as_deref() != Some(environment_id.as_str())
+            {
+                return Vec::new();
+            }
+            let devices = normalize_remote_devices(devices);
+            let previous_len = remote.devices.len();
+            if append {
+                let mut existing = remote
+                    .devices
+                    .iter()
+                    .map(|device| device.client_id.clone())
+                    .collect::<HashSet<_>>();
+                remote.devices.extend(
+                    devices
+                        .into_iter()
+                        .filter(|device| existing.insert(device.client_id.clone())),
+                );
+            } else {
+                remote.devices = devices;
+            }
+            remote.devices.truncate(MAX_REMOTE_DEVICES);
+            let next_cursor = bounded_remote_cursor(next_cursor);
+            let no_progress = append
+                && (remote.devices.len() == previous_len
+                    || remote.pending_cursor.as_ref() == next_cursor.as_ref());
+            remote.next_cursor = (!no_progress && remote.devices.len() < MAX_REMOTE_DEVICES)
+                .then_some(next_cursor)
+                .flatten();
+            remote.pending_cursor = None;
+            remote.devices_status = LoadStatus::Ready;
+            remote.loading_more = false;
+            remote.error = None;
+            Vec::new()
+        }
+        Action::RemoteDevicesFailed {
+            generation,
+            environment_id,
+            message,
+            append,
+        } => {
+            let remote = &mut state.remote_control;
+            let Some(environment_id) = normalize_remote_environment_id(environment_id) else {
+                return Vec::new();
+            };
+            if remote.devices_generation != generation
+                || remote.runtime_status != RemoteControlRuntimeStatus::Connected
+                || remote.environment_id.as_deref() != Some(environment_id.as_str())
+            {
+                return Vec::new();
+            }
+            remote.loading_more = false;
+            remote.pending_cursor = None;
+            remote.error = Some(bounded_string(message, MAX_REMOTE_ERROR_BYTES));
+            if !append {
+                remote.devices_status = LoadStatus::Failed;
+                remote.devices.clear();
+                remote.next_cursor = None;
+            }
+            Vec::new()
+        }
+        Action::RevokeRemoteDevice(client_id) => {
+            if !remote_control_action_allowed(state)
+                || state.remote_control.runtime_status != RemoteControlRuntimeStatus::Connected
+            {
+                return Vec::new();
+            }
+            let Some(client_id) = normalize_remote_client_id(client_id) else {
+                return Vec::new();
+            };
+            let remote = &mut state.remote_control;
+            let Some(environment_id) = remote.environment_id.clone() else {
+                return Vec::new();
+            };
+            if !remote
+                .devices
+                .iter()
+                .any(|device| device.client_id == client_id)
+            {
+                return Vec::new();
+            }
+            remote.devices_generation = remote.devices_generation.saturating_add(1);
+            remote.loading_more = false;
+            remote.pending_cursor = None;
+            remote.next_cursor = None;
+            remote.mutation_generation = remote.mutation_generation.saturating_add(1);
+            let generation = remote.mutation_generation;
+            remote.busy = Some(RemoteControlBusy::RevokeDevice {
+                generation,
+                client_id: client_id.clone(),
+            });
+            remote.error = None;
+            vec![Effect::RevokeRemoteDevice {
+                generation,
+                environment_id,
+                client_id,
+            }]
+        }
+        Action::RemoteDeviceRevoked {
+            generation,
+            environment_id,
+            client_id,
+        } => {
+            let remote = &mut state.remote_control;
+            let (Some(environment_id), Some(client_id)) = (
+                normalize_remote_environment_id(environment_id),
+                normalize_remote_client_id(client_id),
+            ) else {
+                return Vec::new();
+            };
+            if remote.mutation_generation != generation
+                || remote.environment_id.as_deref() != Some(environment_id.as_str())
+                || !matches!(remote.busy, Some(RemoteControlBusy::RevokeDevice { generation: pending, client_id: ref pending_client_id }) if pending == generation && pending_client_id == &client_id)
+            {
+                return Vec::new();
+            }
+            remote
+                .devices
+                .retain(|device| device.client_id != client_id);
+            remote.busy = None;
+            remote.error = None;
+            finish_remote_status_refresh_if_pending(state)
         }
         Action::OpenBrowserTab => {
             let Some(task_id) = state.selected_task_id.clone() else {
@@ -14993,13 +15894,6 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
     }
 }
 
-fn trim_front<T>(items: &mut Vec<T>, limit: usize) {
-    let overflow = items.len().saturating_sub(limit);
-    if overflow > 0 {
-        items.drain(..overflow);
-    }
-}
-
 fn append_bounded(target: &mut String, delta: &str, limit: usize) {
     if target.len() >= limit {
         return;
@@ -15874,9 +16768,9 @@ mod tests {
         IntegratedTerminalShell, KeyboardShortcutPreferences, KeyboardShortcutUpdateTarget,
         LoadStatus, LocalProjectSummary, MAX_BROWSER_DOWNLOADS, MAX_COMPOSER_BYTES,
         MAX_GIT_DIFF_BYTES, MAX_GIT_INSTRUCTIONS_BYTES, MAX_GIT_SHA_BYTES, MAX_PLUGIN_DETAIL_ITEMS,
-        MAX_TURN_DIFF_BYTES, MainRoute, MarketplaceManageTab, MarketplaceSectionFilter,
-        MarketplaceSourceCard, MarketplaceTab, MarketplaceUpgradeFailure, McpAuthStatus,
-        McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
+        MAX_TIMELINE_ITEMS, MAX_TURN_DIFF_BYTES, MainRoute, MarketplaceManageTab,
+        MarketplaceSectionFilter, MarketplaceSourceCard, MarketplaceTab, MarketplaceUpgradeFailure,
+        McpAuthStatus, McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
         McpElicitationContent, McpElicitationDecision, McpElicitationValue, McpFormElicitation,
         McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpFormOption, McpFormStringFormat,
         McpResourceCard, McpResourceContentCard, McpServerCard, McpServerDraft,
@@ -15888,12 +16782,13 @@ mod tests {
         PullRequestDetailTab, PullRequestIdentity, PullRequestLifecycle, PullRequestMergeMethod,
         PullRequestMutation, PullRequestMutationKind, PullRequestRelationship,
         PullRequestReviewEvent, PullRequestReviewState, PullRequestState, PullRequestSummary,
-        ReasoningEffortOption, RetryableTurnSubmission, RetryableUserMessage, ServiceTierOption,
-        SkillCard, SkillScope, StartedImport, TaskRunStatus, TaskSearchResult, TaskSummary,
-        TerminalDockLocation, ThreadGoal, ThreadGoalStatus, TimelineItem, TimelineKind,
-        UsageLimitWindow, UserInputAnswer, UserInputAnswers, UserInputOption, UserInputQuestion,
-        UserInputRequest, appearance_code_theme_supports_variant, computer_app_id_matches,
-        permission_mode_options, reduce, stable_reference, validate_mcp_form_content,
+        ReasoningEffortOption, RemoteControlRuntimeStatus, RemoteDevice, RemotePairing,
+        RetryableTurnSubmission, RetryableUserMessage, ServiceTierOption, SkillCard, SkillScope,
+        StartedImport, TaskRunStatus, TaskSearchResult, TaskSummary, TerminalDockLocation,
+        ThreadGoal, ThreadGoalStatus, TimelineItem, TimelineKind, UsageLimitWindow,
+        UserInputAnswer, UserInputAnswers, UserInputOption, UserInputQuestion, UserInputRequest,
+        appearance_code_theme_supports_variant, computer_app_id_matches, permission_mode_options,
+        reduce, stable_reference, validate_mcp_form_content,
     };
 
     fn task(id: &str) -> TaskSummary {
@@ -17362,6 +18257,7 @@ mod tests {
             },
         ];
         let requirements = PermissionRequirements {
+            managed_allow_remote_control: None,
             allowed_approval_policies: Some(vec!["on-request".to_owned()]),
             allowed_approvals_reviewers: Some(vec![ApprovalsReviewer::User]),
             default_permissions: Some("locked-down".to_owned()),
@@ -17636,6 +18532,55 @@ mod tests {
                 .get("t1")
                 .is_some_and(|timeline| !timeline.interrupt_pending)
         );
+    }
+
+    #[test]
+    fn stale_terminal_turn_events_do_not_override_a_new_active_turn() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(
+            &mut state,
+            Action::TurnStarted {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-old".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::TurnStarted {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-current".to_owned(),
+            },
+        );
+        reduce(&mut state, Action::InterruptActiveTurn);
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::TurnCompleted {
+                    task_id: "t1".to_owned(),
+                    turn_id: "turn-old".to_owned(),
+                    failed: false,
+                },
+            )
+            .is_empty()
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::TurnInterrupted {
+                    task_id: "t1".to_owned(),
+                    turn_id: "turn-old".to_owned(),
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.timelines["t1"].active_turn_id.as_deref(),
+            Some("turn-current")
+        );
+        assert!(state.timelines["t1"].interrupt_pending);
+        assert_eq!(state.tasks[0].status, TaskRunStatus::Running);
     }
 
     #[test]
@@ -18641,7 +19586,7 @@ mod tests {
                 turn_id: "turn-1".to_owned(),
             },
         );
-        assert!(state.timelines["t1"].items.is_empty());
+        assert!(state.timelines["t1"].items().is_empty());
         assert!(state.timelines["t1"].message_edit.is_none());
     }
 
@@ -19376,12 +20321,140 @@ mod tests {
         let Some(item) = state
             .timelines
             .get("t1")
-            .and_then(|timeline| timeline.items.first())
+            .and_then(|timeline| timeline.items().first())
         else {
             panic!("command output should create one timeline item");
         };
         assert_eq!(item.text, "Running command");
         assert_eq!(item.detail.as_deref(), Some("first line\nsecond line"));
+    }
+
+    #[test]
+    fn timeline_deltas_update_loaded_items_after_limit_trim() {
+        let mut state = AppState::default();
+        let items = (0..MAX_TIMELINE_ITEMS)
+            .map(|index| TimelineItem {
+                id: format!("item-{index}"),
+                turn_id: "turn-1".to_owned(),
+                kind: TimelineKind::Agent,
+                text: String::new(),
+                detail: None,
+                process_id: None,
+                memory_citations: Vec::new(),
+                sources: Vec::new(),
+                attachments: Vec::new(),
+                output_artifacts: Vec::new(),
+                edit_supported: false,
+                completed: false,
+            })
+            .collect();
+        reduce(
+            &mut state,
+            Action::TimelineLoaded {
+                task_id: "t1".to_owned(),
+                generation: 0,
+                items,
+                next_cursor: None,
+                append: false,
+            },
+        );
+
+        reduce(
+            &mut state,
+            Action::TimelineDelta {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                item_id: "item-1999".to_owned(),
+                kind: TimelineKind::Agent,
+                delta: " updated".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::TimelineDelta {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-2".to_owned(),
+                item_id: "new-item".to_owned(),
+                kind: TimelineKind::Agent,
+                delta: "new".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::TimelineDelta {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-3".to_owned(),
+                item_id: "item-0".to_owned(),
+                kind: TimelineKind::Agent,
+                delta: "restored".to_owned(),
+            },
+        );
+
+        let timeline = &state.timelines["t1"];
+        assert_eq!(timeline.items().len(), MAX_TIMELINE_ITEMS);
+        assert_eq!(
+            timeline
+                .items()
+                .iter()
+                .find(|item| item.id == "item-1999")
+                .map(|item| item.text.as_str()),
+            Some(" updated")
+        );
+        assert!(!timeline.items().iter().any(|item| item.id == "item-1"));
+        assert_eq!(
+            timeline.items().last().map(|item| item.id.as_str()),
+            Some("item-0")
+        );
+        assert_eq!(
+            timeline.items().last().map(|item| item.text.as_str()),
+            Some("restored")
+        );
+    }
+
+    #[test]
+    fn timeline_delta_updates_the_first_duplicate_item_id() {
+        let mut state = AppState::default();
+        let first = TimelineItem {
+            id: "duplicate".to_owned(),
+            turn_id: "turn-1".to_owned(),
+            kind: TimelineKind::Agent,
+            text: "first".to_owned(),
+            detail: None,
+            process_id: None,
+            memory_citations: Vec::new(),
+            sources: Vec::new(),
+            attachments: Vec::new(),
+            output_artifacts: Vec::new(),
+            edit_supported: false,
+            completed: false,
+        };
+        let mut second = first.clone();
+        second.text = "second".to_owned();
+        reduce(
+            &mut state,
+            Action::TimelineLoaded {
+                task_id: "t1".to_owned(),
+                generation: 0,
+                items: vec![first, second],
+                next_cursor: None,
+                append: false,
+            },
+        );
+
+        reduce(
+            &mut state,
+            Action::TimelineDelta {
+                task_id: "t1".to_owned(),
+                turn_id: "turn-1".to_owned(),
+                item_id: "duplicate".to_owned(),
+                kind: TimelineKind::Agent,
+                delta: " updated".to_owned(),
+            },
+        );
+
+        let items = state.timelines["t1"].items();
+        assert_eq!(items[0].text, "first updated");
+        assert_eq!(items[1].text, "second");
     }
 
     #[test]
@@ -23801,5 +24874,493 @@ mod tests {
                 last_error: None,
             }
         );
+    }
+
+    fn remote_requirements(managed_allow_remote_control: Option<bool>) -> PermissionRequirements {
+        PermissionRequirements {
+            managed_allow_remote_control,
+            ..PermissionRequirements::default()
+        }
+    }
+
+    fn remote_pairing(environment_id: &str, code: &str) -> RemotePairing {
+        RemotePairing {
+            pairing_code: code.to_owned(),
+            manual_pairing_code: None,
+            environment_id: environment_id.to_owned(),
+            expires_at: 123,
+        }
+    }
+
+    #[test]
+    fn managed_remote_control_denial_clears_state_and_emits_no_remote_effect() {
+        let mut state = AppState {
+            connection: ConnectionStatus::Online,
+            ..AppState::default()
+        };
+        state.remote_control.runtime_status = RemoteControlRuntimeStatus::Connected;
+        state.remote_control.environment_id = Some("environment".to_owned());
+        state.remote_control.devices = vec![RemoteDevice {
+            client_id: "client".to_owned(),
+            display_name: Some("Phone".to_owned()),
+        }];
+        state.remote_control.pairing = Some(remote_pairing("environment", "pairing-code"));
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::PermissionProfilesLoaded {
+                    profiles: Vec::new(),
+                    requirements: remote_requirements(Some(false)),
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.remote_control.managed_allow_remote_control,
+            Some(false)
+        );
+        assert_eq!(
+            state.remote_control.runtime_status,
+            RemoteControlRuntimeStatus::Disabled
+        );
+        assert!(state.remote_control.environment_id.is_none());
+        assert!(state.remote_control.devices.is_empty());
+        assert!(state.remote_control.pairing.is_none());
+        assert!(reduce(&mut state, Action::EnableRemoteControl).is_empty());
+    }
+
+    #[test]
+    fn remote_runtime_is_separate_from_policy_and_stale_status_is_ignored() {
+        let mut state = AppState {
+            connection: ConnectionStatus::Online,
+            ..AppState::default()
+        };
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::PermissionProfilesLoaded {
+                    profiles: Vec::new(),
+                    requirements: remote_requirements(None),
+                },
+            ),
+            [Effect::LoadRemoteControlStatus { generation: 1 }]
+        );
+        assert_eq!(
+            state.remote_control.runtime_status,
+            RemoteControlRuntimeStatus::Disabled
+        );
+        reduce(
+            &mut state,
+            Action::RemoteControlStatusLoaded {
+                generation: 1,
+                status: RemoteControlRuntimeStatus::Connected,
+                environment_id: Some("environment".to_owned()),
+            },
+        );
+        assert_eq!(
+            state.remote_control.runtime_status,
+            RemoteControlRuntimeStatus::Connected
+        );
+
+        assert_eq!(
+            reduce(&mut state, Action::RefreshRemoteControlStatus),
+            [Effect::LoadRemoteControlStatus { generation: 2 }]
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::RemoteControlStatusChanged {
+                    status: RemoteControlRuntimeStatus::Disabled,
+                    environment_id: None,
+                },
+            )
+            .is_empty()
+        );
+        assert!(state.remote_control.status_refresh_pending);
+        reduce(
+            &mut state,
+            Action::RemoteControlStatusLoaded {
+                generation: 1,
+                status: RemoteControlRuntimeStatus::Disabled,
+                environment_id: None,
+            },
+        );
+        assert_eq!(
+            state.remote_control.runtime_status,
+            RemoteControlRuntimeStatus::Connected
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::RemoteControlStatusLoaded {
+                    generation: 2,
+                    status: RemoteControlRuntimeStatus::Connected,
+                    environment_id: Some("environment".to_owned()),
+                },
+            ),
+            [Effect::LoadRemoteControlStatus { generation: 3 }]
+        );
+    }
+
+    #[test]
+    fn remote_operation_error_survives_a_queued_status_refresh() {
+        let mut state = AppState {
+            connection: ConnectionStatus::Online,
+            ..AppState::default()
+        };
+        reduce(
+            &mut state,
+            Action::PermissionProfilesLoaded {
+                profiles: Vec::new(),
+                requirements: remote_requirements(None),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::RemoteControlStatusLoaded {
+                generation: 1,
+                status: RemoteControlRuntimeStatus::Disabled,
+                environment_id: None,
+            },
+        );
+        assert_eq!(
+            reduce(&mut state, Action::EnableRemoteControl),
+            [Effect::SetRemoteControlEnabled {
+                generation: 1,
+                enabled: true,
+            }]
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::RemoteControlStatusChanged {
+                    status: RemoteControlRuntimeStatus::Disabled,
+                    environment_id: None,
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::RemoteControlMutationFailed {
+                    generation: 1,
+                    message: "unavailable".to_owned(),
+                },
+            ),
+            [Effect::LoadRemoteControlStatus { generation: 2 }]
+        );
+        assert_eq!(state.remote_control.error.as_deref(), Some("unavailable"));
+        reduce(
+            &mut state,
+            Action::RemoteControlStatusLoaded {
+                generation: 2,
+                status: RemoteControlRuntimeStatus::Disabled,
+                environment_id: None,
+            },
+        );
+        assert!(state.remote_control.error.is_none());
+    }
+
+    #[test]
+    fn remote_pairing_is_memory_only_and_replaced_for_each_manual_mode() {
+        let mut state = AppState {
+            connection: ConnectionStatus::Online,
+            ..AppState::default()
+        };
+        reduce(
+            &mut state,
+            Action::PermissionProfilesLoaded {
+                profiles: Vec::new(),
+                requirements: remote_requirements(Some(true)),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::RemoteControlStatusLoaded {
+                generation: 1,
+                status: RemoteControlRuntimeStatus::Connected,
+                environment_id: Some("environment".to_owned()),
+            },
+        );
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::StartRemotePairing { manual_code: false },
+            ),
+            [Effect::StartRemotePairing {
+                generation: 2,
+                manual_code: false,
+            }]
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::RemotePairingStarted {
+                    generation: 2,
+                    pairing: remote_pairing("environment", "first-code"),
+                },
+            )
+            .is_empty()
+        );
+        assert!(state.remote_control.pairing.is_some());
+
+        assert_eq!(
+            reduce(&mut state, Action::StartRemotePairing { manual_code: true },),
+            [Effect::StartRemotePairing {
+                generation: 3,
+                manual_code: true,
+            }]
+        );
+        assert!(state.remote_control.pairing.is_none());
+        assert!(
+            reduce(
+                &mut state,
+                Action::RemotePairingStarted {
+                    generation: 3,
+                    pairing: remote_pairing("environment", "second-code"),
+                },
+            )
+            .is_empty()
+        );
+        assert!(reduce(&mut state, Action::CheckRemotePairing).contains(
+            &Effect::CheckRemotePairing {
+                generation: 3,
+                pairing: remote_pairing("environment", "second-code"),
+            }
+        ));
+        assert!(
+            reduce(
+                &mut state,
+                Action::RemotePairingFailed {
+                    generation: 3,
+                    message: "unavailable".to_owned(),
+                },
+            )
+            .is_empty()
+        );
+        assert!(state.remote_control.pairing.is_none());
+        assert_eq!(state.remote_control.error.as_deref(), Some("unavailable"));
+    }
+
+    #[test]
+    fn remote_devices_use_bounded_deduplicated_pages() {
+        let mut state = AppState {
+            connection: ConnectionStatus::Online,
+            ..AppState::default()
+        };
+        reduce(
+            &mut state,
+            Action::PermissionProfilesLoaded {
+                profiles: Vec::new(),
+                requirements: remote_requirements(None),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::RemoteControlStatusLoaded {
+                generation: 1,
+                status: RemoteControlRuntimeStatus::Connected,
+                environment_id: Some("environment".to_owned()),
+            },
+        );
+        assert_eq!(
+            reduce(&mut state, Action::RefreshRemoteDevices),
+            [Effect::LoadRemoteDevices {
+                generation: 2,
+                environment_id: "environment".to_owned(),
+                cursor: None,
+                limit: super::REMOTE_DEVICE_PAGE_LIMIT,
+                append: false,
+            }]
+        );
+        reduce(
+            &mut state,
+            Action::RemoteDevicesLoaded {
+                generation: 2,
+                environment_id: "environment".to_owned(),
+                devices: (0..(super::MAX_REMOTE_DEVICE_PAGE_ITEMS + 2))
+                    .map(|index| RemoteDevice {
+                        client_id: format!("client-{index}"),
+                        display_name: None,
+                    })
+                    .collect(),
+                next_cursor: Some("next".to_owned()),
+                append: false,
+            },
+        );
+        assert_eq!(
+            state.remote_control.devices.len(),
+            super::MAX_REMOTE_DEVICE_PAGE_ITEMS
+        );
+
+        assert!(reduce(&mut state, Action::LoadMoreRemoteDevices).contains(
+            &Effect::LoadRemoteDevices {
+                generation: 2,
+                environment_id: "environment".to_owned(),
+                cursor: Some("next".to_owned()),
+                limit: super::REMOTE_DEVICE_PAGE_LIMIT,
+                append: true,
+            }
+        ));
+        reduce(
+            &mut state,
+            Action::RemoteDevicesLoaded {
+                generation: 2,
+                environment_id: "environment".to_owned(),
+                devices: vec![
+                    RemoteDevice {
+                        client_id: "client-0".to_owned(),
+                        display_name: Some("Duplicate".to_owned()),
+                    },
+                    RemoteDevice {
+                        client_id: "client-new".to_owned(),
+                        display_name: Some("New".to_owned()),
+                    },
+                ],
+                next_cursor: Some("next".to_owned()),
+                append: true,
+            },
+        );
+        assert_eq!(
+            state.remote_control.devices.len(),
+            super::MAX_REMOTE_DEVICE_PAGE_ITEMS + 1
+        );
+        assert_eq!(
+            state
+                .remote_control
+                .devices
+                .iter()
+                .filter(|device| device.client_id == "client-0")
+                .count(),
+            1
+        );
+        assert!(state.remote_control.next_cursor.is_none());
+
+        state.remote_control.next_cursor = Some("later".to_owned());
+        assert!(reduce(&mut state, Action::LoadMoreRemoteDevices).contains(
+            &Effect::LoadRemoteDevices {
+                generation: 2,
+                environment_id: "environment".to_owned(),
+                cursor: Some("later".to_owned()),
+                limit: super::REMOTE_DEVICE_PAGE_LIMIT,
+                append: true,
+            }
+        ));
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::RevokeRemoteDevice("client-0".to_owned()),
+            ),
+            [Effect::RevokeRemoteDevice {
+                generation: 1,
+                environment_id: "environment".to_owned(),
+                client_id: "client-0".to_owned(),
+            }]
+        );
+        assert_eq!(state.remote_control.devices_generation, 3);
+        assert!(state.remote_control.next_cursor.is_none());
+        reduce(
+            &mut state,
+            Action::RemoteDevicesLoaded {
+                generation: 2,
+                environment_id: "environment".to_owned(),
+                devices: vec![RemoteDevice {
+                    client_id: "stale-client".to_owned(),
+                    display_name: None,
+                }],
+                next_cursor: None,
+                append: true,
+            },
+        );
+        assert!(
+            !state
+                .remote_control
+                .devices
+                .iter()
+                .any(|device| device.client_id == "stale-client")
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::RemoteDeviceRevoked {
+                    generation: 1,
+                    environment_id: "environment".to_owned(),
+                    client_id: "client-0".to_owned(),
+                },
+            )
+            .is_empty()
+        );
+        assert!(
+            !state
+                .remote_control
+                .devices
+                .iter()
+                .any(|device| device.client_id == "client-0")
+        );
+
+        assert_eq!(
+            reduce(&mut state, Action::RefreshRemoteControlStatus),
+            [Effect::LoadRemoteControlStatus { generation: 2 }]
+        );
+        reduce(
+            &mut state,
+            Action::RemoteControlStatusLoaded {
+                generation: 2,
+                status: RemoteControlRuntimeStatus::Connected,
+                environment_id: Some("other-environment".to_owned()),
+            },
+        );
+        assert!(state.remote_control.devices.is_empty());
+        assert_eq!(
+            state.remote_control.environment_id.as_deref(),
+            Some("other-environment")
+        );
+    }
+
+    #[test]
+    fn remote_revoke_invalidates_an_idle_pagination_snapshot() {
+        let mut state = AppState {
+            connection: ConnectionStatus::Online,
+            ..AppState::default()
+        };
+        reduce(
+            &mut state,
+            Action::PermissionProfilesLoaded {
+                profiles: Vec::new(),
+                requirements: remote_requirements(None),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::RemoteControlStatusLoaded {
+                generation: 1,
+                status: RemoteControlRuntimeStatus::Connected,
+                environment_id: Some("environment".to_owned()),
+            },
+        );
+        state.remote_control.devices_generation = 7;
+        state.remote_control.devices = vec![RemoteDevice {
+            client_id: "client".to_owned(),
+            display_name: Some("Phone".to_owned()),
+        }];
+        state.remote_control.next_cursor = Some("page-2".to_owned());
+
+        assert_eq!(
+            reduce(&mut state, Action::RevokeRemoteDevice("client".to_owned()),),
+            [Effect::RevokeRemoteDevice {
+                generation: 1,
+                environment_id: "environment".to_owned(),
+                client_id: "client".to_owned(),
+            }]
+        );
+        assert_eq!(state.remote_control.devices_generation, 8);
+        assert!(!state.remote_control.loading_more);
+        assert!(state.remote_control.pending_cursor.is_none());
+        assert!(state.remote_control.next_cursor.is_none());
+        assert_eq!(state.remote_control.devices.len(), 1);
     }
 }
