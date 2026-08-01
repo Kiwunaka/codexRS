@@ -2478,6 +2478,7 @@ pub struct MarketplaceState {
     pub composer_plugins: Vec<PluginCard>,
     pub marketplace_sources: Vec<MarketplaceSourceCard>,
     pub apps: Vec<AppCard>,
+    pub apps_needing_auth: Vec<AppCard>,
     pub mcp_servers: Vec<McpServerCard>,
     pub plugin_mcp_servers: Vec<McpServerCard>,
     pub skills: Vec<SkillCard>,
@@ -5193,7 +5194,9 @@ pub enum Action {
     PluginMutationFinished {
         plugin_id: String,
         installed: bool,
+        apps_needing_auth: Vec<AppCard>,
     },
+    DismissPluginAuthApps,
     SetPluginEnabled {
         plugin_id: String,
         enabled: bool,
@@ -14706,6 +14709,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             if !can_install {
                 return Vec::new();
             }
+            state.marketplace.apps_needing_auth.clear();
             state.marketplace.pending_plugin_id = Some(plugin_id.clone());
             vec![Effect::InstallPlugin {
                 plugin_id,
@@ -14724,13 +14728,18 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             if !can_uninstall {
                 return Vec::new();
             }
+            state.marketplace.apps_needing_auth.clear();
             state.marketplace.pending_plugin_id = Some(plugin_id.clone());
             vec![Effect::UninstallPlugin { plugin_id }]
         }
         Action::PluginMutationFinished {
             plugin_id,
             installed,
+            apps_needing_auth,
         } => {
+            if state.marketplace.pending_plugin_id.as_deref() != Some(plugin_id.as_str()) {
+                return Vec::new();
+            }
             if let Some(plugin) = state
                 .marketplace
                 .plugins
@@ -14749,9 +14758,27 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 plugin.installed = installed;
                 plugin.enabled = installed;
             }
-            if state.marketplace.pending_plugin_id.as_deref() == Some(plugin_id.as_str()) {
-                state.marketplace.pending_plugin_id = None;
+            state.marketplace.pending_plugin_id = None;
+            let mut apps_needing_auth = if installed {
+                apps_needing_auth
+            } else {
+                Vec::new()
+            };
+            apps_needing_auth.truncate(MAX_PLUGIN_DETAIL_ITEMS);
+            for app in &mut apps_needing_auth {
+                app.id = bounded_string(app.id.trim().to_owned(), 256);
+                app.name = bounded_string(app.name.trim().to_owned(), 512);
+                app.description = bounded_string(app.description.trim().to_owned(), 16 * 1024);
+                app.install_url = app
+                    .install_url
+                    .take()
+                    .map(|url| bounded_string(url.trim().to_owned(), 8 * 1024))
+                    .filter(|url| !url.is_empty());
             }
+            apps_needing_auth.retain(|app| !app.id.is_empty() && !app.name.is_empty());
+            let mut seen_app_ids = HashSet::new();
+            apps_needing_auth.retain(|app| seen_app_ids.insert(app.id.clone()));
+            state.marketplace.apps_needing_auth = apps_needing_auth;
             let cwds = selected_task_cwds(state);
             vec![
                 Effect::RefreshMarketplace {
@@ -14765,6 +14792,10 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     force_refetch: false,
                 },
             ]
+        }
+        Action::DismissPluginAuthApps => {
+            state.marketplace.apps_needing_auth.clear();
+            Vec::new()
         }
         Action::SetPluginEnabled { plugin_id, enabled } => {
             let can_toggle = state.marketplace.pending_plugin_id.is_none()
@@ -25076,12 +25107,45 @@ mod tests {
             )
             .is_empty()
         );
+        let apps_needing_auth = (0..=MAX_PLUGIN_DETAIL_ITEMS)
+            .map(|index| AppCard {
+                id: if index == 1 {
+                    " app-0 ".to_owned()
+                } else {
+                    format!(" app-{index} ")
+                },
+                name: format!(" App {index} "),
+                description: " Connect this app. ".to_owned(),
+                plugin_display_names: Vec::new(),
+                logo_url: None,
+                logo_url_dark: None,
+                install_url: Some(" https://chatgpt.com/apps/connect ".to_owned()),
+                is_accessible: false,
+                enabled: false,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            reduce(
+                &mut state,
+                Action::PluginMutationFinished {
+                    plugin_id: "stale@openai".to_owned(),
+                    installed: true,
+                    apps_needing_auth: vec![apps_needing_auth[0].clone()],
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.marketplace.pending_plugin_id.as_deref(),
+            Some("computer-use@openai")
+        );
         assert_eq!(
             reduce(
                 &mut state,
                 Action::PluginMutationFinished {
                     plugin_id: "computer-use@openai".to_owned(),
                     installed: true,
+                    apps_needing_auth,
                 },
             ),
             [
@@ -25098,6 +25162,20 @@ mod tests {
             ]
         );
         assert!(state.marketplace.pending_plugin_id.is_none());
+        assert_eq!(
+            state.marketplace.apps_needing_auth.len(),
+            MAX_PLUGIN_DETAIL_ITEMS - 1
+        );
+        assert_eq!(state.marketplace.apps_needing_auth[0].id, "app-0");
+        assert_eq!(state.marketplace.apps_needing_auth[0].name, "App 0");
+        assert_eq!(
+            state.marketplace.apps_needing_auth[0]
+                .install_url
+                .as_deref(),
+            Some("https://chatgpt.com/apps/connect")
+        );
+        assert!(reduce(&mut state, Action::DismissPluginAuthApps).is_empty());
+        assert!(state.marketplace.apps_needing_auth.is_empty());
 
         assert_eq!(
             reduce(

@@ -112,14 +112,14 @@ use codex_platform::{
 };
 use codex_protocol::{
     Account as ProtocolAccount, AccountLoginCompletedNotification, AppInfo,
-    AppListUpdatedNotification, ApprovalsReviewer as ProtocolApprovalsReviewer, AppsListParams,
-    AppsReadParams, CancelLoginAccountParams, ClientInfo, CollaborationMode, CollaborationModeKind,
-    CollaborationModeSettings, CommandAction, CommandExecutionApprovalDecision,
-    CommandExecutionApprovalDecisionValue, CommandExecutionRequestApprovalParams,
-    CommandExecutionRequestApprovalResponse, ConfigBatchWriteParams, ConfigEdit,
-    ConfigMergeStrategy, ConfigReadParams, ConfigReadResponse, ConfigWriteStatus,
-    DynamicToolCallOutputContentItem, DynamicToolCallParams, DynamicToolCallResponse,
-    ExecpolicyAmendment, ExternalAgentConfigDetectParams,
+    AppListUpdatedNotification, AppSummary, ApprovalsReviewer as ProtocolApprovalsReviewer,
+    AppsListParams, AppsReadParams, CancelLoginAccountParams, ClientInfo, CollaborationMode,
+    CollaborationModeKind, CollaborationModeSettings, CommandAction,
+    CommandExecutionApprovalDecision, CommandExecutionApprovalDecisionValue,
+    CommandExecutionRequestApprovalParams, CommandExecutionRequestApprovalResponse,
+    ConfigBatchWriteParams, ConfigEdit, ConfigMergeStrategy, ConfigReadParams, ConfigReadResponse,
+    ConfigWriteStatus, DynamicToolCallOutputContentItem, DynamicToolCallParams,
+    DynamicToolCallResponse, ExecpolicyAmendment, ExternalAgentConfigDetectParams,
     ExternalAgentConfigImportCompletedNotification, ExternalAgentConfigImportHistoriesReadResponse,
     ExternalAgentConfigImportItemTypeFailure, ExternalAgentConfigImportItemTypeSuccess,
     ExternalAgentConfigImportParams, ExternalAgentConfigImportProgressNotification,
@@ -503,6 +503,23 @@ fn map_apps(apps: Vec<AppInfo>) -> Vec<AppCard> {
             install_url: app.install_url,
             is_accessible: app.is_accessible,
             enabled: app.is_enabled,
+        })
+        .collect()
+}
+
+fn map_auth_app_summaries(apps: Vec<AppSummary>) -> Vec<AppCard> {
+    apps.into_iter()
+        .take(codex_core::MAX_PLUGIN_DETAIL_ITEMS)
+        .map(|app| AppCard {
+            id: app.id,
+            name: app.name,
+            description: app.description.unwrap_or_default(),
+            plugin_display_names: Vec::new(),
+            logo_url: None,
+            logo_url_dark: None,
+            install_url: app.install_url,
+            is_accessible: false,
+            enabled: false,
         })
         .collect()
 }
@@ -7526,11 +7543,12 @@ fn run_effect(
                 plugin_name,
             });
             match result {
-                Ok(_) => emit(
+                Ok(response) => emit(
                     events,
                     Action::PluginMutationFinished {
                         plugin_id,
                         installed: true,
+                        apps_needing_auth: map_auth_app_summaries(response.apps_needing_auth),
                     },
                 ),
                 Err(error) => emit(
@@ -7551,6 +7569,7 @@ fn run_effect(
                     Action::PluginMutationFinished {
                         plugin_id,
                         installed: false,
+                        apps_needing_auth: Vec::new(),
                     },
                 ),
                 Err(error) => emit(
