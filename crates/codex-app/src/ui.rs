@@ -4563,6 +4563,17 @@ fn first_run_sign_in_visible(state: &AppState) -> bool {
         && state.account.requires_openai_auth
 }
 
+fn first_run_workspace_picker_visible(state: &AppState) -> bool {
+    state.selected_task_id.is_none()
+        && state.connection == ConnectionStatus::Online
+        && state.account.status == LoadStatus::Ready
+        && state.account.profile.is_some()
+        && state.account.auth_operation == AccountAuthOperation::Idle
+        && state.task_status == LoadStatus::Ready
+        && state.tasks.is_empty()
+        && state.new_chat_cwd.is_none()
+}
+
 fn account_device_code(account: &AccountState) -> Option<(String, String)> {
     (account.auth_operation == AccountAuthOperation::AwaitingLogin)
         .then(|| {
@@ -15324,6 +15335,7 @@ impl WorkspaceView {
             let new_chat_cwd = self.state.new_chat_cwd.clone();
             let recovery = startup_recovery_card(&self.state.connection, self.backend.is_some());
             let first_run_sign_in = first_run_sign_in_visible(&self.state);
+            let first_run_workspace_picker = first_run_workspace_picker_visible(&self.state);
             let account_auth_operation = self.state.account.auth_operation;
             let account_auth_error = self.state.account.auth_error.clone();
             let account_device_code = account_device_code(&self.state.account);
@@ -15580,6 +15592,43 @@ impl WorkspaceView {
                                             .small()
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.dispatch(Action::RefreshAccount, cx);
+                                            })),
+                                    ),
+                            )
+                        })
+                        .when(first_run_workspace_picker, |empty| {
+                            empty.child(
+                                v_flex()
+                                    .mt_4()
+                                    .w_full()
+                                    .min_w_0()
+                                    .max_w(px(520.0))
+                                    .p_4()
+                                    .gap_2()
+                                    .rounded_lg()
+                                    .border_1()
+                                    .border_color(cx.theme().border)
+                                    .bg(cx.theme().sidebar)
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .child("Open a project folder"),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(
+                                                "Choose a local folder to use as the workspace for your first chat.",
+                                            ),
+                                    )
+                                    .child(
+                                        Button::new("first-run-open-folder")
+                                            .label("Open folder")
+                                            .small()
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.prompt_for_workspace(cx);
                                             })),
                                     ),
                             )
@@ -44028,6 +44077,59 @@ mod tests {
         );
         state.connection = ConnectionStatus::Offline;
         assert!(first_run_account_load_error(&state).is_none());
+    }
+
+    #[test]
+    fn first_run_workspace_picker_requires_an_online_authenticated_empty_workspace() {
+        let profile = AccountProfile {
+            kind: AccountKind::ChatGpt,
+            email: None,
+            plan: None,
+        };
+        let mut state = AppState {
+            connection: ConnectionStatus::Online,
+            account: AccountState {
+                status: LoadStatus::Ready,
+                profile: Some(profile.clone()),
+                ..AccountState::default()
+            },
+            ..AppState::default()
+        };
+
+        assert!(!super::first_run_workspace_picker_visible(&state));
+        state.task_status = LoadStatus::Ready;
+        assert!(super::first_run_workspace_picker_visible(&state));
+
+        state.selected_task_id = Some("task-1".to_owned());
+        assert!(!super::first_run_workspace_picker_visible(&state));
+        state.selected_task_id = None;
+
+        state.connection = ConnectionStatus::Offline;
+        assert!(!super::first_run_workspace_picker_visible(&state));
+        state.connection = ConnectionStatus::Online;
+
+        state.account.status = LoadStatus::Loading;
+        assert!(!super::first_run_workspace_picker_visible(&state));
+        state.account.status = LoadStatus::Ready;
+
+        state.account.profile = None;
+        assert!(!super::first_run_workspace_picker_visible(&state));
+        state.account.profile = Some(profile);
+
+        state.account.auth_operation = AccountAuthOperation::LoggingOut;
+        assert!(!super::first_run_workspace_picker_visible(&state));
+        state.account.auth_operation = AccountAuthOperation::Idle;
+
+        state.task_status = LoadStatus::Loading;
+        assert!(!super::first_run_workspace_picker_visible(&state));
+        state.task_status = LoadStatus::Ready;
+
+        state.tasks.push(task("task-1", "C:\\workspace"));
+        assert!(!super::first_run_workspace_picker_visible(&state));
+        state.tasks.clear();
+
+        state.new_chat_cwd = Some(PathBuf::from("C:\\workspace"));
+        assert!(!super::first_run_workspace_picker_visible(&state));
     }
 
     #[test]
