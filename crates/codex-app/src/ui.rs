@@ -9911,44 +9911,6 @@ impl WorkspaceView {
         Self::task_actions_menu(menu, view, target, true, window, cx)
     }
 
-    fn git_branch_menu(
-        mut menu: PopupMenu,
-        view: WeakEntity<Self>,
-        branches: Vec<(String, bool)>,
-        pending: bool,
-    ) -> PopupMenu {
-        const MAX_VISIBLE_BRANCH_MENU_ITEMS: usize = 20;
-        if branches.is_empty() {
-            menu = menu.item(PopupMenuItem::label("No branches available"));
-        } else {
-            for (branch, current) in branches.into_iter().take(MAX_VISIBLE_BRANCH_MENU_ITEMS) {
-                let branch_view = view.clone();
-                let selected_branch = branch.clone();
-                menu = menu.item(
-                    PopupMenuItem::new(branch)
-                        .checked(current)
-                        .disabled(current || pending)
-                        .on_click(move |_, _, cx| {
-                            let branch = selected_branch.clone();
-                            let _ = branch_view.update(cx, |this, cx| {
-                                this.dispatch(Action::SwitchGitBranch(branch), cx);
-                            });
-                        }),
-                );
-            }
-        }
-        menu.separator().item(
-            PopupMenuItem::new("Create and checkout new branch…")
-                .icon(IconName::Plus)
-                .disabled(pending)
-                .on_click(move |_, window, cx| {
-                    let _ = view.update(cx, |this, cx| {
-                        this.open_create_branch_modal(window, cx);
-                    });
-                }),
-        )
-    }
-
     fn git_review_source_menu(
         mut menu: PopupMenu,
         view: WeakEntity<Self>,
@@ -20899,22 +20861,15 @@ impl WorkspaceView {
             .is_some_and(|goal| goal.status != ThreadGoalStatus::Complete);
         let show_goal_indicator = goal_mode || has_thread_goal;
         let add_menu_view = cx.entity().downgrade();
-        let branch_menu_view = cx.entity().downgrade();
-        let branch_menu_items = self
-            .state
-            .git
-            .branches
-            .iter()
-            .map(|branch| (branch.name.clone(), branch.current))
-            .collect::<Vec<_>>();
+        let work_location_view = cx.entity().downgrade();
         let current_branch = self
             .state
             .git
             .branch
             .clone()
             .unwrap_or_else(|| "Branch".to_owned());
-        let branch_operation_pending = self.state.git.pending_branch_operation.is_some();
-        let show_branch_picker =
+        let new_worktree_pending = self.state.pending_worktree_fork.is_some();
+        let show_work_location_picker =
             self.state.selected_task_id.is_some() && self.state.git.repository_root.is_some();
         let attachments = self
             .state
@@ -21448,7 +21403,7 @@ impl WorkspaceView {
                             ),
                     ),
             )
-            .when(show_branch_picker, |composer| {
+            .when(show_work_location_picker, |composer| {
                 composer.child(
                     h_flex()
                         .w_full()
@@ -21457,26 +21412,33 @@ impl WorkspaceView {
                         .gap_1()
                         .items_center()
                         .child(
-                            div()
-                                .px_2()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("Local"),
-                        )
-                        .child(
-                            Button::new("composer-git-branch")
-                                .label(current_branch)
-                                .tooltip("Switch branch")
+                            Button::new("composer-work-location")
+                                .label("Work locally")
+                                .tooltip(format!("Work on {current_branch}"))
                                 .xsmall()
                                 .ghost()
-                                .disabled(branch_operation_pending)
                                 .dropdown_menu(move |menu, _, _| {
-                                    Self::git_branch_menu(
-                                        menu,
-                                        branch_menu_view.clone(),
-                                        branch_menu_items.clone(),
-                                        branch_operation_pending,
-                                    )
+                                    let new_worktree_view = work_location_view.clone();
+                                    menu.item(PopupMenuItem::label("Continue in"))
+                                        .separator()
+                                        .item(
+                                            PopupMenuItem::new("Work locally")
+                                                .checked(true)
+                                                .disabled(true),
+                                        )
+                                        .item(
+                                            PopupMenuItem::new("New worktree")
+                                                .icon(IconName::FolderOpen)
+                                                .disabled(new_worktree_pending)
+                                                .on_click(move |_, _, cx| {
+                                                    let _ = new_worktree_view.update(cx, |this, cx| {
+                                                        this.dispatch(
+                                                            Action::ForkSelectedTaskIntoWorktree,
+                                                            cx,
+                                                        );
+                                                    });
+                                                }),
+                                        )
                                 }),
                         ),
                 )
