@@ -12099,16 +12099,17 @@ fn handle_notification(method: &str, params: Value, events: &Sender<Action>) -> 
                 (string_field(&params, "threadId"), params.get("turn"))
                 && let Some(turn_id) = string_field(turn, "id")
             {
-                if string_field(turn, "status").as_deref() == Some("interrupted") {
+                let status = string_field(turn, "status");
+                if status.as_deref() == Some("interrupted") {
                     emit(events, Action::TurnInterrupted { task_id, turn_id });
                 } else {
-                    let failed = string_field(turn, "status").as_deref() == Some("failed");
                     emit(
                         events,
                         Action::TurnCompleted {
                             task_id,
                             turn_id,
-                            failed,
+                            completed: status.as_deref() == Some("completed"),
+                            failed: status.as_deref() == Some("failed"),
                         },
                     );
                 }
@@ -18270,6 +18271,63 @@ mod tests {
             }) if task_id == "thread-1"
                 && turn_id == "turn-7"
                 && diff.ends_with("+native")
+        ));
+    }
+
+    #[test]
+    fn turn_completed_notification_marks_only_exact_success() {
+        let (events, actions) = bounded(4);
+
+        for status in ["completed", "failed", "unknown"] {
+            assert!(!handle_notification(
+                "turn/completed",
+                json!({
+                    "threadId": "thread-1",
+                    "turn": {"id": format!("turn-{status}"), "status": status}
+                }),
+                &events
+            ));
+        }
+        assert!(!handle_notification(
+            "turn/completed",
+            json!({
+                "threadId": "thread-1",
+                "turn": {"id": "turn-interrupted", "status": "interrupted"}
+            }),
+            &events
+        ));
+
+        assert!(matches!(
+            actions.try_recv(),
+            Ok(Action::TurnCompleted {
+                task_id,
+                turn_id,
+                completed: true,
+                failed: false,
+            }) if task_id == "thread-1" && turn_id == "turn-completed"
+        ));
+        assert!(matches!(
+            actions.try_recv(),
+            Ok(Action::TurnCompleted {
+                task_id,
+                turn_id,
+                completed: false,
+                failed: true,
+            }) if task_id == "thread-1" && turn_id == "turn-failed"
+        ));
+        assert!(matches!(
+            actions.try_recv(),
+            Ok(Action::TurnCompleted {
+                task_id,
+                turn_id,
+                completed: false,
+                failed: false,
+            }) if task_id == "thread-1" && turn_id == "turn-unknown"
+        ));
+        assert!(matches!(
+            actions.try_recv(),
+            Ok(Action::TurnInterrupted { task_id, turn_id })
+                if task_id == "thread-1" && turn_id == "turn-interrupted"
         ));
     }
 
