@@ -1613,6 +1613,19 @@ fn composer_model_picker_items(models: &[ModelOption]) -> Vec<ModelPickerItem> {
         .collect()
 }
 
+fn composer_model_placeholder(status: LoadStatus, has_models: bool) -> &'static str {
+    if has_models {
+        return "Model";
+    }
+
+    match status {
+        LoadStatus::Idle => "Model",
+        LoadStatus::Loading => "Loading models…",
+        LoadStatus::Ready => "No models available",
+        LoadStatus::Failed => "Models unavailable",
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PermissionPickerItem {
     id: String,
@@ -11442,6 +11455,9 @@ impl WorkspaceView {
             let selected = self.state.composer_controls.selected_model.clone();
             let picker_items = model_items.clone();
             self.model_picker.update(cx, |picker, cx| {
+                if picker_items.is_empty() {
+                    picker.close_menu(cx);
+                }
                 picker.set_items(SearchableVec::new(picker_items), window, cx);
                 if let Some(selected) = selected.as_ref() {
                     picker.set_selected_value(selected, window, cx);
@@ -21331,6 +21347,7 @@ impl WorkspaceView {
             };
         let has_input =
             !self.state.composer.trim().is_empty() || !self.state.composer_attachments.is_empty();
+        let has_model_items = !self.synced_model_items.is_empty();
         let composer_text = self.state.composer.trim();
         let shell_command = composer_text.strip_prefix("/shell").filter(|command| {
             command.is_empty()
@@ -22013,12 +22030,12 @@ impl WorkspaceView {
                                             .small()
                                             .w(px(model_width))
                                              .menu_width(px(280.0))
-                                             .placeholder("Model")
+                                             .placeholder(composer_model_placeholder(
+                                                 self.state.composer_controls.models_status,
+                                                 has_model_items,
+                                             ))
                                              .search_placeholder("Search models…")
-                                             .disabled(
-                                                 shell_command_mode
-                                                     || self.synced_model_items.is_empty(),
-                                             ),
+                                             .disabled(shell_command_mode || !has_model_items),
                                     )
                                     .child(
                                         Select::new(&self.effort_picker)
@@ -43764,9 +43781,9 @@ mod tests {
         browser_navigation_url, browser_surface_coordinates, build_plugin_catalog_sections,
         case_insensitive_match_ranges, command_task_slot, composer_app_commands,
         composer_at_skill_commands, composer_desktop_app_commands, composer_file_query,
-        composer_file_search_max_height, composer_model_picker_items, composer_plugin_commands,
-        composer_service_tier_command_for_query, composer_service_tier_commands,
-        composer_skill_command_for_query, composer_skill_commands,
+        composer_file_search_max_height, composer_model_picker_items, composer_model_placeholder,
+        composer_plugin_commands, composer_service_tier_command_for_query,
+        composer_service_tier_commands, composer_skill_command_for_query, composer_skill_commands,
         composer_slash_command_for_prefix, connection_send_failure, decode_mcp_form_image_data_url,
         default_branch_name, diff_file_review_rows, diff_file_sections,
         extract_code_comment_findings, fetch_plugin_logo_blocking, find_timeline_matches,
@@ -43882,6 +43899,32 @@ mod tests {
         );
         assert_eq!(items[1].id, "gpt-standard");
         assert!(items[1].description.is_none());
+    }
+
+    #[test]
+    fn composer_model_placeholder_describes_catalog_availability() {
+        assert_eq!(composer_model_placeholder(LoadStatus::Idle, false), "Model");
+        assert_eq!(
+            composer_model_placeholder(LoadStatus::Loading, false),
+            "Loading models…"
+        );
+        assert_eq!(
+            composer_model_placeholder(LoadStatus::Ready, false),
+            "No models available"
+        );
+        assert_eq!(
+            composer_model_placeholder(LoadStatus::Failed, false),
+            "Models unavailable"
+        );
+
+        for status in [
+            LoadStatus::Idle,
+            LoadStatus::Loading,
+            LoadStatus::Ready,
+            LoadStatus::Failed,
+        ] {
+            assert_eq!(composer_model_placeholder(status, true), "Model");
+        }
     }
 
     #[test]
