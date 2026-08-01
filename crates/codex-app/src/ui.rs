@@ -43312,7 +43312,7 @@ fn settings_section_matches(section: SettingsSection, raw_query: &str) -> bool {
             "keyboard shortcuts hotkeys key bindings commands customize"
         }
         SettingsSection::Profile => {
-            "profile account plan email identity authentication api key sign in login logout"
+            "profile account plan email identity authentication api key sign in login logout device code verification one-time"
         }
         SettingsSection::Usage => "usage billing credits limits",
         SettingsSection::Import => {
@@ -45703,6 +45703,14 @@ mod tests {
         assert!(settings_section_matches(
             SettingsSection::Profile,
             "email authentication"
+        ));
+        assert!(settings_section_matches(
+            SettingsSection::Profile,
+            "device code"
+        ));
+        assert!(settings_section_matches(
+            SettingsSection::Profile,
+            "verification code"
         ));
         assert!(settings_section_matches(
             SettingsSection::Usage,
