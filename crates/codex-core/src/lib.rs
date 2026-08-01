@@ -2507,6 +2507,7 @@ pub struct MarketplaceState {
     pub marketplace_add_error: Option<String>,
     pub pending_marketplace_remove: Option<String>,
     pub marketplace_upgrade_pending: bool,
+    pub pending_marketplace_upgrade_name: Option<String>,
     pub marketplace_mutation_error: Option<String>,
     pub selected_plugin_id: Option<String>,
     pub plugin_detail_status: Option<LoadStatus>,
@@ -13932,9 +13933,18 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             {
                 return Vec::new();
             }
-            let marketplace_name = marketplace_name
-                .map(|name| bounded_string(name.trim().to_owned(), MAX_MARKETPLACE_NAME_BYTES))
-                .filter(|name| !name.is_empty());
+            let marketplace_name = match marketplace_name {
+                Some(name) => {
+                    let name = bounded_string(name.trim().to_owned(), MAX_MARKETPLACE_NAME_BYTES);
+                    if name.is_empty() {
+                        state.marketplace.marketplace_mutation_error =
+                            Some("This marketplace is no longer available.".to_owned());
+                        return Vec::new();
+                    }
+                    Some(name)
+                }
+                None => None,
+            };
             if marketplace_name.as_ref().is_some_and(|name| {
                 !state
                     .marketplace
@@ -13947,6 +13957,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 return Vec::new();
             }
             state.marketplace.marketplace_upgrade_pending = true;
+            state.marketplace.pending_marketplace_upgrade_name = marketplace_name.clone();
             state.marketplace.marketplace_mutation_error = None;
             vec![Effect::UpgradeMarketplaces { marketplace_name }]
         }
@@ -13956,6 +13967,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             mut errors,
         } => {
             state.marketplace.marketplace_upgrade_pending = false;
+            state.marketplace.pending_marketplace_upgrade_name = None;
             selected_marketplaces.truncate(MAX_MARKETPLACE_SOURCES);
             errors.truncate(MAX_MARKETPLACE_SOURCES);
             let selected_count = selected_marketplaces.len();
@@ -13987,6 +13999,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::MarketplaceUpgradeFailed(message) => {
             state.marketplace.marketplace_upgrade_pending = false;
+            state.marketplace.pending_marketplace_upgrade_name = None;
             state.marketplace.marketplace_mutation_error = Some(bounded_string(message, 4 * 1024));
             Vec::new()
         }
@@ -25560,6 +25573,35 @@ mod tests {
         assert_eq!(
             state.marketplace.marketplace_mutation_error.as_deref(),
             Some("team-plugins: network unavailable")
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::UpgradeMarketplaces(Some(" team-plugins ".to_owned())),
+            ),
+            [Effect::UpgradeMarketplaces {
+                marketplace_name: Some("team-plugins".to_owned()),
+            }]
+        );
+        assert_eq!(
+            state
+                .marketplace
+                .pending_marketplace_upgrade_name
+                .as_deref(),
+            Some("team-plugins")
+        );
+        reduce(
+            &mut state,
+            Action::MarketplaceUpgradeFailed("network unavailable".to_owned()),
+        );
+        assert!(!state.marketplace.marketplace_upgrade_pending);
+        assert!(state.marketplace.pending_marketplace_upgrade_name.is_none());
+        assert!(
+            reduce(
+                &mut state,
+                Action::UpgradeMarketplaces(Some(" ".to_owned())),
+            )
+            .is_empty()
         );
     }
 
