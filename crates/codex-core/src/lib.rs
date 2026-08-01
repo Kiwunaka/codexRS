@@ -5369,12 +5369,15 @@ pub enum Action {
     SwitchGitBranch(String),
     CreateGitBranch(String),
     GitBranchMutationCompleted {
+        root: PathBuf,
         message: String,
     },
     GitBranchMutationFailed {
+        root: PathBuf,
         message: String,
     },
     GitBranchSwitchBlocked {
+        root: PathBuf,
         branch: String,
         create_branch: bool,
         paths: Vec<PathBuf>,
@@ -15284,6 +15287,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             let previous_commit_sha = state.git.selected_commit_sha.clone();
             let previous_review_base = state.git.selected_review_base.clone();
             let previous_diff_generation = state.git.diff_generation;
+            let pending_branch_operation = state.git.pending_branch_operation.clone();
+            let branch_mutation_error = state.git.branch_mutation_error.clone();
+            let branch_conflict = state.git.branch_conflict.clone();
             let next_diff_generation = previous_diff_generation.saturating_add(1);
             let pull_request_lookup =
                 git.repository_root
@@ -15295,6 +15301,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     });
             git.refresh_generation = generation;
             state.git = *git;
+            state.git.pending_branch_operation = pending_branch_operation;
+            state.git.branch_mutation_error = branch_mutation_error;
+            state.git.branch_conflict = branch_conflict;
             state.git.selected_commit_sha = previous_commit_sha
                 .filter(|sha| state.git.commits.iter().any(|commit| commit.sha == *sha));
             state.git.selected_review_base = (previous_repository_root
@@ -15959,25 +15968,39 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 vec![Effect::CreateGitBranch { root, branch }]
             }
         }
-        Action::GitBranchMutationCompleted { message } => {
+        Action::GitBranchMutationCompleted { root, message } => {
+            if state.git.repository_root.as_ref() != Some(&root) {
+                return Vec::new();
+            }
             state.git.pending_branch_operation = None;
             state.git.branch_mutation_error = None;
             state.git.branch_conflict = None;
             state.status_message = Some(message);
-            Vec::new()
+            let generation = next_git_refresh_generation(state);
+            vec![Effect::RefreshGit {
+                generation,
+                cwd: root,
+            }]
         }
-        Action::GitBranchMutationFailed { message } => {
+        Action::GitBranchMutationFailed { root, message } => {
+            if state.git.repository_root.as_ref() != Some(&root) {
+                return Vec::new();
+            }
             state.git.pending_branch_operation = None;
             state.git.branch_mutation_error = Some(bounded_string(message.clone(), 16 * 1024));
             state.status_message = Some(bounded_string(message, 16 * 1024));
             Vec::new()
         }
         Action::GitBranchSwitchBlocked {
+            root,
             branch,
             create_branch,
             mut paths,
             truncated,
         } => {
+            if state.git.repository_root.as_ref() != Some(&root) {
+                return Vec::new();
+            }
             const MAX_CONFLICT_PATHS: usize = 100;
             paths.truncate(MAX_CONFLICT_PATHS);
             state.git.pending_branch_operation = None;
@@ -17154,12 +17177,12 @@ mod tests {
         BrowserSitePermission, BrowserTabState, ChatMemoryPreferences, CommandApprovalContext,
         ComposerAttachment, ComposerAttachmentKind, ComputerApplicationState, ComputerUseState,
         ConnectionStatus, DiffMarkerStyle, Effect, FeedbackClassification, FuzzyFileMatchType,
-        FuzzyFileResult, GitCommitNextStep, GitCommitPhase, GitDiffScope, GitPreferences,
-        GitPullRequestNextStep, GitPullRequestPhase, GitPullRequestProvider, GitPullRequestState,
-        GitReviewCommitState, GitReviewMode, GitState, GitWorktreeState, HookCard, HookEventName,
-        HookHandlerType, HookProjectEntry, HookSource, HookTrustStatus, ImportBatch, ImportHistory,
-        ImportItemSuccess, ImportItemType, ImportMigrationDetails, ImportMigrationItem,
-        ImportProvider, ImportProviderItems, ImportTypeResult, InspectorPane,
+        FuzzyFileResult, GitBranchConflictState, GitCommitNextStep, GitCommitPhase, GitDiffScope,
+        GitPreferences, GitPullRequestNextStep, GitPullRequestPhase, GitPullRequestProvider,
+        GitPullRequestState, GitReviewCommitState, GitReviewMode, GitState, GitWorktreeState,
+        HookCard, HookEventName, HookHandlerType, HookProjectEntry, HookSource, HookTrustStatus,
+        ImportBatch, ImportHistory, ImportItemSuccess, ImportItemType, ImportMigrationDetails,
+        ImportMigrationItem, ImportProvider, ImportProviderItems, ImportTypeResult, InspectorPane,
         IntegratedTerminalShell, KeyboardShortcutPreferences, KeyboardShortcutUpdateTarget,
         LoadStatus, LocalProjectSummary, MAX_BROWSER_DOWNLOADS, MAX_COMPOSER_BYTES,
         MAX_GIT_BRANCH_BYTES, MAX_GIT_DIFF_BYTES, MAX_GIT_INSTRUCTIONS_BYTES, MAX_GIT_SHA_BYTES,
@@ -23149,6 +23172,7 @@ mod tests {
         reduce(
             &mut state,
             Action::GitBranchMutationCompleted {
+                root: PathBuf::from("C:\\repo"),
                 message: "Switched".to_owned(),
             },
         );
@@ -23165,6 +23189,7 @@ mod tests {
         reduce(
             &mut state,
             Action::GitBranchSwitchBlocked {
+                root: PathBuf::from("C:\\repo"),
                 branch: "codex/new-native-ui".to_owned(),
                 create_branch: true,
                 paths: vec![PathBuf::from("src/lib.rs")],
@@ -23197,6 +23222,108 @@ mod tests {
                 create_branch: true,
             }]
         );
+    }
+
+    #[test]
+    fn current_git_snapshot_preserves_branch_mutation_lifecycle() {
+        let root = PathBuf::from("C:\\repo");
+        let mut state = AppState::default();
+        state.git.repository_root = Some(root.clone());
+        let generation = state.git.refresh_generation;
+
+        reduce(
+            &mut state,
+            Action::SwitchGitBranch("feature/one".to_owned()),
+        );
+        reduce(
+            &mut state,
+            Action::GitSnapshotLoaded {
+                generation,
+                git: Box::new(GitState {
+                    repository_root: Some(root.clone()),
+                    ..GitState::default()
+                }),
+                error: None,
+            },
+        );
+        assert_eq!(
+            state.git.pending_branch_operation.as_deref(),
+            Some("feature/one")
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::CreateGitBranch("feature/two".to_owned())
+            )
+            .is_empty()
+        );
+
+        reduce(
+            &mut state,
+            Action::GitBranchMutationFailed {
+                root: root.clone(),
+                message: "branch failed".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::GitSnapshotLoaded {
+                generation,
+                git: Box::new(GitState {
+                    repository_root: Some(root),
+                    ..GitState::default()
+                }),
+                error: None,
+            },
+        );
+        assert_eq!(
+            state.git.branch_mutation_error.as_deref(),
+            Some("branch failed")
+        );
+    }
+
+    #[test]
+    fn stale_branch_failure_does_not_change_the_current_repository_state() {
+        let root_a = PathBuf::from("C:\\repo-a");
+        let root_b = PathBuf::from("C:\\repo-b");
+        let conflict = GitBranchConflictState {
+            branch: "feature/b".to_owned(),
+            create_branch: false,
+            paths: vec![PathBuf::from("src/b.rs")],
+            truncated: false,
+        };
+        let mut state = AppState::default();
+        state.git.repository_root = Some(root_a.clone());
+        reduce(&mut state, Action::SwitchGitBranch("feature/a".to_owned()));
+        state.git = GitState {
+            repository_root: Some(root_b),
+            pending_branch_operation: Some("feature/b".to_owned()),
+            branch_mutation_error: Some("current error".to_owned()),
+            branch_conflict: Some(conflict.clone()),
+            ..GitState::default()
+        };
+        state.status_message = Some("Repository B".to_owned());
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::GitBranchMutationFailed {
+                    root: root_a,
+                    message: "failed in repository A".to_owned(),
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.git.pending_branch_operation.as_deref(),
+            Some("feature/b")
+        );
+        assert_eq!(
+            state.git.branch_mutation_error.as_deref(),
+            Some("current error")
+        );
+        assert_eq!(state.git.branch_conflict, Some(conflict));
+        assert_eq!(state.status_message.as_deref(), Some("Repository B"));
     }
 
     #[test]

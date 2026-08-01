@@ -4530,14 +4530,15 @@ fn run_effect(
                     emit(
                         events,
                         Action::GitBranchMutationCompleted {
+                            root: root.clone(),
                             message: format!("Switched to branch {branch}"),
                         },
                     );
-                    emit(events, Action::RefreshGit);
                 }
                 Ok(GitBranchMutationOutcome::Blocked { paths, truncated }) => emit(
                     events,
                     Action::GitBranchSwitchBlocked {
+                        root: root.clone(),
                         branch: branch.clone(),
                         create_branch: false,
                         paths,
@@ -4547,6 +4548,7 @@ fn run_effect(
                 Err(error) => emit(
                     events,
                     Action::GitBranchMutationFailed {
+                        root: root.clone(),
                         message: format!("Failed to switch branch: {error}"),
                     },
                 ),
@@ -4559,14 +4561,15 @@ fn run_effect(
                     emit(
                         events,
                         Action::GitBranchMutationCompleted {
+                            root: root.clone(),
                             message: format!("Created and checked out {branch}"),
                         },
                     );
-                    emit(events, Action::RefreshGit);
                 }
                 Ok(GitBranchMutationOutcome::Blocked { paths, truncated }) => emit(
                     events,
                     Action::GitBranchSwitchBlocked {
+                        root: root.clone(),
                         branch: branch.clone(),
                         create_branch: true,
                         paths,
@@ -4576,6 +4579,7 @@ fn run_effect(
                 Err(error) => emit(
                     events,
                     Action::GitBranchMutationFailed {
+                        root: root.clone(),
                         message: format!("Failed to create branch: {error}"),
                     },
                 ),
