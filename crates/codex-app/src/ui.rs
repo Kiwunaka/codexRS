@@ -44,20 +44,21 @@ use codex_core::{
     McpFormElicitation, McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpResourceCard,
     McpResourceContentCard, McpResourceTemplateCard, McpServerCard, McpServerDraft,
     McpServerStartupFailureReason, McpServerStartupState, McpToolCard, McpTransportKind,
-    ModelOption, NetworkApprovalProtocol, OutputArtifact, OutputArtifactKind, PendingWorktreeFork,
-    PendingWorktreeForkPhase, PermissionRequestDetail, Personality, PluginCard, PluginDetailItem,
-    PluginDetailView, PluginDirectoryTab, PluginSkillDetail, PrimaryWindowPlacement,
-    ProcessManagerState, PullRequestActivity, PullRequestActivityKind, PullRequestCheck,
-    PullRequestCheckStatus, PullRequestCiStatus, PullRequestDetail, PullRequestDetailTab,
-    PullRequestLifecycle, PullRequestMergeMethod, PullRequestMutation, PullRequestMutationKind,
-    PullRequestRelationship, PullRequestReviewEvent, PullRequestReviewState, PullRequestState,
-    PullRequestSummary, ReasoningEffortOption, ReducedMotionPreference, RemoteControlRuntimeStatus,
-    ReviewDelivery, ReviewTarget, STANDARD_SERVICE_TIER_ID, ServiceTierOption, SkillCard,
-    SkillScope, TaskRunStatus, TaskSearchResult, TaskSummary, TerminalDockLocation,
-    TerminalTabState, ThreadGoalStatus, TimelineCitation, TimelineItem, TimelineKind,
-    UsageLimitWindow, UserInputAnswer, UserInputAnswers, UserInputRequest,
-    appearance_code_theme_supports_variant, composer_plugin_display_name,
-    composer_plugin_is_mentionable, is_appearance_code_theme_id, reduce, validate_mcp_form_content,
+    ModelOption, ModelUpgradeNotice, NetworkApprovalProtocol, OutputArtifact, OutputArtifactKind,
+    PendingWorktreeFork, PendingWorktreeForkPhase, PermissionRequestDetail, Personality,
+    PluginCard, PluginDetailItem, PluginDetailView, PluginDirectoryTab, PluginSkillDetail,
+    PrimaryWindowPlacement, ProcessManagerState, PullRequestActivity, PullRequestActivityKind,
+    PullRequestCheck, PullRequestCheckStatus, PullRequestCiStatus, PullRequestDetail,
+    PullRequestDetailTab, PullRequestLifecycle, PullRequestMergeMethod, PullRequestMutation,
+    PullRequestMutationKind, PullRequestRelationship, PullRequestReviewEvent,
+    PullRequestReviewState, PullRequestState, PullRequestSummary, ReasoningEffortOption,
+    ReducedMotionPreference, RemoteControlRuntimeStatus, ReviewDelivery, ReviewTarget,
+    STANDARD_SERVICE_TIER_ID, ServiceTierOption, SkillCard, SkillScope, TaskRunStatus,
+    TaskSearchResult, TaskSummary, TerminalDockLocation, TerminalTabState, ThreadGoalStatus,
+    TimelineCitation, TimelineItem, TimelineKind, UsageLimitWindow, UserInputAnswer,
+    UserInputAnswers, UserInputRequest, appearance_code_theme_supports_variant,
+    composer_plugin_display_name, composer_plugin_is_mentionable, is_appearance_code_theme_id,
+    reduce, validate_mcp_form_content,
 };
 use codex_platform::{
     computer_use_platform_available, default_browser_download_dir, desktop_work_areas,
@@ -4561,6 +4562,19 @@ fn first_run_sign_in_visible(state: &AppState) -> bool {
         && state.account.status == LoadStatus::Ready
         && state.account.profile.is_none()
         && state.account.requires_openai_auth
+}
+
+fn selected_model_upgrade_notice(
+    models: &[ModelOption],
+    selected_model: Option<&str>,
+) -> Option<ModelUpgradeNotice> {
+    selected_model
+        .and_then(|selected| models.iter().find(|model| model.id == selected))
+        .and_then(|model| model.upgrade_notice.clone())
+}
+
+fn model_upgrade_learn_more_visible(model_link: Option<&str>) -> bool {
+    model_link.is_some_and(is_supported_external_url)
 }
 
 fn first_run_workspace_picker_visible(state: &AppState) -> bool {
@@ -21473,6 +21487,10 @@ impl WorkspaceView {
                     .find(|model| model.id == selected)
             })
             .map(|model| model.display_name.clone());
+        let model_upgrade_notice = selected_model_upgrade_notice(
+            &self.state.composer_controls.models,
+            self.state.composer_controls.selected_model.as_deref(),
+        );
         let reasoning_description = self
             .state
             .composer_controls
@@ -22139,7 +22157,53 @@ impl WorkspaceView {
                                             }))
                                     }),
                             ),
-                    ),
+                    )
+                    .when_some(model_upgrade_notice, |composer, notice| {
+                        let learn_more_url = notice
+                            .model_link
+                            .filter(|link| model_upgrade_learn_more_visible(Some(link.as_str())));
+                        composer.child(
+                            h_flex()
+                                .w_full()
+                                .px_2()
+                                .pb_2()
+                                .justify_end()
+                                .child(
+                                    v_flex()
+                                        .max_w(px(360.0))
+                                        .min_w_0()
+                                        .p_2()
+                                        .gap_1()
+                                        .rounded_md()
+                                        .bg(cx.theme().secondary)
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                .child("Model update available"),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .line_clamp(4)
+                                                .child(notice.copy),
+                                        )
+                                        .when_some(learn_more_url, |notice, url| {
+                                            notice.child(
+                                                Button::new("model-upgrade-learn-more")
+                                                    .label("Learn more")
+                                                    .xsmall()
+                                                    .on_click(move |_, _, cx| {
+                                                        if is_supported_external_url(&url) {
+                                                            cx.open_url(&url);
+                                                        }
+                                                    }),
+                                            )
+                                        }),
+                                ),
+                        )
+                    })
             )
             .when(show_work_location_picker, |composer| {
                 composer.child(
@@ -43907,15 +43971,15 @@ mod tests {
         keyboard_shortcut_search_matches, keyboard_shortcut_settings_matches,
         keyboard_shortcut_stable_order, linked_pull_request_merge_command_enabled,
         mcp_auth_status_label, modal_surface_max_height, modal_surface_width,
-        normalized_accelerator, output_artifact_type_label, parse_appearance_theme_share_string,
-        parse_mcp_list, parse_mcp_record, parse_unified_diff, plugin_logo_format,
-        process_manager_auto_refresh_allowed, project_trigger_matches, project_workspace_options,
-        pull_request_merge_submission_enabled, reasoning_effort_target,
+        model_upgrade_learn_more_visible, normalized_accelerator, output_artifact_type_label,
+        parse_appearance_theme_share_string, parse_mcp_list, parse_mcp_record, parse_unified_diff,
+        plugin_logo_format, process_manager_auto_refresh_allowed, project_trigger_matches,
+        project_workspace_options, pull_request_merge_submission_enabled, reasoning_effort_target,
         remote_control_status_label, render_conversation_markdown, replace_composer_file_query,
         repository_uses_split_diff, reserve_thread_find_history_page, sanitize_assistant_markdown,
-        selected_approval_request, selected_task_copy_value, settings_section_matches,
-        settings_section_refreshes_account, shell_width_class, sidebar_layout_width,
-        split_diff_rows, startup_recovery_card, status_context_total_label,
+        selected_approval_request, selected_model_upgrade_notice, selected_task_copy_value,
+        settings_section_matches, settings_section_refreshes_account, shell_width_class,
+        sidebar_layout_width, split_diff_rows, startup_recovery_card, status_context_total_label,
         status_rate_limit_label, status_rate_limit_reset_metadata_at, task_slot_id,
         terminal_tab_label, timeline_activity_content, turn_diff_update_is_accepted,
         validate_plugin_logo_dimensions, worktree_fork_queue_full, worktree_use_disabled,
@@ -43926,11 +43990,12 @@ mod tests {
         ComposerAttachment, ComposerAttachmentKind, ComputerApplicationState, ConnectionStatus,
         GitPullRequestState, GitWorktreeState, IntegratedTerminalShell,
         KEYBOARD_SHORTCUT_COMMAND_IDS, LoadStatus, MAX_PENDING_WORKTREE_FORKS, MainRoute,
-        McpAuthStatus, ModelOption, PendingWorktreeFork, PendingWorktreeForkPhase, PluginCard,
-        ProcessManagerState, PullRequestCiStatus, PullRequestDetail, PullRequestIdentity,
-        PullRequestMutationKind, PullRequestState, PullRequestSummary, ReasoningEffortOption,
-        RemoteControlRuntimeStatus, ServiceTierOption, SkillCard, SkillScope, TaskRunStatus,
-        TaskSummary, TerminalTabState, TimelineItem, TimelineKind, TurnDiffState,
+        McpAuthStatus, ModelOption, ModelUpgradeNotice, PendingWorktreeFork,
+        PendingWorktreeForkPhase, PluginCard, ProcessManagerState, PullRequestCiStatus,
+        PullRequestDetail, PullRequestIdentity, PullRequestMutationKind, PullRequestState,
+        PullRequestSummary, ReasoningEffortOption, RemoteControlRuntimeStatus, ServiceTierOption,
+        SkillCard, SkillScope, TaskRunStatus, TaskSummary, TerminalTabState, TimelineItem,
+        TimelineKind, TurnDiffState,
     };
 
     fn task(id: &str, cwd: &str) -> TaskSummary {
@@ -43985,6 +44050,7 @@ mod tests {
                 id: "gpt-fast".to_owned(),
                 display_name: "GPT Fast".to_owned(),
                 description: " Fast responses ".to_owned(),
+                upgrade_notice: None,
                 is_default: true,
                 default_effort: "medium".to_owned(),
                 supported_efforts: Vec::new(),
@@ -43995,6 +44061,7 @@ mod tests {
                 id: "gpt-standard".to_owned(),
                 display_name: "GPT Standard".to_owned(),
                 description: "   ".to_owned(),
+                upgrade_notice: None,
                 is_default: false,
                 default_effort: "medium".to_owned(),
                 supported_efforts: Vec::new(),
@@ -44011,6 +44078,57 @@ mod tests {
         );
         assert_eq!(items[1].id, "gpt-standard");
         assert!(items[1].description.is_none());
+    }
+
+    #[test]
+    fn selected_model_upgrade_notice_uses_only_the_selected_model_and_safe_links() {
+        let models = vec![
+            ModelOption {
+                id: "gpt-current".to_owned(),
+                display_name: "GPT Current".to_owned(),
+                description: String::new(),
+                upgrade_notice: Some(ModelUpgradeNotice {
+                    copy: "Use GPT New for the next chat.".to_owned(),
+                    model_link: Some("https://platform.openai.com/docs/models".to_owned()),
+                }),
+                is_default: true,
+                default_effort: "medium".to_owned(),
+                supported_efforts: Vec::new(),
+                service_tiers: Vec::new(),
+                default_service_tier: None,
+            },
+            ModelOption {
+                id: "gpt-other".to_owned(),
+                display_name: "GPT Other".to_owned(),
+                description: String::new(),
+                upgrade_notice: Some(ModelUpgradeNotice {
+                    copy: "Ignore this notice.".to_owned(),
+                    model_link: Some("javascript:alert(1)".to_owned()),
+                }),
+                is_default: false,
+                default_effort: "medium".to_owned(),
+                supported_efforts: Vec::new(),
+                service_tiers: Vec::new(),
+                default_service_tier: None,
+            },
+        ];
+
+        let notice = selected_model_upgrade_notice(&models, Some("gpt-current"));
+        assert_eq!(
+            notice.as_ref().map(|notice| notice.copy.as_str()),
+            Some("Use GPT New for the next chat.")
+        );
+        assert!(model_upgrade_learn_more_visible(
+            notice
+                .as_ref()
+                .and_then(|notice| notice.model_link.as_deref())
+        ));
+        assert!(!model_upgrade_learn_more_visible(
+            selected_model_upgrade_notice(&models, Some("gpt-other"))
+                .as_ref()
+                .and_then(|notice| notice.model_link.as_deref())
+        ));
+        assert!(selected_model_upgrade_notice(&models, Some("missing")).is_none());
     }
 
     #[test]

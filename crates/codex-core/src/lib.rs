@@ -3824,11 +3824,18 @@ pub struct ModelOption {
     pub id: String,
     pub display_name: String,
     pub description: String,
+    pub upgrade_notice: Option<ModelUpgradeNotice>,
     pub is_default: bool,
     pub default_effort: String,
     pub supported_efforts: Vec<ReasoningEffortOption>,
     pub service_tiers: Vec<ServiceTierOption>,
     pub default_service_tier: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelUpgradeNotice {
+    pub copy: String,
+    pub model_link: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17699,6 +17706,7 @@ mod tests {
             id: id.to_owned(),
             display_name: id.to_owned(),
             description: String::new(),
+            upgrade_notice: None,
             is_default,
             default_effort: default_effort.to_owned(),
             supported_efforts: ["low", "medium", "high", "xhigh"]
