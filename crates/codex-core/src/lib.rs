@@ -67,6 +67,8 @@ pub const MAX_BROWSER_SITE_PERMISSIONS: usize = 200;
 pub const MAX_BROWSER_PERMISSION_ORIGIN_BYTES: usize = 8 * 1024;
 pub const MAX_GIT_BRANCH_BYTES: usize = 1_024;
 pub const MAX_GIT_BRANCH_PREFIX_BYTES: usize = 128;
+pub const MAX_REVIEW_START_ERROR_BYTES: usize = 4 * 1024;
+pub const MAX_REVIEW_START_TERMINALS: usize = 8;
 pub const MAX_GIT_DIFF_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_GIT_SHA_BYTES: usize = 128;
 pub const MAX_GIT_INSTRUCTIONS_BYTES: usize = 16 * 1024;
@@ -1132,6 +1134,7 @@ pub struct TimelineState {
     item_indices: HashMap<String, usize>,
     pub next_cursor: Option<String>,
     pub active_turn_id: Option<String>,
+    pub active_review_turn_id: Option<String>,
     pub interrupt_pending: bool,
     pub goal_continuation_pending: bool,
     pub compaction_in_flight: bool,
@@ -1151,6 +1154,7 @@ impl Default for TimelineState {
             item_indices: HashMap::new(),
             next_cursor: None,
             active_turn_id: None,
+            active_review_turn_id: None,
             interrupt_pending: false,
             goal_continuation_pending: false,
             compaction_in_flight: false,
@@ -2542,6 +2546,54 @@ pub struct GitState {
     pub pull_request_error: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ReviewStartState {
+    pub generation: u64,
+    pub pending: Option<PendingReviewStart>,
+    pub error: Option<ReviewStartError>,
+    pub terminal_events: Vec<ReviewTerminalIdentity>,
+    pub unresolved_detached: Option<UnresolvedDetachedReview>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewStartError {
+    pub source_task_id: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingReviewStart {
+    pub generation: u64,
+    pub source_task_id: String,
+    pub target: ReviewTarget,
+    pub delivery: ReviewDelivery,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewTerminalIdentity {
+    pub task_id: String,
+    pub turn_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnresolvedDetachedReview {
+    pub source_task_id: String,
+    pub review_thread_id: String,
+    pub turn_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReviewTarget {
+    UncommittedChanges,
+    BaseBranch { branch: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewDelivery {
+    Inline,
+    Detached,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GitCommitPhase {
     GeneratingMessage,
@@ -2735,6 +2787,7 @@ pub struct GitPreferences {
     pub create_pull_request_as_draft: bool,
     pub pull_request_merge_method: PullRequestMergeMethod,
     pub review_mode: GitReviewMode,
+    pub review_delivery: ReviewDelivery,
     pub commit_instructions: String,
     pub pull_request_instructions: String,
     pub worktree_root: Option<PathBuf>,
@@ -2789,6 +2842,7 @@ impl Default for GitPreferences {
             create_pull_request_as_draft: false,
             pull_request_merge_method: PullRequestMergeMethod::Merge,
             review_mode: GitReviewMode::Full,
+            review_delivery: ReviewDelivery::Inline,
             commit_instructions: String::new(),
             pull_request_instructions: String::new(),
             worktree_root: None,
@@ -4073,6 +4127,7 @@ pub struct AppState {
     pub hooks: HooksState,
     pub pull_requests: PullRequestInboxState,
     pub git: GitState,
+    pub review_start: ReviewStartState,
     pub git_include_unstaged: bool,
     pub git_preferences: GitPreferences,
     pub process_manager: ProcessManagerState,
@@ -4134,6 +4189,7 @@ impl Default for AppState {
             hooks: HooksState::default(),
             pull_requests: PullRequestInboxState::default(),
             git: GitState::default(),
+            review_start: ReviewStartState::default(),
             git_include_unstaged: true,
             git_preferences: GitPreferences::default(),
             process_manager: ProcessManagerState::default(),
@@ -4346,6 +4402,7 @@ pub enum Action {
     TaskRuntimeLoaded {
         task_id: String,
         active_turn_id: Option<String>,
+        active_turn_is_review: bool,
         run_status: Option<TaskRunStatus>,
     },
     TaskSettingsLoaded {
@@ -5237,6 +5294,23 @@ pub enum Action {
     ClosePullRequestDetail,
     RefreshGit,
     GitSnapshotLoaded(Box<GitState>),
+    StartReview {
+        target: ReviewTarget,
+        delivery: ReviewDelivery,
+    },
+    ReviewStarted {
+        generation: u64,
+        source_task_id: String,
+        review_thread_id: String,
+        turn_id: String,
+        turn_active: bool,
+        review_task: Option<TaskSummary>,
+    },
+    ReviewStartFailed {
+        generation: u64,
+        source_task_id: String,
+        message: String,
+    },
     SelectGitDiffScope(GitDiffScope),
     SelectGitReviewCommit(String),
     SelectGitReviewBase(String),
@@ -5914,6 +5988,12 @@ pub enum Effect {
     },
     RefreshGit {
         cwd: PathBuf,
+    },
+    StartReview {
+        generation: u64,
+        source_task_id: String,
+        target: ReviewTarget,
+        delivery: ReviewDelivery,
     },
     LoadDiff {
         generation: u64,
@@ -7144,6 +7224,55 @@ fn finish_remote_status_refresh_if_pending(state: &mut AppState) -> Vec<Effect> 
     }
 }
 
+fn record_pending_review_terminal(state: &mut AppState, task_id: &str, turn_id: &str) {
+    if state.review_start.pending.is_none() {
+        return;
+    }
+    let identity = ReviewTerminalIdentity {
+        task_id: bounded_string(task_id.to_owned(), MAX_PINNED_TASK_ID_BYTES),
+        turn_id: bounded_string(turn_id.to_owned(), MAX_PINNED_TASK_ID_BYTES),
+    };
+    let terminals = &mut state.review_start.terminal_events;
+    if terminals.contains(&identity) {
+        return;
+    }
+    if terminals.len() == MAX_REVIEW_START_TERMINALS {
+        terminals.remove(0);
+    }
+    terminals.push(identity);
+}
+
+fn consume_pending_review_terminal(state: &mut AppState, task_id: &str, turn_id: &str) -> bool {
+    let task_id = bounded_string(task_id.to_owned(), MAX_PINNED_TASK_ID_BYTES);
+    let turn_id = bounded_string(turn_id.to_owned(), MAX_PINNED_TASK_ID_BYTES);
+    let terminal = state
+        .review_start
+        .terminal_events
+        .iter()
+        .any(|identity| identity.task_id == task_id && identity.turn_id == turn_id);
+    state.review_start.terminal_events.clear();
+    terminal
+}
+
+fn clear_unresolved_detached_review_terminal(state: &mut AppState, task_id: &str, turn_id: &str) {
+    let Some(unresolved) = state.review_start.unresolved_detached.as_ref() else {
+        return;
+    };
+    if unresolved.review_thread_id != task_id || unresolved.turn_id != turn_id {
+        return;
+    }
+    let source_task_id = unresolved.source_task_id.clone();
+    state.review_start.unresolved_detached = None;
+    if state
+        .review_start
+        .error
+        .as_ref()
+        .is_some_and(|error| error.source_task_id == source_task_id)
+    {
+        state.review_start.error = None;
+    }
+}
+
 pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
     match action {
         Action::Connect | Action::RetryConnection => {
@@ -7212,6 +7341,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             effects
         }
         Action::ConnectionLost => {
+            state.review_start.pending = None;
+            state.review_start.terminal_events.clear();
             let reconnect = !matches!(
                 state.connection,
                 ConnectionStatus::Connecting | ConnectionStatus::Recovering { .. }
@@ -8625,7 +8756,30 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.tasks.truncate(MAX_VISIBLE_THREADS);
             state.next_task_cursor = next_cursor;
             state.task_status = LoadStatus::Ready;
-            Vec::new()
+            let Some(unresolved) = state.review_start.unresolved_detached.clone() else {
+                return Vec::new();
+            };
+            if !state
+                .tasks
+                .iter()
+                .any(|task| task.id == unresolved.review_thread_id)
+            {
+                return Vec::new();
+            }
+            state.review_start.unresolved_detached = None;
+            if state
+                .review_start
+                .error
+                .as_ref()
+                .is_some_and(|error| error.source_task_id == unresolved.source_task_id)
+            {
+                state.review_start.error = None;
+            }
+            if state.selected_task_id.as_deref() == Some(unresolved.source_task_id.as_str()) {
+                reduce(state, Action::SelectTask(unresolved.review_thread_id))
+            } else {
+                Vec::new()
+            }
         }
         Action::LoadedTasksRestored {
             mut tasks,
@@ -8790,11 +8944,17 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         Action::TaskRuntimeLoaded {
             task_id,
             active_turn_id,
+            active_turn_is_review,
             run_status,
         } => {
             let is_idle = active_turn_id.is_none();
             let timeline = state.timelines.entry(task_id.clone()).or_default();
             timeline.active_turn_id = active_turn_id;
+            if active_turn_is_review && timeline.active_turn_id.is_some() {
+                timeline.active_review_turn_id = timeline.active_turn_id.clone();
+            } else if timeline.active_review_turn_id != timeline.active_turn_id {
+                timeline.active_review_turn_id = None;
+            }
             timeline.interrupt_pending = false;
             timeline.retryable_turn = None;
             timeline.safety_buffering = None;
@@ -10738,6 +10898,22 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             if text.is_empty() && state.composer_attachments.is_empty() {
                 return Vec::new();
             }
+            if state.review_start.pending.as_ref().is_some_and(|pending| {
+                pending.delivery == ReviewDelivery::Inline
+                    && state.selected_task_id.as_deref() == Some(pending.source_task_id.as_str())
+            }) {
+                state.composer_error = Some("A review is starting.".to_owned());
+                return Vec::new();
+            }
+            if let Some(task_id) = state.selected_task_id.as_deref()
+                && state.timelines.get(task_id).is_some_and(|timeline| {
+                    timeline.active_turn_id == timeline.active_review_turn_id
+                        && timeline.active_turn_id.is_some()
+                })
+            {
+                state.composer_error = Some("A review is in progress.".to_owned());
+                return Vec::new();
+            }
             let attachments = std::mem::take(&mut state.composer_attachments);
             let plan_mode = state.composer_controls.plan_mode;
             state.composer.clear();
@@ -10835,6 +11011,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 timeline.retryable_turn = None;
                 timeline.safety_buffering = None;
             }
+            if timeline.active_review_turn_id.as_deref() != Some(turn_id.as_str()) {
+                timeline.active_review_turn_id = None;
+            }
             timeline.active_turn_id = Some(turn_id.clone());
             timeline.interrupt_pending = false;
             timeline.goal_continuation_pending = false;
@@ -10914,6 +11093,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             turn_id,
             failed,
         } => {
+            record_pending_review_terminal(state, &task_id, &turn_id);
+            clear_unresolved_detached_review_terminal(state, &task_id, &turn_id);
             let timeline = state.timelines.entry(task_id.clone()).or_default();
             if timeline
                 .active_turn_id
@@ -10926,6 +11107,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             if completed_active {
                 timeline.active_turn_id = None;
                 timeline.retryable_turn = None;
+            }
+            if timeline.active_review_turn_id.as_deref() == Some(turn_id.as_str()) {
+                timeline.active_review_turn_id = None;
             }
             if timeline
                 .safety_buffering
@@ -10946,6 +11130,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             schedule_goal_continuation(state, task_id)
         }
         Action::TurnInterrupted { task_id, turn_id } => {
+            record_pending_review_terminal(state, &task_id, &turn_id);
+            clear_unresolved_detached_review_terminal(state, &task_id, &turn_id);
             let timeline = state.timelines.entry(task_id.clone()).or_default();
             if timeline
                 .active_turn_id
@@ -10958,6 +11144,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             if interrupted_active {
                 timeline.active_turn_id = None;
                 timeline.retryable_turn = None;
+            }
+            if timeline.active_review_turn_id.as_deref() == Some(turn_id.as_str()) {
+                timeline.active_review_turn_id = None;
             }
             if timeline
                 .safety_buffering
@@ -15102,6 +15291,163 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             effects
         }
+        Action::StartReview {
+            mut target,
+            delivery,
+        } => {
+            if !matches!(state.connection, ConnectionStatus::Online)
+                || state.review_start.pending.is_some()
+                || state.review_start.unresolved_detached.is_some()
+                || state.git.repository_root.is_none()
+                || state.git_preferences.review_mode != GitReviewMode::Full
+                || !state.composer.trim().is_empty()
+                || !state.composer_attachments.is_empty()
+            {
+                return Vec::new();
+            }
+            let Some(source_task_id) = state.selected_task_id.clone() else {
+                return Vec::new();
+            };
+            if !state.tasks.iter().any(|task| task.id == source_task_id)
+                || state
+                    .timelines
+                    .get(&source_task_id)
+                    .is_some_and(|timeline| timeline.active_turn_id.is_some())
+            {
+                return Vec::new();
+            }
+            if let ReviewTarget::BaseBranch { branch } = &mut target {
+                *branch = branch.trim().to_owned();
+                if branch.is_empty()
+                    || branch.len() > MAX_GIT_BRANCH_BYTES
+                    || branch.starts_with('-')
+                    || branch.chars().any(char::is_control)
+                {
+                    return Vec::new();
+                }
+            }
+            state.review_start.generation = state.review_start.generation.saturating_add(1);
+            let generation = state.review_start.generation;
+            state.review_start.pending = Some(PendingReviewStart {
+                generation,
+                source_task_id: source_task_id.clone(),
+                target: target.clone(),
+                delivery,
+            });
+            state.review_start.terminal_events.clear();
+            state.review_start.error = None;
+            vec![Effect::StartReview {
+                generation,
+                source_task_id,
+                target,
+                delivery,
+            }]
+        }
+        Action::ReviewStarted {
+            generation,
+            source_task_id,
+            review_thread_id,
+            turn_id,
+            turn_active,
+            review_task,
+        } => {
+            let Some(pending) = state.review_start.pending.clone() else {
+                return Vec::new();
+            };
+            if pending.generation != generation || pending.source_task_id != source_task_id {
+                return Vec::new();
+            }
+            let valid_delivery = match pending.delivery {
+                ReviewDelivery::Inline => review_thread_id == source_task_id,
+                ReviewDelivery::Detached => review_thread_id != source_task_id,
+            };
+            state.review_start.pending = None;
+            if !valid_delivery {
+                state.review_start.terminal_events.clear();
+                state.review_start.error = Some(ReviewStartError {
+                    source_task_id,
+                    message: "Couldn't start review.".to_owned(),
+                });
+                return Vec::new();
+            }
+            let terminal_before_response =
+                consume_pending_review_terminal(state, &review_thread_id, &turn_id);
+            let mut effects = if terminal_before_response || !turn_active {
+                Vec::new()
+            } else {
+                let review_turn_id = turn_id.clone();
+                let effects = reduce(
+                    state,
+                    Action::TurnStarted {
+                        task_id: review_thread_id.clone(),
+                        turn_id: turn_id.clone(),
+                    },
+                );
+                state
+                    .timelines
+                    .entry(review_thread_id.clone())
+                    .or_default()
+                    .active_review_turn_id = Some(review_turn_id);
+                effects
+            };
+            let review_task = review_task.filter(|task| task.id == review_thread_id);
+            if pending.delivery == ReviewDelivery::Detached && review_task.is_none() {
+                if terminal_before_response || !turn_active {
+                    state.review_start.unresolved_detached = None;
+                    state.review_start.error = None;
+                } else {
+                    state.review_start.unresolved_detached = Some(UnresolvedDetachedReview {
+                        source_task_id: source_task_id.clone(),
+                        review_thread_id,
+                        turn_id,
+                    });
+                    state.review_start.error = Some(ReviewStartError {
+                        source_task_id,
+                        message: "Review is running in a new chat. Waiting for it to load."
+                            .to_owned(),
+                    });
+                }
+                effects.extend(reduce(state, Action::RefreshTasks));
+                return effects;
+            }
+            state.review_start.unresolved_detached = None;
+            if let Some(task) = review_task {
+                state.tasks.retain(|existing| existing.id != task.id);
+                state.tasks.insert(0, task);
+                state.tasks.truncate(MAX_VISIBLE_THREADS);
+            }
+            state.review_start.error = None;
+            if pending.delivery == ReviewDelivery::Detached
+                && state.selected_task_id.as_deref() == Some(source_task_id.as_str())
+            {
+                effects.extend(reduce(state, Action::SelectTask(review_thread_id)));
+            }
+            effects
+        }
+        Action::ReviewStartFailed {
+            generation,
+            source_task_id,
+            message,
+        } => {
+            let Some(pending) = state.review_start.pending.clone() else {
+                return Vec::new();
+            };
+            if pending.generation != generation || pending.source_task_id != source_task_id {
+                return Vec::new();
+            }
+            state.review_start.pending = None;
+            state.review_start.terminal_events.clear();
+            let message = bounded_string(message.trim().to_owned(), MAX_REVIEW_START_ERROR_BYTES);
+            state.review_start.error = Some(ReviewStartError {
+                source_task_id,
+                message: if message.is_empty() {
+                    "Couldn't start review.".to_owned()
+                } else {
+                    message
+                },
+            });
+            Vec::new()
+        }
         Action::SelectGitDiffScope(scope) => {
             if state.git_preferences.review_mode == GitReviewMode::LastTurnOnly
                 && scope != GitDiffScope::LastTurn
@@ -16767,10 +17113,11 @@ mod tests {
         ImportProvider, ImportProviderItems, ImportTypeResult, InspectorPane,
         IntegratedTerminalShell, KeyboardShortcutPreferences, KeyboardShortcutUpdateTarget,
         LoadStatus, LocalProjectSummary, MAX_BROWSER_DOWNLOADS, MAX_COMPOSER_BYTES,
-        MAX_GIT_DIFF_BYTES, MAX_GIT_INSTRUCTIONS_BYTES, MAX_GIT_SHA_BYTES, MAX_PLUGIN_DETAIL_ITEMS,
-        MAX_TIMELINE_ITEMS, MAX_TURN_DIFF_BYTES, MainRoute, MarketplaceManageTab,
-        MarketplaceSectionFilter, MarketplaceSourceCard, MarketplaceTab, MarketplaceUpgradeFailure,
-        McpAuthStatus, McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
+        MAX_GIT_BRANCH_BYTES, MAX_GIT_DIFF_BYTES, MAX_GIT_INSTRUCTIONS_BYTES, MAX_GIT_SHA_BYTES,
+        MAX_PLUGIN_DETAIL_ITEMS, MAX_REVIEW_START_ERROR_BYTES, MAX_TIMELINE_ITEMS,
+        MAX_TURN_DIFF_BYTES, MainRoute, MarketplaceManageTab, MarketplaceSectionFilter,
+        MarketplaceSourceCard, MarketplaceTab, MarketplaceUpgradeFailure, McpAuthStatus,
+        McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
         McpElicitationContent, McpElicitationDecision, McpElicitationValue, McpFormElicitation,
         McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpFormOption, McpFormStringFormat,
         McpResourceCard, McpResourceContentCard, McpServerCard, McpServerDraft,
@@ -16783,10 +17130,11 @@ mod tests {
         PullRequestMutation, PullRequestMutationKind, PullRequestRelationship,
         PullRequestReviewEvent, PullRequestReviewState, PullRequestState, PullRequestSummary,
         ReasoningEffortOption, RemoteControlRuntimeStatus, RemoteDevice, RemotePairing,
-        RetryableTurnSubmission, RetryableUserMessage, ServiceTierOption, SkillCard, SkillScope,
-        StartedImport, TaskRunStatus, TaskSearchResult, TaskSummary, TerminalDockLocation,
-        ThreadGoal, ThreadGoalStatus, TimelineItem, TimelineKind, UsageLimitWindow,
-        UserInputAnswer, UserInputAnswers, UserInputOption, UserInputQuestion, UserInputRequest,
+        RetryableTurnSubmission, RetryableUserMessage, ReviewDelivery, ReviewStartError,
+        ReviewTarget, ServiceTierOption, SkillCard, SkillScope, StartedImport, TaskRunStatus,
+        TaskSearchResult, TaskSummary, TerminalDockLocation, ThreadGoal, ThreadGoalStatus,
+        TimelineItem, TimelineKind, UsageLimitWindow, UserInputAnswer, UserInputAnswers,
+        UserInputOption, UserInputQuestion, UserInputRequest,
         appearance_code_theme_supports_variant, computer_app_id_matches, permission_mode_options,
         reduce, stable_reference, validate_mcp_form_content,
     };
@@ -19914,6 +20262,7 @@ mod tests {
             Action::TaskRuntimeLoaded {
                 task_id: "t1".to_owned(),
                 active_turn_id: Some("turn-active".to_owned()),
+                active_turn_is_review: true,
                 run_status: Some(TaskRunStatus::Running),
             },
         );
@@ -19923,6 +20272,10 @@ mod tests {
                 .timelines
                 .get("t1")
                 .and_then(|timeline| timeline.active_turn_id.as_deref()),
+            Some("turn-active")
+        );
+        assert_eq!(
+            state.timelines["t1"].active_review_turn_id.as_deref(),
             Some("turn-active")
         );
         assert_eq!(state.tasks[0].status, TaskRunStatus::Running);
@@ -21128,6 +21481,7 @@ mod tests {
             create_pull_request_as_draft: true,
             pull_request_merge_method: PullRequestMergeMethod::Squash,
             review_mode: GitReviewMode::Full,
+            review_delivery: ReviewDelivery::Detached,
             commit_instructions: format!("{}\0tail", "x".repeat(MAX_GIT_INSTRUCTIONS_BYTES)),
             pull_request_instructions: "Use the repository template.".to_owned(),
             worktree_root: Some(worktree_root.clone()),
@@ -21146,6 +21500,10 @@ mod tests {
         assert_eq!(
             state.git_preferences.pull_request_merge_method,
             PullRequestMergeMethod::Squash
+        );
+        assert_eq!(
+            state.git_preferences.review_delivery,
+            ReviewDelivery::Detached
         );
         assert_eq!(
             state.git_preferences.worktree_root.as_ref(),
@@ -21878,6 +22236,519 @@ mod tests {
             }]
         );
         assert!(state.git.selected_review_base.is_none());
+    }
+
+    #[test]
+    fn review_start_emits_an_exact_snapshot_effect() {
+        let mut state = AppState {
+            connection: ConnectionStatus::Online,
+            ..AppState::default()
+        };
+        reduce(
+            &mut state,
+            Action::TaskCreated(task_in_repository("source")),
+        );
+        state.git.repository_root = Some(repository_path());
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::StartReview {
+                    target: ReviewTarget::BaseBranch {
+                        branch: " main ".to_owned(),
+                    },
+                    delivery: ReviewDelivery::Detached,
+                },
+            ),
+            [Effect::StartReview {
+                generation: 1,
+                source_task_id: "source".to_owned(),
+                target: ReviewTarget::BaseBranch {
+                    branch: "main".to_owned(),
+                },
+                delivery: ReviewDelivery::Detached,
+            }]
+        );
+    }
+
+    #[test]
+    fn review_start_is_single_flight_and_enforces_start_gates() {
+        let mut state = AppState {
+            connection: ConnectionStatus::Online,
+            ..AppState::default()
+        };
+        reduce(
+            &mut state,
+            Action::TaskCreated(task_in_repository("source")),
+        );
+        let start = || Action::StartReview {
+            target: ReviewTarget::UncommittedChanges,
+            delivery: ReviewDelivery::Inline,
+        };
+
+        assert!(reduce(&mut state, start()).is_empty());
+        state.git.repository_root = Some(repository_path());
+        state.git_preferences.review_mode = GitReviewMode::LastTurnOnly;
+        assert!(reduce(&mut state, start()).is_empty());
+        state.git_preferences.review_mode = GitReviewMode::Full;
+        state.composer = "draft".to_owned();
+        assert!(reduce(&mut state, start()).is_empty());
+        state.composer.clear();
+        state.composer_attachments.push(ComposerAttachment {
+            path: PathBuf::from("note.txt"),
+            name: "note.txt".to_owned(),
+            kind: ComposerAttachmentKind::Mention,
+        });
+        assert!(reduce(&mut state, start()).is_empty());
+        state.composer_attachments.clear();
+        assert!(
+            reduce(
+                &mut state,
+                Action::StartReview {
+                    target: ReviewTarget::BaseBranch {
+                        branch: " ".to_owned(),
+                    },
+                    delivery: ReviewDelivery::Inline,
+                },
+            )
+            .is_empty()
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::StartReview {
+                    target: ReviewTarget::BaseBranch {
+                        branch: "x".repeat(MAX_GIT_BRANCH_BYTES + 1),
+                    },
+                    delivery: ReviewDelivery::Inline,
+                },
+            )
+            .is_empty()
+        );
+        state
+            .timelines
+            .entry("source".to_owned())
+            .or_default()
+            .active_turn_id = Some("active".to_owned());
+        assert!(reduce(&mut state, start()).is_empty());
+        state
+            .timelines
+            .entry("source".to_owned())
+            .or_default()
+            .active_turn_id = None;
+
+        assert!(!reduce(&mut state, start()).is_empty());
+        assert!(reduce(&mut state, start()).is_empty());
+        assert_eq!(state.review_start.generation, 1);
+        reduce(
+            &mut state,
+            Action::ComposerChanged("keep this draft".to_owned()),
+        );
+        assert!(reduce(&mut state, Action::SubmitComposer).is_empty());
+        assert_eq!(state.composer, "keep this draft");
+    }
+
+    #[test]
+    fn review_start_ignores_stale_results_and_scopes_failures_to_the_source() {
+        let mut state = AppState {
+            connection: ConnectionStatus::Online,
+            ..AppState::default()
+        };
+        reduce(
+            &mut state,
+            Action::TaskCreated(task_in_repository("source")),
+        );
+        state.git.repository_root = Some(repository_path());
+        reduce(
+            &mut state,
+            Action::StartReview {
+                target: ReviewTarget::UncommittedChanges,
+                delivery: ReviewDelivery::Inline,
+            },
+        );
+
+        reduce(
+            &mut state,
+            Action::ReviewStartFailed {
+                generation: 1,
+                source_task_id: "source".to_owned(),
+                message: "first failure".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::StartReview {
+                target: ReviewTarget::UncommittedChanges,
+                delivery: ReviewDelivery::Inline,
+            },
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::ReviewStarted {
+                    generation: 1,
+                    source_task_id: "source".to_owned(),
+                    review_thread_id: "source".to_owned(),
+                    turn_id: "late-first".to_owned(),
+                    turn_active: true,
+                    review_task: None,
+                },
+            )
+            .is_empty()
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::ReviewStartFailed {
+                    generation: 1,
+                    source_task_id: "source".to_owned(),
+                    message: "late-first failure".to_owned(),
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state
+                .review_start
+                .pending
+                .as_ref()
+                .map(|pending| pending.generation),
+            Some(2)
+        );
+        reduce(
+            &mut state,
+            Action::ReviewStartFailed {
+                generation: 2,
+                source_task_id: "source".to_owned(),
+                message: "x".repeat(MAX_REVIEW_START_ERROR_BYTES + 1),
+            },
+        );
+        assert_eq!(
+            state.review_start.error,
+            Some(ReviewStartError {
+                source_task_id: "source".to_owned(),
+                message: "x".repeat(MAX_REVIEW_START_ERROR_BYTES),
+            })
+        );
+
+        reduce(
+            &mut state,
+            Action::StartReview {
+                target: ReviewTarget::UncommittedChanges,
+                delivery: ReviewDelivery::Inline,
+            },
+        );
+        reduce(
+            &mut state,
+            Action::TurnCompleted {
+                task_id: "source".to_owned(),
+                turn_id: "reused-after-reconnect".to_owned(),
+                failed: false,
+            },
+        );
+        assert!(!state.review_start.terminal_events.is_empty());
+        reduce(&mut state, Action::ConnectionLost);
+        assert!(state.review_start.pending.is_none());
+        assert!(state.review_start.terminal_events.is_empty());
+        state.connection = ConnectionStatus::Online;
+        reduce(
+            &mut state,
+            Action::StartReview {
+                target: ReviewTarget::UncommittedChanges,
+                delivery: ReviewDelivery::Inline,
+            },
+        );
+        reduce(
+            &mut state,
+            Action::ReviewStarted {
+                generation: 4,
+                source_task_id: "source".to_owned(),
+                review_thread_id: "source".to_owned(),
+                turn_id: "reused-after-reconnect".to_owned(),
+                turn_active: true,
+                review_task: None,
+            },
+        );
+        assert_eq!(
+            state.timelines["source"].active_review_turn_id.as_deref(),
+            Some("reused-after-reconnect")
+        );
+    }
+
+    #[test]
+    fn review_start_preserves_inline_focus_and_selects_only_available_detached_reviews() {
+        let mut state = AppState {
+            connection: ConnectionStatus::Online,
+            ..AppState::default()
+        };
+        reduce(
+            &mut state,
+            Action::TaskCreated(task_in_repository("source")),
+        );
+        reduce(&mut state, Action::TaskCreated(task_in_repository("other")));
+        reduce(&mut state, Action::SelectTask("source".to_owned()));
+        state.git.repository_root = Some(repository_path());
+
+        reduce(
+            &mut state,
+            Action::StartReview {
+                target: ReviewTarget::UncommittedChanges,
+                delivery: ReviewDelivery::Inline,
+            },
+        );
+        reduce(&mut state, Action::SelectTask("other".to_owned()));
+        reduce(
+            &mut state,
+            Action::TurnCompleted {
+                task_id: "source".to_owned(),
+                turn_id: "inline-terminal".to_owned(),
+                failed: false,
+            },
+        );
+        reduce(
+            &mut state,
+            Action::ReviewStarted {
+                generation: 1,
+                source_task_id: "source".to_owned(),
+                review_thread_id: "source".to_owned(),
+                turn_id: "inline-terminal".to_owned(),
+                turn_active: true,
+                review_task: None,
+            },
+        );
+        assert_eq!(state.selected_task_id.as_deref(), Some("other"));
+        assert!(state.timelines["source"].active_turn_id.is_none());
+        assert!(state.timelines["source"].active_review_turn_id.is_none());
+        reduce(&mut state, Action::SelectTask("source".to_owned()));
+        reduce(
+            &mut state,
+            Action::StartReview {
+                target: ReviewTarget::UncommittedChanges,
+                delivery: ReviewDelivery::Inline,
+            },
+        );
+        reduce(
+            &mut state,
+            Action::ReviewStarted {
+                generation: 2,
+                source_task_id: "source".to_owned(),
+                review_thread_id: "source".to_owned(),
+                turn_id: "inline".to_owned(),
+                turn_active: true,
+                review_task: None,
+            },
+        );
+        reduce(&mut state, Action::ComposerChanged("steer".to_owned()));
+        assert!(reduce(&mut state, Action::SubmitComposer).is_empty());
+        assert_eq!(state.composer, "steer");
+        reduce(&mut state, Action::ComposerChanged(String::new()));
+        reduce(
+            &mut state,
+            Action::TurnCompleted {
+                task_id: "source".to_owned(),
+                turn_id: "inline".to_owned(),
+                failed: false,
+            },
+        );
+        reduce(
+            &mut state,
+            Action::StartReview {
+                target: ReviewTarget::UncommittedChanges,
+                delivery: ReviewDelivery::Detached,
+            },
+        );
+        let review = task_in_repository("review-before-turn-started");
+        reduce(
+            &mut state,
+            Action::ReviewStarted {
+                generation: 3,
+                source_task_id: "source".to_owned(),
+                review_thread_id: review.id.clone(),
+                turn_id: "detached".to_owned(),
+                turn_active: true,
+                review_task: Some(review.clone()),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::TurnStarted {
+                task_id: review.id.clone(),
+                turn_id: "detached".to_owned(),
+            },
+        );
+        assert_eq!(state.selected_task_id.as_deref(), Some(review.id.as_str()));
+        assert!(state.tasks.iter().any(|task| task.id == review.id));
+
+        reduce(&mut state, Action::SelectTask("source".to_owned()));
+        reduce(
+            &mut state,
+            Action::StartReview {
+                target: ReviewTarget::UncommittedChanges,
+                delivery: ReviewDelivery::Detached,
+            },
+        );
+        reduce(
+            &mut state,
+            Action::TurnStarted {
+                task_id: "review-before-response".to_owned(),
+                turn_id: "detached-two".to_owned(),
+            },
+        );
+        let review = task_in_repository("review-before-response");
+        reduce(
+            &mut state,
+            Action::ReviewStarted {
+                generation: 4,
+                source_task_id: "source".to_owned(),
+                review_thread_id: review.id.clone(),
+                turn_id: "detached-two".to_owned(),
+                turn_active: true,
+                review_task: Some(review.clone()),
+            },
+        );
+        assert_eq!(state.selected_task_id.as_deref(), Some(review.id.as_str()));
+        assert_eq!(
+            state.timelines[&review.id].active_review_turn_id.as_deref(),
+            Some("detached-two")
+        );
+
+        reduce(&mut state, Action::SelectTask("source".to_owned()));
+        reduce(
+            &mut state,
+            Action::StartReview {
+                target: ReviewTarget::UncommittedChanges,
+                delivery: ReviewDelivery::Detached,
+            },
+        );
+        let effects = reduce(
+            &mut state,
+            Action::ReviewStarted {
+                generation: 5,
+                source_task_id: "source".to_owned(),
+                review_thread_id: "unloaded-review".to_owned(),
+                turn_id: "detached-three".to_owned(),
+                turn_active: true,
+                review_task: None,
+            },
+        );
+        assert_eq!(state.selected_task_id.as_deref(), Some("source"));
+        assert!(!state.tasks.iter().any(|task| task.id == "unloaded-review"));
+        assert!(matches!(effects.as_slice(), [Effect::LoadTasks { .. }]));
+        assert!(state.review_start.unresolved_detached.is_some());
+        assert!(
+            reduce(
+                &mut state,
+                Action::StartReview {
+                    target: ReviewTarget::UncommittedChanges,
+                    delivery: ReviewDelivery::Detached,
+                },
+            )
+            .is_empty()
+        );
+        let unloaded = task_in_repository("unloaded-review");
+        let task_generation = state.task_generation;
+        reduce(
+            &mut state,
+            Action::TasksLoaded {
+                generation: task_generation,
+                tasks: vec![
+                    task_in_repository("source"),
+                    task_in_repository("other"),
+                    unloaded,
+                ],
+                next_cursor: None,
+                append: false,
+            },
+        );
+        assert!(state.review_start.unresolved_detached.is_none());
+        assert!(state.review_start.error.is_none());
+        assert_eq!(state.selected_task_id.as_deref(), Some("unloaded-review"));
+
+        reduce(&mut state, Action::SelectTask("source".to_owned()));
+        reduce(
+            &mut state,
+            Action::StartReview {
+                target: ReviewTarget::UncommittedChanges,
+                delivery: ReviewDelivery::Detached,
+            },
+        );
+        reduce(&mut state, Action::SelectTask("other".to_owned()));
+        let review = task_in_repository("review-after-focus-change");
+        let review_id = review.id.clone();
+        reduce(
+            &mut state,
+            Action::ReviewStarted {
+                generation: 6,
+                source_task_id: "source".to_owned(),
+                review_thread_id: review_id.clone(),
+                turn_id: "detached-four".to_owned(),
+                turn_active: false,
+                review_task: Some(review),
+            },
+        );
+        assert_eq!(state.selected_task_id.as_deref(), Some("other"));
+        assert!(!state.timelines.contains_key(&review_id));
+
+        reduce(&mut state, Action::SelectTask("source".to_owned()));
+        reduce(
+            &mut state,
+            Action::StartReview {
+                target: ReviewTarget::UncommittedChanges,
+                delivery: ReviewDelivery::Detached,
+            },
+        );
+        reduce(
+            &mut state,
+            Action::ReviewStarted {
+                generation: 7,
+                source_task_id: "source".to_owned(),
+                review_thread_id: "unloaded-terminal-review".to_owned(),
+                turn_id: "detached-terminal".to_owned(),
+                turn_active: true,
+                review_task: None,
+            },
+        );
+        assert!(state.review_start.unresolved_detached.is_some());
+        assert!(state.review_start.error.is_some());
+        reduce(
+            &mut state,
+            Action::TurnInterrupted {
+                task_id: "unloaded-terminal-review".to_owned(),
+                turn_id: "detached-terminal".to_owned(),
+            },
+        );
+        assert!(state.review_start.unresolved_detached.is_none());
+        assert!(state.review_start.error.is_none());
+
+        reduce(
+            &mut state,
+            Action::StartReview {
+                target: ReviewTarget::UncommittedChanges,
+                delivery: ReviewDelivery::Detached,
+            },
+        );
+        reduce(
+            &mut state,
+            Action::TurnCompleted {
+                task_id: "terminal-before-detached-response".to_owned(),
+                turn_id: "detached-terminal-before-response".to_owned(),
+                failed: false,
+            },
+        );
+        let effects = reduce(
+            &mut state,
+            Action::ReviewStarted {
+                generation: 8,
+                source_task_id: "source".to_owned(),
+                review_thread_id: "terminal-before-detached-response".to_owned(),
+                turn_id: "detached-terminal-before-response".to_owned(),
+                turn_active: true,
+                review_task: None,
+            },
+        );
+        assert!(matches!(effects.as_slice(), [Effect::LoadTasks { .. }]));
+        assert!(state.review_start.unresolved_detached.is_none());
+        assert!(state.review_start.error.is_none());
     }
 
     #[test]
