@@ -34,7 +34,7 @@ rusqlite = { version = "0.40.1", features = ["bundled"] }
 reqwest = { package = "zed-reqwest", version = "=0.12.15-zed", default-features = false, features = ["blocking"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-sha2 = "0.10.9"
+sha2 = "0.11.0"
 sysinfo = "0.31.4"
 tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
 url = "2.5.8"
