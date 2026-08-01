@@ -49,12 +49,12 @@ codexRS 提供一个体积更小、边界更清晰的 Codex 原生客户端：
 | 任务 | 有界分页、恢复、fork、输入框、流式时间线与审批 |
 | 仓库 | 状态、暂存/未暂存文件、大型虚拟化差异、分支切换与安全的同级 worktree |
 | 终端 | 原生 PTY/ConPTY 与有界 VT 输出 |
-| Computer Use | 原生窗口发现与控制，按应用审批、按任务授权，并由 app-server 管理始终允许列表 |
+| Computer Use | 仅 Windows：原生窗口发现与控制，按应用审批、按任务授权，并由 app-server 管理始终允许列表 |
 | 插件 | 原生目录标签、有界图片加载、已安装插件与来源管理、创建入口，以及通过 app-server 添加/移除/升级 marketplace、安装和卸载 |
 | 持久化 | 独立单写者 SQLite，保存 codexRS 界面偏好以及带名称和置顶状态的有界本地项目注册表 |
-| 平台 | Windows 已完成源码冒烟测试；Ubuntu 在 CI 中构建并测试 |
+| 平台 | Windows 已完成源码冒烟测试；Ubuntu CI 构建并测试 UI、app-server、Git 与 PTY；RC2 中 Linux Computer Use 不可用 |
 
-Computer Use 必须按任务启用。每个读取或控制动作都携带由有界 discovery 返回的精确 `Window { app, id, title? }`；codexRS 会重新解析不透明窗口 ID，并在执行前验证当前所属应用。原生检查器中的窗口选择仅用于手动操作。每个真实应用首次被读取或控制前都会单独请求授权。在 Windows 上，packaged 应用保留大小写不变的 AUMID；普通 executable 优先采用与 stable 相同的 known-folder GUID 标识，否则采用大小写不变的绝对路径，旧的 `process:` 标识仍可用于匹配。已知共享宿主进程和过长标识会直接拒绝。`Allow once` 仅覆盖当前任务，`Always allow` 通过官方 app-server 持久化，但两者都不能绕过针对 Codex、终端、密码管理器、身份与安全界面的 product-policy 禁止规则。原生 Windows 应用目录会有界读取两套 Start Menu、execution aliases、AppsFolder 与已安装包 manifests，并通过 Shell AppUserModel ID、link target path 和有界 UserAssist process key 提供 stable 形状的应用与使用记录；模型直接启动应用时沿用同一套按应用审批。截图只保留在内存中，并在进入协议前受到尺寸限制；短期 screenshot ID 会把缩放图像坐标映射回真实窗口。Windows 的可访问性树、窗口激活与索引操作运行在受监管的原生 Rust helper 中：最多 512 个元素、128 KiB，单次请求超时为 10 秒；第三方 UI Automation provider 卡死时只终止 helper，不会冻结客户端。输入方法会自动激活精确目标窗口，`activate_window` 则保留为与 stable Window2 一致的显式恢复动作。受保护的输入开始前，必须先显示带有 stable 精确文案 `ChatGPT is using your computer` / `Esc to cancel` 的原生置顶系统指示器。它持续到本次 Computer Use 回合结束，不获取焦点、不拦截点击，也不会进入截图；若无法显示，输入动作会被拒绝。Windows 发行包会在 `codexrs.exe` 旁附带 `codex-computer-use-overlay.exe`；该窗口由此受监管的原生进程通过有界 IPC 驱动，并由 kill-on-close Job Object 随客户端一同终止。
+RC2 中 Computer Use 仅在 Windows 可用，且必须按任务启用。每个读取或控制动作都携带由有界 discovery 返回的精确 `Window { app, id, title? }`；codexRS 会重新解析不透明窗口 ID，并在执行前验证当前所属应用。原生检查器中的窗口选择仅用于手动操作。每个真实应用首次被读取或控制前都会单独请求授权。在 Windows 上，packaged 应用保留大小写不变的 AUMID；普通 executable 优先采用与 stable 相同的 known-folder GUID 标识，否则采用大小写不变的绝对路径，旧的 `process:` 标识仍可用于匹配。已知共享宿主进程和过长标识会直接拒绝。`Allow once` 仅覆盖当前任务，`Always allow` 通过官方 app-server 持久化，但两者都不能绕过针对 Codex、终端、密码管理器、身份与安全界面的 product-policy 禁止规则。原生 Windows 应用目录会有界读取两套 Start Menu、execution aliases、AppsFolder 与已安装包 manifests，并通过 Shell AppUserModel ID、link target path 和有界 UserAssist process key 提供 stable 形状的应用与使用记录；模型直接启动应用时沿用同一套按应用审批。截图只保留在内存中，并在进入协议前受到尺寸限制；短期 screenshot ID 会把缩放图像坐标映射回真实窗口。Windows 的可访问性树、窗口激活与索引操作运行在受监管的原生 Rust helper 中：最多 512 个元素、128 KiB，单次请求超时为 10 秒；第三方 UI Automation provider 卡死时只终止 helper，不会冻结客户端。输入方法会自动激活精确目标窗口，`activate_window` 则保留为与 stable Window2 一致的显式恢复动作。受保护的输入开始前，必须先显示带有 stable 精确文案 `ChatGPT is using your computer` / `Esc to cancel` 的原生置顶系统指示器。它持续到本次 Computer Use 回合结束，不获取焦点、不拦截点击，也不会进入截图；若无法显示，输入动作会被拒绝。Windows 发行包会在 `codexrs.exe` 旁附带 `codex-computer-use-overlay.exe`；该窗口由此受监管的原生进程通过有界 IPC 驱动，并由 kill-on-close Job Object 随客户端一同终止。
 
 ## 架构
 
@@ -89,7 +89,27 @@ codex --version
 如果 CLI 不在 `PATH` 中，请将 `CODEX_RS_CODEX_BIN` 设置为原生
 `codex` 或 `codex.exe` 的路径。
 
-### 2. 构建 codexRS
+### 2. 下载便携预览版
+
+仅从 [GitHub Releases](https://github.com/Kiwunaka/codexRS/releases)
+页面下载。RC2 文件为 `codexrs-v0.1.0-rc.2-windows-x86_64.zip` 和
+`codexrs-v0.1.0-rc.2-linux-x86_64.tar.gz`，并附有 `SHA256SUMS.txt`。
+解压前请校验 checksum：Linux 可运行 `sha256sum --ignore-missing -c SHA256SUMS.txt`；Windows
+可将 `(Get-FileHash .\codexrs-v0.1.0-rc.2-windows-x86_64.zip -Algorithm SHA256).Hash`
+与对应条目比较。checksum 只能在从可信 release 页面取得后发现损坏，不能替代
+独立的发布者签名。
+
+这些是未签名的便携技术预览包，不会安装 Start Menu 项、URI handler、卸载程序或
+自动更新程序。请解压到由你控制的目录。Windows 上必须将 `codexrs.exe` 与
+`codex-computer-use-overlay.exe` 保留在同一目录。更新时先退出 codexRS，再替换
+解压目录；删除时只删除该目录。两者都不会删除 `CODEX_HOME` 或 codexRS 自己的
+状态数据。不要从来源或 checksum 不可信的归档中启用 Computer Use。
+
+Linux 归档不是系统软件包：它不会安装 runtime 依赖或 desktop integration。
+Ubuntu CI 会构建并测试二进制文件，但解压后的归档尚未完成 desktop smoke 测试。RC2
+中 Linux Computer Use 不可用；X11/XWayland 与纯 Wayland 支持仍是未来工作。
+
+### 3. 构建 codexRS
 
 安装 Git、通过 `rustup` 安装 Rust，并准备[平台支持](docs/platform-support.md)
 中列出的原生依赖：

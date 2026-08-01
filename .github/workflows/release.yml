@@ -188,6 +188,28 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          notes="$(cat <<'EOF'
+          ## Unsigned portable technical preview
+
+          These Windows ZIP and Linux tar.gz assets are unsigned portable
+          previews. Download only from this GitHub Release and verify the
+          matching `SHA256SUMS.txt` entry before extraction. The checksum helps
+          detect corruption after download; it is not an independent publisher
+          signature.
+
+          There is no installer, uninstaller, desktop integration, URI handler,
+          or automatic updater. Extract into a directory you control. On
+          Windows, keep `codexrs.exe` and `codex-computer-use-overlay.exe`
+          together. Do not enable Computer Use from an archive whose source or
+          checksum you do not trust.
+
+          The Linux tar.gz is not a system package and does not install runtime
+          dependencies. Ubuntu CI builds and tests the binary; the extracted
+          archive has not yet received a desktop smoke test. Linux Computer Use
+          is unavailable in RC2; X11/XWayland and pure-Wayland support remain
+          future work.
+          EOF
+          )"
           options=()
           if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
             options+=(--prerelease)
@@ -195,5 +217,6 @@ jobs:
           gh release create "${GITHUB_REF_NAME}" dist/* \
             --repo "${GITHUB_REPOSITORY}" \
             --title "codexRS ${GITHUB_REF_NAME}" \
+            --notes "$notes" \
             --generate-notes \
             "${options[@]}"

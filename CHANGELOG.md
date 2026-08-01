@@ -24,6 +24,8 @@ All notable changes to codexRS are documented here. The project follows
 - Typed external-agent detection and import for Claude Code, Claude Cowork,
   and Cursor through official app-server methods.
 - A singleton native About window.
+- Native Remote Connections settings and typed remote-control state backed by
+  official app-server RPCs.
 
 ### Fixed
 
@@ -32,6 +34,7 @@ All notable changes to codexRS are documented here. The project follows
   initialization, with native attempt and failure diagnostics.
 - Safety-buffered turns can retry on the advertised faster model without
   applying rollback twice or losing accepted steer messages.
+- Native switches are keyboard operable.
 
 ### Security
 
