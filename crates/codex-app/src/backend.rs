@@ -149,7 +149,7 @@ use codex_protocol::{
     McpServerStartupState as ProtocolMcpServerStartupState,
     McpServerStatus as ProtocolMcpServerStatus, McpServerStatusDetail,
     McpServerStatusUpdatedNotification, ModelListParams, ModelSafetyBufferingUpdatedNotification,
-    ModelVerification, ModelVerificationNotification, NetworkApprovalProtocol,
+    ModelSummary, ModelVerification, ModelVerificationNotification, NetworkApprovalProtocol,
     NetworkPolicyAmendment, NetworkPolicyAmendmentDecision, NetworkPolicyRuleAction,
     PermissionGrantScope, PermissionProfile, PermissionProfileListParams,
     PermissionsRequestApprovalParams, PermissionsRequestApprovalResponse, PlanType,
@@ -5734,40 +5734,7 @@ fn run_effect(
             }) {
                 Ok(response) => emit(
                     events,
-                    Action::ModelsLoaded(
-                        response
-                            .data
-                            .into_iter()
-                            .filter(|model| !model.hidden)
-                            .map(|model| ModelOption {
-                                id: model.model,
-                                display_name: model.display_name,
-                                description: model.description,
-                                is_default: model.is_default,
-                                default_effort: model.default_reasoning_effort,
-                                supported_efforts: model
-                                    .supported_reasoning_efforts
-                                    .into_iter()
-                                    .take(COMPOSER_OPTIONS_PAGE_LIMIT as usize)
-                                    .map(|effort| CoreReasoningEffortOption {
-                                        id: effort.reasoning_effort,
-                                        description: effort.description,
-                                    })
-                                    .collect(),
-                                service_tiers: model
-                                    .service_tiers
-                                    .into_iter()
-                                    .take(COMPOSER_OPTIONS_PAGE_LIMIT as usize)
-                                    .map(|tier| ServiceTierOption {
-                                        id: tier.id,
-                                        name: tier.name,
-                                        description: tier.description,
-                                    })
-                                    .collect(),
-                                default_service_tier: model.default_service_tier,
-                            })
-                            .collect(),
-                    ),
+                    Action::ModelsLoaded(map_model_options(response.data)),
                 ),
                 Err(error) => emit(
                     events,
@@ -16005,6 +15972,40 @@ fn map_remote_pairing(
     })
 }
 
+fn map_model_options(models: Vec<ModelSummary>) -> Vec<ModelOption> {
+    models
+        .into_iter()
+        .filter(|model| !model.hidden)
+        .map(|model| ModelOption {
+            id: model.model,
+            display_name: model.display_name,
+            description: bounded(model.description, MAX_MCP_SERVER_FIELD_BYTES),
+            is_default: model.is_default,
+            default_effort: model.default_reasoning_effort,
+            supported_efforts: model
+                .supported_reasoning_efforts
+                .into_iter()
+                .take(COMPOSER_OPTIONS_PAGE_LIMIT as usize)
+                .map(|effort| CoreReasoningEffortOption {
+                    id: effort.reasoning_effort,
+                    description: effort.description,
+                })
+                .collect(),
+            service_tiers: model
+                .service_tiers
+                .into_iter()
+                .take(COMPOSER_OPTIONS_PAGE_LIMIT as usize)
+                .map(|tier| ServiceTierOption {
+                    id: tier.id,
+                    name: tier.name,
+                    description: tier.description,
+                })
+                .collect(),
+            default_service_tier: model.default_service_tier,
+        })
+        .collect()
+}
+
 fn remote_pairing_status_params(pairing: &RemotePairing) -> RemoteControlPairingStatusParams {
     // `pairingCode` is always returned by pairing/start. The core state deliberately
     // does not retain which UI path started pairing, so it is the stable canonical
@@ -16110,8 +16111,8 @@ mod tests {
     use codex_protocol::{
         AppInfo, AppToolSummary, ConfigReadResponse, ConnectorMetadata, FuzzyFileSearchMatchType,
         FuzzyFileSearchResult as ProtocolFuzzyFileResult, LoginAccountResponse,
-        McpServerStatus as ProtocolMcpServerStatus, PluginListMarketplaceKind, RemoteControlClient,
-        RemoteControlConnectionStatus, UserInput,
+        McpServerStatus as ProtocolMcpServerStatus, ModelSummary, PluginListMarketplaceKind,
+        RemoteControlClient, RemoteControlConnectionStatus, UserInput,
     };
     use crossbeam_channel::bounded;
     use serde_json::{Value, json};
@@ -16141,11 +16142,11 @@ mod tests {
         index_app_logos, initialize_capabilities, is_hidden_timeline_item,
         linux_computer_use_dynamic_tools, map_app_detail, map_app_server_approval, map_apps,
         map_fuzzy_file_search_results, map_mcp_elicitation, map_mcp_resource_contents,
-        map_mcp_runtime_catalog, map_remote_control_snapshot, map_remote_devices_page,
-        map_timeline_item, map_user_input_request, mcp_elicitation_content_json,
-        mcp_server_config_value, newest_review_mode_from_items, parse_appearance_preferences,
-        parse_appearance_theme, parse_browser_download_preferences, parse_browser_permissions,
-        parse_computer_key_chord, parse_generated_commit_message,
+        map_mcp_runtime_catalog, map_model_options, map_remote_control_snapshot,
+        map_remote_devices_page, map_timeline_item, map_user_input_request,
+        mcp_elicitation_content_json, mcp_server_config_value, newest_review_mode_from_items,
+        parse_appearance_preferences, parse_appearance_theme, parse_browser_download_preferences,
+        parse_browser_permissions, parse_computer_key_chord, parse_generated_commit_message,
         parse_generated_commit_pull_request_messages, parse_generated_pull_request_message,
         parse_git_preferences, parse_keyboard_shortcut_preferences, parse_primary_window_placement,
         personalization_snapshot, plugin_directory_includes_marketplace,
@@ -16523,6 +16524,32 @@ mod tests {
             &input[2],
             UserInput::LocalImage { path, detail } if path == &image_path && detail.is_none()
         ));
+    }
+
+    #[test]
+    fn model_options_bound_public_descriptions_before_the_action_queue() {
+        let description = format!("{}é", "x".repeat(MAX_MCP_SERVER_FIELD_BYTES - 1));
+        let models = map_model_options(vec![ModelSummary {
+            id: "gpt-fast".to_owned(),
+            model: "gpt-fast".to_owned(),
+            display_name: "GPT Fast".to_owned(),
+            description,
+            hidden: false,
+            is_default: true,
+            default_reasoning_effort: "medium".to_owned(),
+            supported_reasoning_efforts: Vec::new(),
+            service_tiers: Vec::new(),
+            default_service_tier: None,
+        }]);
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "gpt-fast");
+        assert!(models[0].description.len() <= MAX_MCP_SERVER_FIELD_BYTES);
+        assert!(
+            models[0]
+                .description
+                .is_char_boundary(models[0].description.len())
+        );
     }
 
     #[test]

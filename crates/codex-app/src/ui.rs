@@ -44,7 +44,7 @@ use codex_core::{
     McpFormElicitation, McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpResourceCard,
     McpResourceContentCard, McpResourceTemplateCard, McpServerCard, McpServerDraft,
     McpServerStartupFailureReason, McpServerStartupState, McpToolCard, McpTransportKind,
-    NetworkApprovalProtocol, OutputArtifact, OutputArtifactKind, PendingWorktreeFork,
+    ModelOption, NetworkApprovalProtocol, OutputArtifact, OutputArtifactKind, PendingWorktreeFork,
     PendingWorktreeForkPhase, PermissionRequestDetail, Personality, PluginCard, PluginDetailItem,
     PluginDetailView, PluginDirectoryTab, PluginSkillDetail, PrimaryWindowPlacement,
     ProcessManagerState, PullRequestActivity, PullRequestActivityKind, PullRequestCheck,
@@ -1534,6 +1534,79 @@ impl SelectItem for PickerItem {
     fn value(&self) -> &Self::Value {
         &self.id
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ModelPickerItem {
+    id: String,
+    title: SharedString,
+    description: Option<SharedString>,
+}
+
+impl ModelPickerItem {
+    fn new(
+        id: impl Into<String>,
+        title: impl Into<SharedString>,
+        description: impl Into<String>,
+    ) -> Self {
+        let description = description.into();
+        let description = description.trim();
+        Self {
+            id: id.into(),
+            title: title.into(),
+            description: (!description.is_empty()).then(|| description.to_owned().into()),
+        }
+    }
+}
+
+impl SelectItem for ModelPickerItem {
+    type Value = String;
+
+    fn title(&self) -> SharedString {
+        self.title.clone()
+    }
+
+    fn render(&self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        self.description.clone().map_or_else(
+            || div().child(self.title.clone()).into_any_element(),
+            |description| {
+                v_flex()
+                    .w_full()
+                    .h(px(52.0))
+                    .min_w_0()
+                    .justify_center()
+                    .gap_0p5()
+                    .overflow_hidden()
+                    .child(div().child(self.title.clone()))
+                    .child(
+                        div()
+                            .text_xs()
+                            .line_height(px(17.0))
+                            .whitespace_normal()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(description),
+                    )
+                    .into_any_element()
+            },
+        )
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.id
+    }
+}
+
+fn composer_model_picker_items(models: &[ModelOption]) -> Vec<ModelPickerItem> {
+    models
+        .iter()
+        .map(|model| {
+            ModelPickerItem::new(
+                model.id.clone(),
+                model.display_name.clone(),
+                model.description.clone(),
+            )
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4663,7 +4736,7 @@ struct WorkspaceView {
     branch_name: Entity<InputState>,
     worktree_branch: Entity<InputState>,
     worktree_path: Entity<InputState>,
-    model_picker: Entity<SelectState<SearchableVec<PickerItem>>>,
+    model_picker: Entity<SelectState<SearchableVec<ModelPickerItem>>>,
     effort_picker: Entity<SelectState<SearchableVec<PickerItem>>>,
     service_tier_picker: Entity<SelectState<SearchableVec<PickerItem>>>,
     permission_picker: Entity<SelectState<SearchableVec<PermissionPickerItem>>>,
@@ -4671,7 +4744,7 @@ struct WorkspaceView {
     review_base_query: Rc<RefCell<String>>,
     review_start_base_picker: Entity<SelectState<ReviewBasePickerDelegate>>,
     review_start_base_query: Rc<RefCell<String>>,
-    synced_model_items: Vec<PickerItem>,
+    synced_model_items: Vec<ModelPickerItem>,
     synced_effort_items: Vec<PickerItem>,
     synced_service_tier_items: Vec<PickerItem>,
     synced_permission_items: Vec<PermissionPickerItem>,
@@ -4953,7 +5026,7 @@ impl WorkspaceView {
         });
         let model_picker = cx.new(|cx| {
             SelectState::new(
-                SearchableVec::new(Vec::<PickerItem>::new()),
+                SearchableVec::new(Vec::<ModelPickerItem>::new()),
                 None,
                 window,
                 cx,
@@ -5434,7 +5507,7 @@ impl WorkspaceView {
             cx.subscribe_in(
                 &model_picker,
                 window,
-                |this, _, event: &SelectEvent<SearchableVec<PickerItem>>, _, cx| {
+                |this, _, event: &SelectEvent<SearchableVec<ModelPickerItem>>, _, cx| {
                     if let SelectEvent::Confirm(Some(model_id)) = event {
                         this.dispatch(Action::SelectModel(model_id.clone()), cx);
                     }
@@ -11360,13 +11433,7 @@ impl WorkspaceView {
     }
 
     fn sync_composer_pickers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let model_items = self
-            .state
-            .composer_controls
-            .models
-            .iter()
-            .map(|model| PickerItem::new(model.id.clone(), model.display_name.clone()))
-            .collect::<Vec<_>>();
+        let model_items = composer_model_picker_items(&self.state.composer_controls.models);
         if model_items != self.synced_model_items {
             let selected = self.state.composer_controls.selected_model.clone();
             let picker_items = model_items.clone();
@@ -43686,7 +43753,7 @@ mod tests {
         browser_navigation_url, browser_surface_coordinates, build_plugin_catalog_sections,
         case_insensitive_match_ranges, command_task_slot, composer_app_commands,
         composer_at_skill_commands, composer_desktop_app_commands, composer_file_query,
-        composer_file_search_max_height, composer_plugin_commands,
+        composer_file_search_max_height, composer_model_picker_items, composer_plugin_commands,
         composer_service_tier_command_for_query, composer_service_tier_commands,
         composer_skill_command_for_query, composer_skill_commands,
         composer_slash_command_for_prefix, connection_send_failure, decode_mcp_form_image_data_url,
@@ -43717,7 +43784,7 @@ mod tests {
         AppearancePalette, AppearanceVariant, ApprovalContext, ApprovalKind, ApprovalRequest,
         ComposerAttachment, ComposerAttachmentKind, ComputerApplicationState, ConnectionStatus,
         GitPullRequestState, IntegratedTerminalShell, KEYBOARD_SHORTCUT_COMMAND_IDS, LoadStatus,
-        MAX_PENDING_WORKTREE_FORKS, MainRoute, McpAuthStatus, PendingWorktreeFork,
+        MAX_PENDING_WORKTREE_FORKS, MainRoute, McpAuthStatus, ModelOption, PendingWorktreeFork,
         PendingWorktreeForkPhase, PluginCard, ProcessManagerState, PullRequestCiStatus,
         PullRequestDetail, PullRequestIdentity, PullRequestMutationKind, PullRequestState,
         PullRequestSummary, ReasoningEffortOption, RemoteControlRuntimeStatus, ServiceTierOption,
@@ -43768,6 +43835,41 @@ mod tests {
             state.connection,
             ConnectionStatus::Failed("backend unavailable".to_owned())
         );
+    }
+
+    #[test]
+    fn composer_model_picker_items_preserve_selection_ids_and_nonempty_descriptions() {
+        let items = composer_model_picker_items(&[
+            ModelOption {
+                id: "gpt-fast".to_owned(),
+                display_name: "GPT Fast".to_owned(),
+                description: " Fast responses ".to_owned(),
+                is_default: true,
+                default_effort: "medium".to_owned(),
+                supported_efforts: Vec::new(),
+                service_tiers: Vec::new(),
+                default_service_tier: None,
+            },
+            ModelOption {
+                id: "gpt-standard".to_owned(),
+                display_name: "GPT Standard".to_owned(),
+                description: "   ".to_owned(),
+                is_default: false,
+                default_effort: "medium".to_owned(),
+                supported_efforts: Vec::new(),
+                service_tiers: Vec::new(),
+                default_service_tier: None,
+            },
+        ]);
+
+        assert_eq!(items[0].id, "gpt-fast");
+        assert_eq!(items[0].title.to_string(), "GPT Fast");
+        assert_eq!(
+            items[0].description.as_ref().map(ToString::to_string),
+            Some("Fast responses".to_owned())
+        );
+        assert_eq!(items[1].id, "gpt-standard");
+        assert!(items[1].description.is_none());
     }
 
     #[test]
