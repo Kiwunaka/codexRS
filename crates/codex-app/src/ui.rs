@@ -14288,6 +14288,7 @@ impl WorkspaceView {
         let split_diff_rows_for_list = Rc::clone(&split_diff_rows);
         let pull_request_button =
             self.render_pull_request_button("repository-pull-request", false, cx);
+        let compact_repository = self.shell_width_class != Some(ShellWidthClass::Wide);
 
         v_flex()
             .flex_1()
@@ -14386,11 +14387,15 @@ impl WorkspaceView {
                     .min_w_0()
                     .p_5()
                     .gap_4()
+                    .when(compact_repository, |body| body.flex_col())
                     .child(
                         v_flex()
-                            .w(px(400.0))
-                            .h_full()
-                            .flex_shrink_0()
+                            .when(compact_repository, |pane| {
+                                pane.w_full().h(px(230.0)).flex_none()
+                            })
+                            .when(!compact_repository, |pane| {
+                                pane.w(px(400.0)).h_full().flex_shrink_0()
+                            })
                             .min_h_0()
                             .gap_3()
                             .overflow_y_scrollbar()
@@ -14555,7 +14560,8 @@ impl WorkspaceView {
                     .child(
                         v_flex()
                             .flex_1()
-                            .h_full()
+                            .when(compact_repository, |pane| pane.w_full())
+                            .when(!compact_repository, |pane| pane.h_full())
                             .min_w_0()
                             .min_h_0()
                             .gap_2()
