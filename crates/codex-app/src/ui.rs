@@ -60,7 +60,8 @@ use codex_core::{
     composer_plugin_is_mentionable, is_appearance_code_theme_id, reduce, validate_mcp_form_content,
 };
 use codex_platform::{
-    default_browser_download_dir, desktop_work_areas, normalize_browser_origin, read_artifact_image,
+    computer_use_platform_available, default_browser_download_dir, desktop_work_areas,
+    normalize_browser_origin, read_artifact_image,
 };
 use gpui::{
     AnyElement, AnyWindowHandle, App, Application, Asset, Bounds, ClipboardItem, Context,
@@ -19191,7 +19192,8 @@ impl WorkspaceView {
                     approval.title.clone(),
                     None,
                     Some(approval.detail.clone()),
-                    Some(("Always allow".to_owned(), ApprovalDecision::AlwaysAllow)),
+                    cfg!(windows)
+                        .then(|| ("Always allow".to_owned(), ApprovalDecision::AlwaysAllow)),
                     None,
                 ),
             };
@@ -24848,6 +24850,14 @@ impl WorkspaceView {
                         .contains(app_id)
                 });
         if !state.available_for_task {
+            let platform_available = computer_use_platform_available();
+            let unavailable_copy = if platform_available {
+                "The official app-server accepts dynamic tools when a chat starts. Begin a new chat in codexRS to use Computer Use."
+            } else if cfg!(target_os = "linux") {
+                "Screenshot observation requires X11 or XWayland with DISPLAY set. Computer Use is unavailable in this Wayland session."
+            } else {
+                "Computer Use is unavailable on this platform."
+            };
             return v_flex()
                 .flex_1()
                 .min_h_0()
@@ -24863,18 +24873,18 @@ impl WorkspaceView {
                         .border_color(cx.theme().warning.opacity(0.45))
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
-                        .child(
-                            "The official app-server accepts dynamic tools when a chat starts. Begin a new chat in codexRS to use Computer Use.",
-                        ),
+                        .child(unavailable_copy),
                 )
-                .child(
-                    Button::new("new-computer-task")
-                        .label("Start a new chat")
-                        .primary()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.begin_new_chat(window, cx);
-                        })),
-                )
+                .when(platform_available, |view| {
+                    view.child(
+                        Button::new("new-computer-task")
+                            .label("Start a new chat")
+                            .primary()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.begin_new_chat(window, cx);
+                            })),
+                    )
+                })
                 .into_any_element();
         }
 
@@ -24939,27 +24949,29 @@ impl WorkspaceView {
                                     .child(subtitle),
                             ),
                     )
-                    .child(
-                        Button::new(("launch-computer-app", index))
-                            .label(if launching {
-                                "Opening…"
-                            } else if application.is_running {
-                                "Open"
-                            } else {
-                                "Launch"
-                            })
-                            .small()
-                            .disabled(launching || launch_blocked)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.dispatch(
-                                    Action::LaunchComputerApp {
-                                        task_id: task_for_launch.clone(),
-                                        application_id: application_id.clone(),
-                                    },
-                                    cx,
-                                );
-                            })),
-                    )
+                    .when(cfg!(windows), |row| {
+                        row.child(
+                            Button::new(("launch-computer-app", index))
+                                .label(if launching {
+                                    "Opening…"
+                                } else if application.is_running {
+                                    "Open"
+                                } else {
+                                    "Launch"
+                                })
+                                .small()
+                                .disabled(launching || launch_blocked)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.dispatch(
+                                        Action::LaunchComputerApp {
+                                            task_id: task_for_launch.clone(),
+                                            application_id: application_id.clone(),
+                                        },
+                                        cx,
+                                    );
+                                })),
+                        )
+                    })
                     .into_any_element()
             })
             .collect::<Vec<_>>();
@@ -25046,9 +25058,11 @@ impl WorkspaceView {
                     .border_color(cx.theme().warning.opacity(0.45))
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(
-                        "ChatGPT asks before it can see or control the selected app. Allow once applies to this task; Always allow also covers future Computer Use sessions.",
-                    ),
+                    .child(if cfg!(windows) {
+                        "ChatGPT asks before it can see or control the selected app. Allow once applies to this task; Always allow also covers future Computer Use sessions."
+                    } else {
+                        "When enabled, ChatGPT can read the bounded app and window catalog. It asks before capturing a screenshot of an app; Allow once applies only to this task."
+                    }),
             )
             .child(
                 Button::new("toggle-computer-use")
@@ -34625,7 +34639,7 @@ impl WorkspaceView {
                     .into_any_element()
             })
             .collect::<Vec<_>>();
-        let any_app_available = cfg!(windows);
+        let any_app_available = computer_use_platform_available();
 
         v_flex()
             .flex_1()
@@ -34668,7 +34682,11 @@ impl WorkspaceView {
                                 div()
                                     .text_sm()
                                     .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .child("Control"),
+                                    .child(if cfg!(windows) {
+                                        "Control"
+                                    } else {
+                                        "Observation"
+                                    }),
                             )
                             .child(
                                 h_flex()
@@ -34705,9 +34723,11 @@ impl WorkspaceView {
                                                 div()
                                                     .text_xs()
                                                     .text_color(cx.theme().muted_foreground)
-                                                    .child(
-                                                        "Let ChatGPT control apps on your computer",
-                                                    ),
+                                                    .child(if cfg!(windows) {
+                                                        "Let ChatGPT control apps on your computer"
+                                                    } else {
+                                                        "Let ChatGPT observe screenshots of X11/XWayland apps"
+                                                    }),
                                             ),
                                     )
                                     .child(
@@ -34743,7 +34763,7 @@ impl WorkspaceView {
                                     ),
                             ),
                     )
-                    .child(
+                    .when(cfg!(windows), |view| view.child(
                         v_flex()
                             .max_w(px(760.0))
                             .gap_2()
@@ -34828,7 +34848,7 @@ impl WorkspaceView {
                                         )
                                     }),
                             ),
-                    ),
+                    )),
             )
             .into_any_element()
     }

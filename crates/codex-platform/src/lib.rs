@@ -54,9 +54,9 @@ pub use computer_use::{
     ComputerApplication, ComputerButton, ComputerCapture, ComputerKey, ComputerUseError,
     ComputerWindow, MAX_COMPUTER_APPLICATIONS, MAX_COMPUTER_CAPTURE_BYTES, MAX_COMPUTER_TEXT_BYTES,
     MAX_COMPUTER_WINDOWS, capture_computer_window, click_computer_window,
-    computer_use_target_is_forbidden, drag_computer_window, inspect_computer_window,
-    list_computer_windows, move_over_computer_window, press_computer_key, scroll_computer_window,
-    type_into_computer_window,
+    computer_use_platform_available, computer_use_target_is_forbidden, drag_computer_window,
+    inspect_computer_window, list_computer_windows, move_over_computer_window, press_computer_key,
+    scroll_computer_window, type_into_computer_window,
 };
 pub use computer_use_helper::{
     ComputerAccessibilityError, ComputerAccessibilityState, ComputerUseAccessibilityClient,
