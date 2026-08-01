@@ -118,32 +118,31 @@ use codex_protocol::{
     CommandExecutionRequestApprovalResponse, ConfigBatchWriteParams, ConfigEdit,
     ConfigMergeStrategy, ConfigReadParams, ConfigReadResponse, ConfigWriteStatus,
     DynamicToolCallOutputContentItem, DynamicToolCallParams, DynamicToolCallResponse,
-    DynamicToolFunction, DynamicToolNamespaceTool, DynamicToolSpec, ExecpolicyAmendment,
-    ExternalAgentConfigDetectParams, ExternalAgentConfigImportCompletedNotification,
-    ExternalAgentConfigImportHistoriesReadResponse, ExternalAgentConfigImportItemTypeFailure,
-    ExternalAgentConfigImportItemTypeSuccess, ExternalAgentConfigImportParams,
-    ExternalAgentConfigImportProgressNotification, ExternalAgentConfigImportTypeResult,
-    ExternalAgentConfigMigrationItem, ExternalAgentConfigMigrationItemType,
-    ExternalAgentImportedConnectorCandidate, ExternalAgentImportedConnectorSource,
-    ExternalAgentMigrationDetails, ExternalAgentNamedMigration, ExternalAgentPluginsMigration,
-    ExternalAgentSessionMigration, FeedbackUploadParams, FileChangeApprovalDecision,
-    FileChangeRequestApprovalParams, FileChangeRequestApprovalResponse, FileSystemAccessMode,
-    FileSystemPath, FileSystemSpecialPath, FuzzyFileSearchMatchType, FuzzyFileSearchParams,
-    FuzzyFileSearchResponse, FuzzyFileSearchResult as ProtocolFuzzyFileResult,
-    FuzzyFileSearchSessionCompletedNotification, FuzzyFileSearchSessionStartParams,
-    FuzzyFileSearchSessionStopParams, FuzzyFileSearchSessionUpdateParams,
-    FuzzyFileSearchSessionUpdatedNotification, GetAccountParams, GetAuthStatusParams,
-    GitDiffToRemoteParams, HistorySortDirection, HookEventName as ProtocolHookEventName,
-    HookHandlerType as ProtocolHookHandlerType, HookSource as ProtocolHookSource,
-    HookTrustStatus as ProtocolHookTrustStatus, HooksListParams, InitializeCapabilities,
-    ListMcpServerStatusParams, LoginAccountParams, LoginAccountResponse, MarketplaceAddParams,
-    MarketplaceRemoveParams, MarketplaceUpgradeParams, McpAuthStatus as ProtocolMcpAuthStatus,
-    McpElicitationArrayItems, McpElicitationPrimitiveSchema, McpElicitationStringFormat,
-    McpOpenAiElicitationFieldSchema, McpOpenAiImagePickerSchema, McpResourceReadParams,
-    McpServerConfig, McpServerElicitationAction as ProtocolMcpServerElicitationAction,
-    McpServerElicitationRequest, McpServerElicitationRequestParams,
-    McpServerElicitationRequestResponse, McpServerOauthLoginCompletedNotification,
-    McpServerOauthLoginParams,
+    ExecpolicyAmendment, ExternalAgentConfigDetectParams,
+    ExternalAgentConfigImportCompletedNotification, ExternalAgentConfigImportHistoriesReadResponse,
+    ExternalAgentConfigImportItemTypeFailure, ExternalAgentConfigImportItemTypeSuccess,
+    ExternalAgentConfigImportParams, ExternalAgentConfigImportProgressNotification,
+    ExternalAgentConfigImportTypeResult, ExternalAgentConfigMigrationItem,
+    ExternalAgentConfigMigrationItemType, ExternalAgentImportedConnectorCandidate,
+    ExternalAgentImportedConnectorSource, ExternalAgentMigrationDetails,
+    ExternalAgentNamedMigration, ExternalAgentPluginsMigration, ExternalAgentSessionMigration,
+    FeedbackUploadParams, FileChangeApprovalDecision, FileChangeRequestApprovalParams,
+    FileChangeRequestApprovalResponse, FileSystemAccessMode, FileSystemPath, FileSystemSpecialPath,
+    FuzzyFileSearchMatchType, FuzzyFileSearchParams, FuzzyFileSearchResponse,
+    FuzzyFileSearchResult as ProtocolFuzzyFileResult, FuzzyFileSearchSessionCompletedNotification,
+    FuzzyFileSearchSessionStartParams, FuzzyFileSearchSessionStopParams,
+    FuzzyFileSearchSessionUpdateParams, FuzzyFileSearchSessionUpdatedNotification,
+    GetAccountParams, GetAuthStatusParams, GitDiffToRemoteParams, HistorySortDirection,
+    HookEventName as ProtocolHookEventName, HookHandlerType as ProtocolHookHandlerType,
+    HookSource as ProtocolHookSource, HookTrustStatus as ProtocolHookTrustStatus, HooksListParams,
+    InitializeCapabilities, ListMcpServerStatusParams, LoginAccountParams, LoginAccountResponse,
+    MarketplaceAddParams, MarketplaceRemoveParams, MarketplaceUpgradeParams,
+    McpAuthStatus as ProtocolMcpAuthStatus, McpElicitationArrayItems,
+    McpElicitationPrimitiveSchema, McpElicitationStringFormat, McpOpenAiElicitationFieldSchema,
+    McpOpenAiImagePickerSchema, McpResourceReadParams, McpServerConfig,
+    McpServerElicitationAction as ProtocolMcpServerElicitationAction, McpServerElicitationRequest,
+    McpServerElicitationRequestParams, McpServerElicitationRequestResponse,
+    McpServerOauthLoginCompletedNotification, McpServerOauthLoginParams,
     McpServerStartupFailureReason as ProtocolMcpServerStartupFailureReason,
     McpServerStartupState as ProtocolMcpServerStartupState,
     McpServerStatus as ProtocolMcpServerStatus, McpServerStatusDetail,
@@ -176,6 +175,9 @@ use codex_storage::{
 };
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use serde_json::{Value, json};
+
+#[cfg(any(windows, test))]
+use codex_protocol::{DynamicToolFunction, DynamicToolNamespaceTool, DynamicToolSpec};
 
 const BACKEND_COMMAND_CAPACITY: usize = 64;
 const BACKEND_EVENT_CAPACITY: usize = 1_024;
@@ -9700,6 +9702,7 @@ fn connect(
     }
 }
 
+#[cfg(any(windows, test))]
 fn computer_use_dynamic_tools() -> Vec<DynamicToolSpec> {
     vec![DynamicToolSpec::Namespace {
         name: "computer_use".to_owned(),
@@ -9894,6 +9897,7 @@ fn computer_use_dynamic_tools() -> Vec<DynamicToolSpec> {
     }]
 }
 
+#[cfg(any(windows, test))]
 fn computer_window_schema() -> Value {
     json!({
         "type": "object",
@@ -9907,6 +9911,7 @@ fn computer_window_schema() -> Value {
     })
 }
 
+#[cfg(any(windows, test))]
 fn dynamic_tool(name: &str, description: &str, input_schema: Value) -> DynamicToolNamespaceTool {
     DynamicToolNamespaceTool::new(DynamicToolFunction {
         name: name.to_owned(),
