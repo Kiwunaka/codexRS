@@ -5,6 +5,25 @@ All notable changes to codexRS are documented here. The project follows
 
 ## [Unreleased]
 
+## [0.1.0-rc.4] - 2026-08-01
+
+### Added
+
+- Marketplace entries that require authentication expose the existing guarded
+  sign-in handoff.
+- Project selection is keyboard accessible, and successful background chats
+  announce completion without interrupting the active task.
+- The Changes view groups bounded multi-file diffs with native Unified/Split
+  controls and per-file folding.
+- Managed worktree handoffs use a bounded three-item FIFO with correlated
+  cancellation, retry, and failure recovery.
+
+### Fixed
+
+- Linux downloads honor the configured XDG Downloads directory.
+- Pull requests restore Cargo build caches without publishing branch-specific
+  cache entries.
+
 ## [0.1.0-rc.3] - 2026-08-01
 
 ### Added

@@ -5,8 +5,8 @@
 | Platform | Build | UI and app-server | Git and terminal | Computer Use |
 | --- | --- | --- | --- | --- |
 | Windows 10/11 x64 | Supported; unsigned portable archive | Locally source-build smoke-tested | Native Git and ConPTY; child trees use Job Objects | Supported and smoke-tested |
-| Ubuntu 24.04 x64 | CI; unsigned portable tar.gz | Native UI and app-server build and tests in CI | Native Git and PTY | Unavailable in RC2 |
-| Other Linux distributions | Source | Expected with equivalent native packages | Expected | Unavailable in RC2 |
+| Ubuntu 24.04 x64 | CI; unsigned portable tar.gz | Native UI and app-server build and tests in CI | Native Git and PTY | Unavailable in RC4 |
+| Other Linux distributions | Source | Expected with equivalent native packages | Expected | Unavailable in RC4 |
 | macOS | Not targeted | Not supported in this release | Not supported | Not supported |
 
 The stable compatibility oracle is Windows Codex Desktop `26.721.3996.0` with
@@ -153,7 +153,7 @@ does not install runtime dependencies, a desktop entry, or a URI handler, and
 the extracted archive has not yet received a desktop smoke test.
 
 GPUI can run on native Linux desktops, but Linux Computer Use is unavailable in
-RC2 because the platform gate fails closed. X11/XWayland support and a
+RC4 because the platform gate fails closed. X11/XWayland support and a
 portal-backed pure-Wayland selection and input path are future work.
 
 ## Runtime directories

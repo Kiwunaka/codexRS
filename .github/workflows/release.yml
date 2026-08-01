@@ -211,7 +211,7 @@ jobs:
           The Linux tar.gz is not a system package and does not install runtime
           dependencies. Ubuntu CI builds and tests the binary; the extracted
           archive has not yet received a desktop smoke test. Linux Computer Use
-          is unavailable in RC2; X11/XWayland and pure-Wayland support remain
+          is unavailable in RC4; X11/XWayland and pure-Wayland support remain
           future work.
           EOF
           )"

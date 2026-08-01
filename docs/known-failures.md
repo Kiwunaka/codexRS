@@ -14,7 +14,7 @@ reports. They are test inputs, not behavior to reproduce.
 
 ## Active release-candidate limitations
 
-- Linux Computer Use is unavailable in RC2: the platform gate fails closed.
+- Linux Computer Use is unavailable in RC4: the platform gate fails closed.
   X11/XWayland and portal-backed pure-Wayland support remain future work.
 - Dynamic Computer Use tools are attached at `thread/start`; an existing task
   cannot gain them after creation.
