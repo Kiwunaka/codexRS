@@ -200,6 +200,7 @@ pub struct Button {
     on_hover: Option<Rc<dyn Fn(&bool, &mut Window, &mut App)>>,
     loading: bool,
     loading_icon: Option<Icon>,
+    high_contrast_focus: bool,
 
     tab_index: isize,
     tab_stop: bool,
@@ -238,6 +239,7 @@ impl Button {
             outline: false,
             children: Vec::new(),
             loading_icon: None,
+            high_contrast_focus: false,
             dropdown_caret: false,
             tab_index: 0,
             tab_stop: true,
@@ -351,6 +353,13 @@ impl Button {
     /// Default is true.
     pub fn tab_stop(mut self, tab_stop: bool) -> Self {
         self.tab_stop = tab_stop;
+        self
+    }
+
+    /// Draw an additional opaque focus border for buttons rendered over a
+    /// selected or otherwise low-contrast background.
+    pub fn high_contrast_focus(mut self) -> Self {
+        self.high_contrast_focus = true;
         self
     }
 
@@ -595,6 +604,9 @@ impl RenderOnce for Button {
                 this.bg(normal_style.bg.opacity(0.8))
                     .border_color(normal_style.border.opacity(0.8))
                     .text_color(normal_style.fg.opacity(0.8))
+            })
+            .when(self.high_contrast_focus && is_focused, |this| {
+                this.border_2().border_color(cx.theme().foreground)
             })
             .when_some(self.tooltip, |this, (tooltip, action)| {
                 this.tooltip(move |window, cx| {
