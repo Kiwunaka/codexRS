@@ -29,10 +29,16 @@ use codex_protocol::{
     MarketplaceRemoveResponse, MarketplaceUpgradeParams, MarketplaceUpgradeResponse,
     McpResourceReadParams, McpResourceReadResponse, McpServerOauthLoginParams,
     McpServerOauthLoginResponse, MemoryResetResponse, ModelListParams, ModelListResponse,
+    NullableRemoteControlDisableParams, NullableRemoteControlEnableParams,
     PermissionProfileListParams, PermissionProfileListResponse, PluginInstallParams,
     PluginInstallResponse, PluginListParams, PluginListResponse, PluginReadParams,
-    PluginReadResponse, PluginUninstallParams, ProtocolError, SkillsConfigWriteParams,
-    SkillsConfigWriteResponse, SkillsListParams, SkillsListResponse, ThreadArchiveParams,
+    PluginReadResponse, PluginUninstallParams, ProtocolError, RemoteControlClientsListParams,
+    RemoteControlClientsListResponse, RemoteControlClientsRevokeParams,
+    RemoteControlClientsRevokeResponse, RemoteControlDisableResponse, RemoteControlEnableResponse,
+    RemoteControlPairingStartParams, RemoteControlPairingStartResponse,
+    RemoteControlPairingStatusParams, RemoteControlPairingStatusResponse,
+    RemoteControlStatusReadResponse, SkillsConfigWriteParams, SkillsConfigWriteResponse,
+    SkillsListParams, SkillsListResponse, ThreadArchiveParams,
     ThreadBackgroundTerminalsCleanParams, ThreadBackgroundTerminalsCleanResponse,
     ThreadBackgroundTerminalsListParams, ThreadBackgroundTerminalsListResponse,
     ThreadBackgroundTerminalsTerminateParams, ThreadBackgroundTerminalsTerminateResponse,
@@ -72,8 +78,13 @@ pub const DEFAULT_THREAD_PAGE_LIMIT: u32 = 20;
 pub const MAX_THREAD_PAGE_LIMIT: u32 = 100;
 pub const MAX_APP_READ_ITEMS: usize = 100;
 
+const MAX_REMOTE_CONTROL_CURSOR_BYTES: usize = 1_024;
+const MAX_REMOTE_CONTROL_PAIRING_CODE_BYTES: usize = 1_024;
+const MAX_REMOTE_CONTROL_IDENTIFIER_BYTES: usize = 256;
+
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
+const REMOTE_CONTROL_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const ROUTER_TICK: Duration = Duration::from_millis(25);
 const EVENT_BACKPRESSURE_TIMEOUT: Duration = Duration::from_millis(100);
 const SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -214,6 +225,9 @@ pub enum AppServerError {
         requested: u32,
         maximum: u32,
     },
+    InvalidRemoteControlCursor,
+    InvalidRemoteControlIdentifier,
+    InvalidRemoteControlPairingStatus,
     #[cfg(windows)]
     Job(JobError),
 }
@@ -274,9 +288,17 @@ impl fmt::Display for AppServerError {
             Self::InvalidPageLimit { requested, maximum } => {
                 write!(
                     formatter,
-                    "thread page size {requested} is outside the allowed range 1..={maximum}"
+                    "page size {requested} is outside the allowed range 1..={maximum}"
                 )
             }
+            Self::InvalidRemoteControlCursor => {
+                formatter.write_str("remote-control cursor is invalid")
+            }
+            Self::InvalidRemoteControlIdentifier => {
+                formatter.write_str("remote-control identifier is invalid")
+            }
+            Self::InvalidRemoteControlPairingStatus => formatter
+                .write_str("remote-control pairing status requires exactly one valid pairing code"),
             #[cfg(windows)]
             Self::Job(_) => formatter.write_str("Windows Job Object setup failed"),
         }
@@ -309,7 +331,10 @@ impl Error for AppServerError {
             | Self::RequestIdExhausted
             | Self::AlreadyInitialized
             | Self::NotInitialized
-            | Self::InvalidPageLimit { .. } => None,
+            | Self::InvalidPageLimit { .. }
+            | Self::InvalidRemoteControlCursor
+            | Self::InvalidRemoteControlIdentifier
+            | Self::InvalidRemoteControlPairingStatus => None,
         }
     }
 }
@@ -747,7 +772,20 @@ impl AppServerConnection {
         P: Serialize,
         R: DeserializeOwned,
     {
-        self.request_optional(method, Some(params))
+        self.request_with_timeout(method, params, self.config.request_timeout)
+    }
+
+    fn request_with_timeout<P, R>(
+        &self,
+        method: &'static str,
+        params: P,
+        timeout: Duration,
+    ) -> Result<R, AppServerError>
+    where
+        P: Serialize,
+        R: DeserializeOwned,
+    {
+        self.request_optional_with_timeout(method, Some(params), timeout)
     }
 
     fn request_without_params<R>(&self, method: &'static str) -> Result<R, AppServerError>
@@ -766,6 +804,19 @@ impl AppServerConnection {
         P: Serialize,
         R: DeserializeOwned,
     {
+        self.request_optional_with_timeout(method, params, self.config.request_timeout)
+    }
+
+    fn request_optional_with_timeout<P, R>(
+        &self,
+        method: &'static str,
+        params: Option<P>,
+        timeout: Duration,
+    ) -> Result<R, AppServerError>
+    where
+        P: Serialize,
+        R: DeserializeOwned,
+    {
         if self.closed.load(Ordering::Acquire) {
             return Err(AppServerError::TransportClosed);
         }
@@ -776,7 +827,7 @@ impl AppServerConnection {
             self.config.max_frame_bytes,
         )?;
         let (reply_sender, reply_receiver) = crossbeam_channel::bounded(1);
-        let deadline = Instant::now() + self.config.request_timeout;
+        let deadline = Instant::now() + timeout;
         self.commands
             .send_timeout(
                 RouterCommand::Request {
@@ -786,7 +837,7 @@ impl AppServerConnection {
                     deadline,
                     reply: reply_sender,
                 },
-                self.config.request_timeout.min(EVENT_BACKPRESSURE_TIMEOUT),
+                timeout.min(EVENT_BACKPRESSURE_TIMEOUT),
             )
             .map_err(|error| match error {
                 crossbeam_channel::SendTimeoutError::Timeout(_) => AppServerError::CommandQueueFull,
@@ -1143,6 +1194,80 @@ impl AppServerConnection {
         self.request("permissionProfile/list", params)
     }
 
+    pub fn enable_remote_control(
+        &self,
+        params: NullableRemoteControlEnableParams,
+    ) -> Result<RemoteControlEnableResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request_optional("remoteControl/enable", params)
+    }
+
+    pub fn disable_remote_control(
+        &self,
+        params: NullableRemoteControlDisableParams,
+    ) -> Result<RemoteControlDisableResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request_optional("remoteControl/disable", params)
+    }
+
+    pub fn read_remote_control_status(
+        &self,
+    ) -> Result<RemoteControlStatusReadResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request_without_params("remoteControl/status/read")
+    }
+
+    pub fn start_remote_control_pairing(
+        &self,
+        params: RemoteControlPairingStartParams,
+    ) -> Result<RemoteControlPairingStartResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request_with_timeout(
+            "remoteControl/pairing/start",
+            params,
+            REMOTE_CONTROL_REQUEST_TIMEOUT,
+        )
+    }
+
+    pub fn read_remote_control_pairing_status(
+        &self,
+        params: RemoteControlPairingStatusParams,
+    ) -> Result<RemoteControlPairingStatusResponse, AppServerError> {
+        self.require_initialized()?;
+        validate_remote_control_pairing_status(&params)?;
+        self.request_with_timeout(
+            "remoteControl/pairing/status",
+            params,
+            REMOTE_CONTROL_REQUEST_TIMEOUT,
+        )
+    }
+
+    pub fn list_remote_control_clients(
+        &self,
+        params: RemoteControlClientsListParams,
+    ) -> Result<RemoteControlClientsListResponse, AppServerError> {
+        self.require_initialized()?;
+        validate_remote_control_clients_list(&params)?;
+        self.request_with_timeout(
+            "remoteControl/client/list",
+            params,
+            REMOTE_CONTROL_REQUEST_TIMEOUT,
+        )
+    }
+
+    pub fn revoke_remote_control_client(
+        &self,
+        params: RemoteControlClientsRevokeParams,
+    ) -> Result<RemoteControlClientsRevokeResponse, AppServerError> {
+        self.require_initialized()?;
+        validate_remote_control_clients_revoke(&params)?;
+        self.request_with_timeout(
+            "remoteControl/client/revoke",
+            params,
+            REMOTE_CONTROL_REQUEST_TIMEOUT,
+        )
+    }
+
     pub fn read_config_requirements(
         &self,
     ) -> Result<ConfigRequirementsReadResponse, AppServerError> {
@@ -1441,6 +1566,59 @@ fn validate_page_limit(limit: u32) -> Result<(), AppServerError> {
     }
 }
 
+fn validate_remote_control_clients_list(
+    params: &RemoteControlClientsListParams,
+) -> Result<(), AppServerError> {
+    validate_remote_control_identifier(&params.environment_id)?;
+    if let Some(limit) = params.limit {
+        validate_page_limit(limit)?;
+    }
+    if params.cursor.as_deref().is_some_and(|cursor| {
+        cursor.is_empty()
+            || cursor.len() > MAX_REMOTE_CONTROL_CURSOR_BYTES
+            || cursor.chars().any(char::is_control)
+    }) {
+        return Err(AppServerError::InvalidRemoteControlCursor);
+    }
+    Ok(())
+}
+
+fn validate_remote_control_clients_revoke(
+    params: &RemoteControlClientsRevokeParams,
+) -> Result<(), AppServerError> {
+    validate_remote_control_identifier(&params.environment_id)?;
+    validate_remote_control_identifier(&params.client_id)
+}
+
+fn validate_remote_control_identifier(value: &str) -> Result<(), AppServerError> {
+    if value.is_empty()
+        || value.len() > MAX_REMOTE_CONTROL_IDENTIFIER_BYTES
+        || value.chars().any(char::is_control)
+    {
+        return Err(AppServerError::InvalidRemoteControlIdentifier);
+    }
+    Ok(())
+}
+
+fn validate_remote_control_pairing_status(
+    params: &RemoteControlPairingStatusParams,
+) -> Result<(), AppServerError> {
+    let valid_code = |code: &str| {
+        !code.is_empty()
+            && code.len() <= MAX_REMOTE_CONTROL_PAIRING_CODE_BYTES
+            && !code.chars().any(char::is_control)
+    };
+    match (
+        params.pairing_code.as_deref(),
+        params.manual_pairing_code.as_deref(),
+    ) {
+        (Some(pairing_code), None) | (None, Some(pairing_code)) if valid_code(pairing_code) => {
+            Ok(())
+        }
+        _ => Err(AppServerError::InvalidRemoteControlPairingStatus),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn route_app_server(
     mut child: ManagedChild,
@@ -1627,6 +1805,7 @@ fn notification_requires_resync(event: &AppServerEvent) -> bool {
                     | "item/reasoning/textDelta"
                     | "item/completed"
                     | "turn/completed"
+                    | "remoteControl/status/changed"
             )
     )
 }
@@ -1885,13 +2064,20 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
+    use codex_protocol::{
+        RemoteControlClientsListParams, RemoteControlClientsRevokeParams,
+        RemoteControlPairingStatusParams,
+    };
     use crossbeam_channel::bounded;
     use serde_json::Value;
 
     use super::{
         AppServerError, AppServerEvent, CodexHome, CodexHomeKind, EVENT_BACKPRESSURE_TIMEOUT,
-        MAX_THREAD_PAGE_LIMIT, RoutedReaderEvent, notification_requires_resync,
-        publish_notification, send_routed_reader_event,
+        MAX_REMOTE_CONTROL_CURSOR_BYTES, MAX_REMOTE_CONTROL_IDENTIFIER_BYTES,
+        MAX_REMOTE_CONTROL_PAIRING_CODE_BYTES, MAX_THREAD_PAGE_LIMIT, RoutedReaderEvent,
+        notification_requires_resync, publish_notification, send_routed_reader_event,
+        validate_remote_control_clients_list, validate_remote_control_clients_revoke,
+        validate_remote_control_pairing_status,
     };
 
     #[test]
@@ -1940,6 +2126,7 @@ mod tests {
             "item/reasoning/textDelta",
             "item/completed",
             "turn/completed",
+            "remoteControl/status/changed",
         ] {
             assert!(notification_requires_resync(
                 &AppServerEvent::Notification {
@@ -1976,5 +2163,142 @@ mod tests {
             started.elapsed() < EVENT_BACKPRESSURE_TIMEOUT + Duration::from_secs(1),
             "bounded delivery must not wait indefinitely"
         );
+    }
+
+    #[test]
+    fn remote_control_client_list_validation_is_bounded() {
+        let params = |cursor, limit| RemoteControlClientsListParams {
+            environment_id: "environment".to_owned(),
+            cursor,
+            limit,
+            order: None,
+        };
+
+        assert!(validate_remote_control_clients_list(&params(None, None)).is_ok());
+        assert!(
+            validate_remote_control_clients_list(&params(Some("cursor".to_owned()), Some(100)))
+                .is_ok()
+        );
+        assert!(matches!(
+            validate_remote_control_clients_list(&params(None, Some(0))),
+            Err(AppServerError::InvalidPageLimit { .. })
+        ));
+        assert!(matches!(
+            validate_remote_control_clients_list(&params(None, Some(101))),
+            Err(AppServerError::InvalidPageLimit { .. })
+        ));
+        assert!(matches!(
+            validate_remote_control_clients_list(&params(Some(String::new()), None)),
+            Err(AppServerError::InvalidRemoteControlCursor)
+        ));
+        assert!(matches!(
+            validate_remote_control_clients_list(&params(Some("bad\u{0001}".to_owned()), None)),
+            Err(AppServerError::InvalidRemoteControlCursor)
+        ));
+        assert!(matches!(
+            validate_remote_control_clients_list(&params(
+                Some("x".repeat(MAX_REMOTE_CONTROL_CURSOR_BYTES + 1)),
+                None,
+            )),
+            Err(AppServerError::InvalidRemoteControlCursor)
+        ));
+        assert!(matches!(
+            validate_remote_control_clients_list(&RemoteControlClientsListParams {
+                environment_id: String::new(),
+                cursor: None,
+                limit: None,
+                order: None,
+            }),
+            Err(AppServerError::InvalidRemoteControlIdentifier)
+        ));
+        assert!(matches!(
+            validate_remote_control_clients_list(&RemoteControlClientsListParams {
+                environment_id: "x".repeat(MAX_REMOTE_CONTROL_IDENTIFIER_BYTES + 1),
+                cursor: None,
+                limit: None,
+                order: None,
+            }),
+            Err(AppServerError::InvalidRemoteControlIdentifier)
+        ));
+        assert!(matches!(
+            validate_remote_control_clients_list(&RemoteControlClientsListParams {
+                environment_id: "bad\u{0001}".to_owned(),
+                cursor: None,
+                limit: None,
+                order: None,
+            }),
+            Err(AppServerError::InvalidRemoteControlIdentifier)
+        ));
+    }
+
+    #[test]
+    fn remote_control_client_revoke_validation_is_bounded() {
+        let params = |environment_id, client_id| RemoteControlClientsRevokeParams {
+            environment_id,
+            client_id,
+        };
+
+        assert!(
+            validate_remote_control_clients_revoke(&params(
+                "environment".to_owned(),
+                "client".to_owned(),
+            ))
+            .is_ok()
+        );
+        assert!(matches!(
+            validate_remote_control_clients_revoke(&params(String::new(), "client".to_owned())),
+            Err(AppServerError::InvalidRemoteControlIdentifier)
+        ));
+        assert!(matches!(
+            validate_remote_control_clients_revoke(&params(
+                "environment".to_owned(),
+                "x".repeat(MAX_REMOTE_CONTROL_IDENTIFIER_BYTES + 1),
+            )),
+            Err(AppServerError::InvalidRemoteControlIdentifier)
+        ));
+        assert!(matches!(
+            validate_remote_control_clients_revoke(&params(
+                "environment".to_owned(),
+                "bad\u{0001}".to_owned(),
+            )),
+            Err(AppServerError::InvalidRemoteControlIdentifier)
+        ));
+    }
+
+    #[test]
+    fn remote_control_pairing_status_requires_one_bounded_code() {
+        let params = |pairing_code, manual_pairing_code| RemoteControlPairingStatusParams {
+            pairing_code,
+            manual_pairing_code,
+        };
+
+        assert!(
+            validate_remote_control_pairing_status(&params(Some("code".to_owned()), None,)).is_ok()
+        );
+        assert!(
+            validate_remote_control_pairing_status(&params(None, Some("code".to_owned()),)).is_ok()
+        );
+        assert!(matches!(
+            validate_remote_control_pairing_status(&params(None, None)),
+            Err(AppServerError::InvalidRemoteControlPairingStatus)
+        ));
+        assert!(matches!(
+            validate_remote_control_pairing_status(&params(
+                Some("code".to_owned()),
+                Some("other".to_owned()),
+            )),
+            Err(AppServerError::InvalidRemoteControlPairingStatus)
+        ));
+        assert!(matches!(
+            validate_remote_control_pairing_status(&params(Some(String::new()), None)),
+            Err(AppServerError::InvalidRemoteControlPairingStatus)
+        ));
+        assert!(matches!(
+            validate_remote_control_pairing_status(&params(
+                Some("x".repeat(MAX_REMOTE_CONTROL_PAIRING_CODE_BYTES + 1)),
+                None,
+            )),
+            Err(AppServerError::InvalidRemoteControlPairingStatus)
+        ));
     }
 }
