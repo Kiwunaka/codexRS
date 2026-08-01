@@ -25,7 +25,7 @@
 </p>
 
 > [!IMPORTANT]
-> The current tree targets `v0.1.0-rc.2`. Windows has passed an end-to-end
+> The current tree targets `v0.1.0-rc.3`. Windows has passed an end-to-end
 > source-build smoke test against the exact stable reference. Linux is covered
 > by native CI and still needs broader desktop-environment testing before a
 > stable release.
@@ -57,9 +57,9 @@ repository redistributes.
 | Computer Use | Windows only: native window discovery and control with per-app approval, task access, and an app-server-owned always-allowed list |
 | Plugins | Native directory tabs, bounded artwork, installed/source management, creation handoff, marketplace add/remove/upgrade, install, and uninstall through app-server methods |
 | Persistence | Single-writer codexRS SQLite for UI preferences and a bounded local-project registry with names and pins |
-| Platforms | Windows source build smoke-tested; Ubuntu UI, app-server, Git, and PTY build and test in CI; Linux Computer Use is unavailable in RC2 |
+| Platforms | Windows source build smoke-tested; Ubuntu UI, app-server, Git, and PTY build and test in CI; Linux Computer Use is unavailable in RC3 |
 
-Computer Use is available only on Windows in RC2 and is opt-in for each task.
+Computer Use is available only on Windows in RC3 and is opt-in for each task.
 Every read or control action carries the
 exact `Window { app, id, title? }` returned by bounded discovery; codexRS
 rehydrates the opaque id and verifies its current owner before acting. The
@@ -131,13 +131,13 @@ If it is not on `PATH`, set `CODEX_RS_CODEX_BIN` to the native `codex` or
 ### 2. Download the portable preview
 
 Download only from the [GitHub Releases](https://github.com/Kiwunaka/codexRS/releases)
-page. The RC2 assets are
-`codexrs-v0.1.0-rc.2-windows-x86_64.zip` and
-`codexrs-v0.1.0-rc.2-linux-x86_64.tar.gz`, with `SHA256SUMS.txt`.
+page. The RC3 assets are
+`codexrs-v0.1.0-rc.3-windows-x86_64.zip` and
+`codexrs-v0.1.0-rc.3-linux-x86_64.tar.gz`, with `SHA256SUMS.txt`.
 Verify the archive checksum before extraction; for example, on Linux run
-`grep ' \./codexrs-v0.1.0-rc.2-linux-x86_64.tar.gz$' SHA256SUMS.txt | sha256sum -c -`,
+`grep ' \./codexrs-v0.1.0-rc.3-linux-x86_64.tar.gz$' SHA256SUMS.txt | sha256sum -c -`,
 and on Windows compare
-`(Get-FileHash .\codexrs-v0.1.0-rc.2-windows-x86_64.zip -Algorithm SHA256).Hash`
+`(Get-FileHash .\codexrs-v0.1.0-rc.3-windows-x86_64.zip -Algorithm SHA256).Hash`
 with the matching entry. The checksum helps detect corruption after obtaining
 it from the trusted release page; it is not an independent publisher signature.
 
@@ -152,7 +152,7 @@ Computer Use from an archive whose source or checksum you do not trust.
 The Linux archive is not a system package: it does not install runtime
 dependencies or desktop integration. Ubuntu CI builds and tests the binary, but
 the extracted archive has not received a desktop smoke test. Linux Computer Use
-is unavailable in RC2; X11/XWayland and pure-Wayland support remain future work.
+is unavailable in RC3; X11/XWayland and pure-Wayland support remain future work.
 
 ### 3. Build codexRS
 
