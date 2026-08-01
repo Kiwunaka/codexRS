@@ -1135,6 +1135,8 @@ impl ContextWindowUsage {
 pub struct TimelineState {
     pub status: LoadStatus,
     pub generation: u64,
+    runtime_generation: u64,
+    runtime_status_loaded: bool,
     items: Vec<TimelineItem>,
     item_indices: HashMap<String, usize>,
     pub next_cursor: Option<String>,
@@ -1155,6 +1157,8 @@ impl Default for TimelineState {
         Self {
             status: LoadStatus::Idle,
             generation: 0,
+            runtime_generation: 0,
+            runtime_status_loaded: false,
             items: Vec::new(),
             item_indices: HashMap::new(),
             next_cursor: None,
@@ -4434,6 +4438,7 @@ pub enum Action {
     SelectTask(String),
     TaskRuntimeLoaded {
         task_id: String,
+        generation: u64,
         active_turn_id: Option<String>,
         active_turn_is_review: bool,
         run_status: Option<TaskRunStatus>,
@@ -5655,6 +5660,7 @@ pub enum Effect {
     },
     ResumeTask {
         task_id: String,
+        generation: u64,
     },
     UpdateThreadSettings {
         task_id: String,
@@ -5703,6 +5709,7 @@ pub enum Effect {
         approvals_reviewer: Option<ApprovalsReviewer>,
         attachments: Vec<ComposerAttachment>,
         plan_mode: bool,
+        goal_objective: Option<String>,
     },
     SteerTurn {
         task_id: String,
@@ -7371,6 +7378,16 @@ fn clear_unresolved_detached_review_terminal(state: &mut AppState, task_id: &str
     }
 }
 
+fn resume_task_effect(state: &mut AppState, task_id: String) -> Effect {
+    let timeline = state.timelines.entry(task_id.clone()).or_default();
+    timeline.runtime_generation = timeline.runtime_generation.saturating_add(1);
+    timeline.runtime_status_loaded = false;
+    Effect::ResumeTask {
+        task_id,
+        generation: timeline.runtime_generation,
+    }
+}
+
 pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
     match action {
         Action::Connect | Action::RetryConnection => {
@@ -7428,7 +7445,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 });
             }
             if let Some(task_id) = state.selected_task_id.clone() {
-                effects.push(Effect::ResumeTask { task_id });
+                effects.push(resume_task_effect(state, task_id));
             }
             if let Some(effect) = load_marketplace_route_effect(state) {
                 effects.push(effect);
@@ -7475,6 +7492,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 ..FuzzyFileSearchState::default()
             };
             for timeline in state.timelines.values_mut() {
+                timeline.runtime_status_loaded = false;
                 timeline.goal_continuation_pending = false;
             }
             vec![Effect::ScheduleAppServerReconnect]
@@ -8876,9 +8894,13 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.tasks.truncate(MAX_VISIBLE_THREADS);
             state.selected_task_id = Some(task_id.clone());
             state.artifacts = ArtifactState::default();
-            state
-                .timelines
-                .insert(task_id.clone(), TimelineState::default());
+            state.timelines.insert(
+                task_id.clone(),
+                TimelineState {
+                    runtime_status_loaded: true,
+                    ..TimelineState::default()
+                },
+            );
             state.goals.insert(task_id, ThreadGoalState::default());
             if git_context_changed {
                 clear_git_for_context_change(state);
@@ -8980,7 +9002,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             resume_ids
                 .into_iter()
-                .map(|task_id| Effect::ResumeTask { task_id })
+                .map(|task_id| resume_task_effect(state, task_id))
                 .collect()
         }
         Action::LoadedTasksRestoreFailed(message) => {
@@ -9082,7 +9104,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             {
                 effects.push(effect);
             }
-            effects.insert(0, Effect::ResumeTask { task_id });
+            effects.insert(0, resume_task_effect(state, task_id));
             effects
         }
         Action::TaskSettingsLoaded {
@@ -9114,19 +9136,24 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         Action::ThreadSettingsUpdateFailed { task_id, message } => {
             state.status_message = Some(message);
             if state.selected_task_id.as_deref() == Some(task_id.as_str()) {
-                vec![Effect::ResumeTask { task_id }]
+                vec![resume_task_effect(state, task_id)]
             } else {
                 Vec::new()
             }
         }
         Action::TaskRuntimeLoaded {
             task_id,
+            generation,
             active_turn_id,
             active_turn_is_review,
             run_status,
         } => {
             let is_idle = active_turn_id.is_none();
             let timeline = state.timelines.entry(task_id.clone()).or_default();
+            if generation != timeline.runtime_generation {
+                return Vec::new();
+            }
+            timeline.runtime_status_loaded = true;
             timeline.active_turn_id = active_turn_id;
             if active_turn_is_review && timeline.active_turn_id.is_some() {
                 timeline.active_review_turn_id = timeline.active_turn_id.clone();
@@ -11020,9 +11047,14 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 })
                 .cloned();
             if state.composer_controls.goal_mode {
-                if !state.composer_attachments.is_empty() {
+                if state.composer_attachments.iter().any(|attachment| {
+                    !matches!(
+                        attachment.kind,
+                        ComposerAttachmentKind::Mention | ComposerAttachmentKind::LocalImage
+                    )
+                }) {
                     state.composer_error =
-                        Some("Goal attachments are not supported yet.".to_owned());
+                        Some("Goals support only local files, folders, and images.".to_owned());
                     return Vec::new();
                 }
                 if text.is_empty() {
@@ -11035,10 +11067,68 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     ));
                     return Vec::new();
                 }
-                state.composer.clear();
-                state.composer_error = None;
-                state.composer_controls.goal_mode = false;
+                let has_attachments = !state.composer_attachments.is_empty();
                 if let Some(task_id) = state.selected_task_id.clone() {
+                    if has_attachments {
+                        let Some(timeline) = state.timelines.get(&task_id) else {
+                            state.composer_error = Some(
+                                "Wait for the chat to finish loading before adding Goal attachments."
+                                    .to_owned(),
+                            );
+                            return Vec::new();
+                        };
+                        if !timeline.runtime_status_loaded {
+                            state.composer_error = Some(
+                                "Wait for the chat to finish loading before adding Goal attachments."
+                                    .to_owned(),
+                            );
+                            return Vec::new();
+                        }
+                        let task_is_busy = state.tasks.iter().any(|task| {
+                            task.id == task_id
+                                && matches!(
+                                    task.status,
+                                    TaskRunStatus::Running | TaskRunStatus::WaitingForApproval
+                                )
+                        });
+                        if timeline.active_turn_id.is_some() || task_is_busy {
+                            state.composer_error =
+                                Some("Goal attachments require an idle chat.".to_owned());
+                            return Vec::new();
+                        }
+                    }
+                    let attachments = std::mem::take(&mut state.composer_attachments);
+                    state.composer.clear();
+                    state.composer_error = None;
+                    state.composer_controls.goal_mode = false;
+                    if has_attachments {
+                        state.goals.entry(task_id.clone()).or_default().status =
+                            LoadStatus::Loading;
+                        state
+                            .timelines
+                            .entry(task_id.clone())
+                            .or_default()
+                            .goal_continuation_pending = false;
+                        return vec![Effect::StartTurn {
+                            task_id,
+                            text: format!("/goal {text}"),
+                            model: state.composer_controls.selected_model.clone(),
+                            effort: state.composer_controls.selected_effort.clone(),
+                            service_tier: state.composer_controls.selected_service_tier.clone(),
+                            permissions: permission_mode
+                                .as_ref()
+                                .map(|mode| mode.permissions.clone()),
+                            approval_policy: permission_mode
+                                .as_ref()
+                                .and_then(|mode| mode.approval_policy.clone()),
+                            approvals_reviewer: permission_mode
+                                .as_ref()
+                                .and_then(|mode| mode.approvals_reviewer),
+                            attachments,
+                            plan_mode: false,
+                            goal_objective: Some(text),
+                        }];
+                    }
                     state.goals.entry(task_id.clone()).or_default().status = LoadStatus::Loading;
                     state
                         .timelines
@@ -11052,6 +11142,10 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                         token_budget: None,
                     }];
                 }
+                let attachments = std::mem::take(&mut state.composer_attachments);
+                state.composer.clear();
+                state.composer_error = None;
+                state.composer_controls.goal_mode = false;
                 return vec![Effect::CreateTask {
                     cwd: state.new_chat_cwd.clone(),
                     model: state.composer_controls.selected_model.clone(),
@@ -11067,7 +11161,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                         .as_ref()
                         .and_then(|mode| mode.approvals_reviewer),
                     initial_message: format!("/goal {text}"),
-                    attachments: Vec::new(),
+                    attachments,
                     plan_mode: false,
                     goal_objective: Some(text),
                     memory_preferences: state.chat_memory.new_chat_preferences,
@@ -11126,6 +11220,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                             .and_then(|mode| mode.approvals_reviewer),
                         attachments,
                         plan_mode,
+                        goal_objective: None,
                     }]
                 }
             } else {
@@ -17381,9 +17476,9 @@ mod tests {
         ReasoningEffortOption, RemoteControlRuntimeStatus, RemoteDevice, RemotePairing,
         RetryableTurnSubmission, RetryableUserMessage, ReviewDelivery, ReviewStartError,
         ReviewTarget, ServiceTierOption, SkillCard, SkillScope, StartedImport, TaskRunStatus,
-        TaskSearchResult, TaskSummary, TerminalDockLocation, ThreadGoal, ThreadGoalStatus,
-        TimelineItem, TimelineKind, UsageLimitWindow, UserInputAnswer, UserInputAnswers,
-        UserInputOption, UserInputQuestion, UserInputRequest,
+        TaskSearchResult, TaskSummary, TerminalDockLocation, ThreadGoal, ThreadGoalState,
+        ThreadGoalStatus, TimelineItem, TimelineKind, UsageLimitWindow, UserInputAnswer,
+        UserInputAnswers, UserInputOption, UserInputQuestion, UserInputRequest,
         appearance_code_theme_supports_variant, computer_app_id_matches, permission_mode_options,
         reduce, stable_reference, validate_mcp_form_content,
     };
@@ -18816,6 +18911,7 @@ mod tests {
                 approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
                 attachments: Vec::new(),
                 plan_mode: false,
+                goal_objective: None,
             }]
         );
 
@@ -18828,7 +18924,8 @@ mod tests {
                 },
             ),
             [Effect::ResumeTask {
-                task_id: "t1".to_owned()
+                task_id: "t1".to_owned(),
+                generation: 1,
             }]
         );
         assert_eq!(state.status_message.as_deref(), Some("settings rejected"));
@@ -19807,10 +19904,16 @@ mod tests {
     }
 
     #[test]
-    fn goal_mode_uses_the_goal_command_for_new_chats_and_direct_set_for_existing_chats() {
+    fn goal_mode_preserves_file_attachments_and_directly_sets_existing_goals_without_them() {
         let mut state = AppState::default();
         state.composer_controls.selected_model = Some("gpt-fast".to_owned());
+        let document = repository_path().join("AGENTS.md");
+        let image = repository_path().join("screen.png");
         reduce(&mut state, Action::ToggleGoalMode);
+        reduce(
+            &mut state,
+            Action::AddComposerAttachments(vec![document.clone(), image.clone()]),
+        );
         reduce(
             &mut state,
             Action::ComposerChanged("Reach native parity".to_owned()),
@@ -19827,13 +19930,26 @@ mod tests {
                 approval_policy: None,
                 approvals_reviewer: None,
                 initial_message: "/goal Reach native parity".to_owned(),
-                attachments: Vec::new(),
+                attachments: vec![
+                    ComposerAttachment {
+                        path: document.clone(),
+                        name: "AGENTS.md".to_owned(),
+                        kind: ComposerAttachmentKind::Mention,
+                    },
+                    ComposerAttachment {
+                        path: image.clone(),
+                        name: "screen.png".to_owned(),
+                        kind: ComposerAttachmentKind::LocalImage,
+                    },
+                ],
                 plan_mode: false,
                 goal_objective: Some("Reach native parity".to_owned()),
                 memory_preferences: None,
             }]
         );
         assert!(!state.composer_controls.goal_mode);
+        assert!(state.composer.is_empty());
+        assert!(state.composer_attachments.is_empty());
 
         reduce(&mut state, Action::TaskCreated(task("t1")));
         reduce(&mut state, Action::ToggleGoalMode);
@@ -19850,6 +19966,171 @@ mod tests {
                 token_budget: None,
             }]
         );
+        state.connection = ConnectionStatus::Online;
+        state.goals.insert(
+            "t1".to_owned(),
+            ThreadGoalState {
+                status: LoadStatus::Ready,
+                goal: Some(ThreadGoal {
+                    task_id: "t1".to_owned(),
+                    objective: "Finish the release".to_owned(),
+                    status: ThreadGoalStatus::Active,
+                    tokens_used: 0,
+                    token_budget: None,
+                    time_used_seconds: 0,
+                    created_at: 1,
+                    updated_at: 1,
+                }),
+                completed_goal: None,
+                completed_goal_turn_id: None,
+            },
+        );
+        let Some(timeline) = state.timelines.get_mut("t1") else {
+            panic!("created task timeline");
+        };
+        timeline.goal_continuation_pending = true;
+
+        reduce(&mut state, Action::ToggleGoalMode);
+        reduce(
+            &mut state,
+            Action::AddComposerAttachments(vec![document.clone(), image.clone()]),
+        );
+        reduce(
+            &mut state,
+            Action::ComposerChanged("Ship the release notes".to_owned()),
+        );
+        assert_eq!(
+            reduce(&mut state, Action::SubmitComposer),
+            [Effect::StartTurn {
+                task_id: "t1".to_owned(),
+                text: "/goal Ship the release notes".to_owned(),
+                model: Some("gpt-fast".to_owned()),
+                effort: None,
+                service_tier: None,
+                permissions: None,
+                approval_policy: None,
+                approvals_reviewer: None,
+                attachments: vec![
+                    ComposerAttachment {
+                        path: document,
+                        name: "AGENTS.md".to_owned(),
+                        kind: ComposerAttachmentKind::Mention,
+                    },
+                    ComposerAttachment {
+                        path: image,
+                        name: "screen.png".to_owned(),
+                        kind: ComposerAttachmentKind::LocalImage,
+                    },
+                ],
+                plan_mode: false,
+                goal_objective: Some("Ship the release notes".to_owned()),
+            }]
+        );
+        assert!(!state.composer_controls.goal_mode);
+        assert!(state.composer.is_empty());
+        assert!(state.composer_attachments.is_empty());
+        assert_eq!(state.goals["t1"].status, LoadStatus::Loading);
+        assert!(!state.timelines["t1"].goal_continuation_pending);
+        assert!(
+            reduce(
+                &mut state,
+                Action::GoalContinuationDue {
+                    task_id: "t1".to_owned(),
+                },
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn goal_attachments_wait_for_a_fresh_idle_runtime_snapshot() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(&mut state, Action::SelectTask("t1".to_owned()));
+        let document = repository_path().join("AGENTS.md");
+        reduce(&mut state, Action::ToggleGoalMode);
+        reduce(
+            &mut state,
+            Action::AddComposerAttachments(vec![document.clone()]),
+        );
+        reduce(
+            &mut state,
+            Action::ComposerChanged("Finish the release".to_owned()),
+        );
+
+        assert!(reduce(&mut state, Action::SubmitComposer).is_empty());
+        assert_eq!(
+            state.composer_error.as_deref(),
+            Some("Wait for the chat to finish loading before adding Goal attachments.")
+        );
+        assert_eq!(state.composer, "Finish the release");
+        assert!(state.composer_controls.goal_mode);
+        assert_eq!(state.composer_attachments.len(), 1);
+
+        reduce(
+            &mut state,
+            Action::TaskRuntimeLoaded {
+                task_id: "t1".to_owned(),
+                generation: 0,
+                active_turn_id: None,
+                active_turn_is_review: false,
+                run_status: Some(TaskRunStatus::Idle),
+            },
+        );
+        assert!(reduce(&mut state, Action::SubmitComposer).is_empty());
+        assert_eq!(
+            state.composer_error.as_deref(),
+            Some("Wait for the chat to finish loading before adding Goal attachments.")
+        );
+
+        reduce(
+            &mut state,
+            Action::TaskRuntimeLoaded {
+                task_id: "t1".to_owned(),
+                generation: 1,
+                active_turn_id: Some("turn-1".to_owned()),
+                active_turn_is_review: false,
+                run_status: Some(TaskRunStatus::Running),
+            },
+        );
+
+        assert!(reduce(&mut state, Action::SubmitComposer).is_empty());
+        assert_eq!(
+            state.composer_error.as_deref(),
+            Some("Goal attachments require an idle chat.")
+        );
+        assert_eq!(state.composer, "Finish the release");
+        assert!(state.composer_controls.goal_mode);
+        assert_eq!(
+            state.composer_attachments,
+            [ComposerAttachment {
+                path: document,
+                name: "AGENTS.md".to_owned(),
+                kind: ComposerAttachmentKind::Mention,
+            }]
+        );
+
+        reduce(
+            &mut state,
+            Action::TaskRuntimeLoaded {
+                task_id: "t1".to_owned(),
+                generation: 1,
+                active_turn_id: None,
+                active_turn_is_review: false,
+                run_status: Some(TaskRunStatus::Idle),
+            },
+        );
+        assert!(matches!(
+            reduce(&mut state, Action::SubmitComposer).as_slice(),
+            [Effect::StartTurn {
+                task_id,
+                text,
+                goal_objective: Some(objective),
+                ..
+            }] if task_id == "t1"
+                && text == "/goal Finish the release"
+                && objective == "Finish the release"
+        ));
     }
 
     #[test]
@@ -19865,6 +20146,7 @@ mod tests {
             [
                 Effect::ResumeTask {
                     task_id: "t1".to_owned(),
+                    generation: 1,
                 },
                 Effect::LoadTimeline {
                     task_id: "t1".to_owned(),
@@ -20911,6 +21193,7 @@ mod tests {
             &mut state,
             Action::TaskRuntimeLoaded {
                 task_id: "t1".to_owned(),
+                generation: 0,
                 active_turn_id: Some("turn-active".to_owned()),
                 active_turn_is_review: true,
                 run_status: Some(TaskRunStatus::Running),
@@ -21111,6 +21394,7 @@ mod tests {
             ),
             [Effect::ResumeTask {
                 task_id: "background".to_owned(),
+                generation: 1,
             }]
         );
         assert_eq!(
