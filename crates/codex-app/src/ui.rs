@@ -244,6 +244,10 @@ fn shell_width_class(width: f32) -> ShellWidthClass {
     }
 }
 
+fn repository_uses_split_diff(preference: bool, width_class: Option<ShellWidthClass>) -> bool {
+    preference && width_class == Some(ShellWidthClass::Wide)
+}
+
 fn modal_surface_width(viewport_width: f32, preferred_width: f32) -> f32 {
     preferred_width.min((viewport_width * MODAL_MAX_VIEWPORT_WIDTH_RATIO).max(0.0))
 }
@@ -14390,8 +14394,11 @@ impl WorkspaceView {
             &self.state.git.unified_diff,
             MAX_RENDERED_DIFF_LINES,
         ));
+        let compact_repository = self.shell_width_class != Some(ShellWidthClass::Wide);
+        let repository_split_view =
+            repository_uses_split_diff(self.diff_split_view, self.shell_width_class);
         let split_diff_rows = Rc::new(split_diff_rows(&diff_lines));
-        let diff_line_count = if self.diff_split_view {
+        let diff_line_count = if repository_split_view {
             split_diff_rows.len()
         } else {
             diff_lines.len()
@@ -14400,7 +14407,6 @@ impl WorkspaceView {
         let split_diff_rows_for_list = Rc::clone(&split_diff_rows);
         let pull_request_button =
             self.render_pull_request_button("repository-pull-request", false, cx);
-        let compact_repository = self.shell_width_class != Some(ShellWidthClass::Wide);
 
         v_flex()
             .flex_1()
@@ -14704,7 +14710,7 @@ impl WorkspaceView {
                                                     .label("Unified")
                                                     .xsmall()
                                                     .ghost()
-                                                    .selected(!self.diff_split_view)
+                                                    .selected(!repository_split_view)
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.diff_split_view = false;
                                                         cx.notify();
@@ -14715,7 +14721,8 @@ impl WorkspaceView {
                                                     .label("Split")
                                                     .xsmall()
                                                     .ghost()
-                                                    .selected(self.diff_split_view)
+                                                    .selected(repository_split_view)
+                                                    .disabled(compact_repository)
                                                     .on_click(cx.listener(|this, _, _, cx| {
                                                         this.diff_split_view = true;
                                                         cx.notify();
@@ -14738,7 +14745,7 @@ impl WorkspaceView {
                                         "Select a changed file. Staged and working-tree hunks are shown separately.",
                                     )
                                     .into_any_element()
-                            } else if self.diff_split_view {
+                            } else if repository_split_view {
                                 uniform_list(
                                     "repository-split-diff",
                                     diff_line_count,
@@ -43772,11 +43779,12 @@ mod tests {
         process_manager_auto_refresh_allowed, project_trigger_matches, project_workspace_options,
         pull_request_merge_submission_enabled, reasoning_effort_target,
         remote_control_status_label, render_conversation_markdown, replace_composer_file_query,
-        reserve_thread_find_history_page, sanitize_assistant_markdown, selected_approval_request,
-        selected_task_copy_value, settings_section_matches, settings_section_refreshes_account,
-        shell_width_class, sidebar_layout_width, split_diff_rows, startup_recovery_card,
-        status_context_total_label, status_rate_limit_label, status_rate_limit_reset_metadata_at,
-        task_slot_id, terminal_tab_label, timeline_activity_content, turn_diff_update_is_accepted,
+        repository_uses_split_diff, reserve_thread_find_history_page, sanitize_assistant_markdown,
+        selected_approval_request, selected_task_copy_value, settings_section_matches,
+        settings_section_refreshes_account, shell_width_class, sidebar_layout_width,
+        split_diff_rows, startup_recovery_card, status_context_total_label,
+        status_rate_limit_label, status_rate_limit_reset_metadata_at, task_slot_id,
+        terminal_tab_label, timeline_activity_content, turn_diff_update_is_accepted,
         validate_plugin_logo_dimensions, worktree_fork_queue_full,
     };
     use codex_core::{
@@ -45480,6 +45488,27 @@ mod tests {
         assert_eq!(shell_width_class(720.1), ShellWidthClass::Compact);
         assert_eq!(shell_width_class(720.0), ShellWidthClass::Narrow);
         assert_eq!(shell_width_class(480.0), ShellWidthClass::Narrow);
+    }
+
+    #[test]
+    fn repository_split_diff_is_wide_only() {
+        assert!(!repository_uses_split_diff(
+            false,
+            Some(ShellWidthClass::Wide)
+        ));
+        assert!(repository_uses_split_diff(
+            true,
+            Some(ShellWidthClass::Wide)
+        ));
+        assert!(!repository_uses_split_diff(
+            true,
+            Some(ShellWidthClass::Compact)
+        ));
+        assert!(!repository_uses_split_diff(
+            true,
+            Some(ShellWidthClass::Narrow)
+        ));
+        assert!(!repository_uses_split_diff(true, None));
     }
 
     #[test]
