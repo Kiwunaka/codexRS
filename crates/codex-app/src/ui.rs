@@ -4531,6 +4531,8 @@ struct WorkspaceView {
     composer_status_session_copied: bool,
     remote_pairing_focus: FocusHandle,
     remote_pairing_focus_requested: bool,
+    remote_confirmation_focus: FocusHandle,
+    remote_confirmation_focus_requested: bool,
     remote_pairing_not_claimed: bool,
     command_palette: Option<Entity<CommandPaletteView>>,
     workspace_modal: Option<WorkspaceModal>,
@@ -4596,6 +4598,7 @@ impl WorkspaceView {
         let keyboard_shortcut_capture_focus = cx.focus_handle();
         let browser_focus = cx.focus_handle();
         let remote_pairing_focus = cx.focus_handle();
+        let remote_confirmation_focus = cx.focus_handle();
         let initial_appearance_preferences = AppearancePreferences::default();
         let initial_appearance_variant = active_appearance_variant(cx);
         let initial_appearance_palette = initial_appearance_preferences
@@ -5520,6 +5523,8 @@ impl WorkspaceView {
             composer_status_session_copied: false,
             remote_pairing_focus,
             remote_pairing_focus_requested: false,
+            remote_confirmation_focus,
+            remote_confirmation_focus_requested: false,
             remote_pairing_not_claimed: false,
             command_palette: None,
             workspace_modal: None,
@@ -36737,6 +36742,9 @@ impl WorkspaceView {
                     .bg(cx.theme().popover)
                     .shadow_xl()
                     .occlude()
+                    .track_focus(&self.remote_confirmation_focus)
+                    .tab_group()
+                    .tab_stop(true)
                     .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
                     .child(
                         div()
@@ -36789,6 +36797,9 @@ impl WorkspaceView {
                     .bg(cx.theme().popover)
                     .shadow_xl()
                     .occlude()
+                    .track_focus(&self.remote_confirmation_focus)
+                    .tab_group()
+                    .tab_stop(true)
                     .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
                     .child(
                         div()
@@ -37012,6 +37023,9 @@ impl WorkspaceView {
                     .bg(cx.theme().popover)
                     .shadow_xl()
                     .occlude()
+                    .track_focus(&self.remote_confirmation_focus)
+                    .tab_group()
+                    .tab_stop(true)
                     .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
                     .child(
                         div()
@@ -38301,6 +38315,21 @@ impl Render for WorkspaceView {
             }
         } else {
             self.remote_pairing_focus_requested = false;
+        }
+        if matches!(
+            self.workspace_modal,
+            Some(
+                WorkspaceModal::EnableRemoteControl
+                    | WorkspaceModal::DisableRemoteControl
+                    | WorkspaceModal::RevokeRemoteDevice { .. }
+            )
+        ) {
+            if !self.remote_confirmation_focus_requested {
+                self.remote_confirmation_focus.focus(window);
+                self.remote_confirmation_focus_requested = true;
+            }
+        } else {
+            self.remote_confirmation_focus_requested = false;
         }
         self.sync_browser_surface_state();
         let bottom_maximum = (viewport_height * 0.5).max(TERMINAL_BOTTOM_MIN_HEIGHT);
