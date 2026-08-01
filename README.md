@@ -54,13 +54,17 @@ repository redistributes.
 | Tasks | Bounded task pages, resume, fork, composer, streaming timeline, and approvals |
 | Repository | Status, staged/unstaged files, large virtualized diffs, branch switching, and safe sibling worktrees |
 | Terminal | Native PTY/ConPTY session with bounded VT output |
-| Computer Use | Windows only: native window discovery and control with per-app approval, task access, and an app-server-owned always-allowed list |
+| Computer Use | Windows: native window discovery and control with per-app approval, task access, and an app-server-owned always-allowed list; Linux: bounded read-only screenshot observation of X11/XWayland windows when `DISPLAY` is nonempty |
 | Plugins | Native directory tabs, bounded artwork, installed/source management, creation handoff, marketplace add/remove/upgrade, install, and uninstall through app-server methods |
 | Persistence | Single-writer codexRS SQLite for UI preferences and a bounded local-project registry with names and pins |
-| Platforms | Windows source build smoke-tested; Ubuntu UI, app-server, Git, and PTY build and test in CI; Linux Computer Use is unavailable in RC4 |
+| Platforms | Windows source build smoke-tested; Ubuntu UI, app-server, Git, and PTY build and test in CI; Linux Computer Use provides X11/XWayland screenshot observation when `DISPLAY` is nonempty |
 
-Computer Use is available only on Windows in RC4 and is opt-in for each task.
-Every read or control action carries the
+Computer Use is opt-in for each task. Windows provides the full discovery and
+control slice below. On Linux, it provides only bounded, read-only screenshot
+observation of X11/XWayland windows when `DISPLAY` is nonempty; text
+extraction, input, app launch, persistent approvals, the overlay, and
+interruption monitoring are unavailable, and pure Wayland without XWayland is
+unsupported. On Windows, every read or control action carries the
 exact `Window { app, id, title? }` returned by bounded discovery; codexRS
 rehydrates the opaque id and verifies its current owner before acting. The
 window selected in the native inspector is only a manual convenience. The
@@ -152,7 +156,10 @@ Computer Use from an archive whose source or checksum you do not trust.
 The Linux archive is not a system package: it does not install runtime
 dependencies or desktop integration. Ubuntu CI builds and tests the binary, but
 the extracted archive has not received a desktop smoke test. Linux Computer Use
-is unavailable in RC4; X11/XWayland and pure-Wayland support remain future work.
+provides only bounded, read-only screenshot observation of X11/XWayland windows
+when `DISPLAY` is nonempty. Text extraction, input, app launch, persistent
+approvals, the overlay, and interruption monitoring are unavailable; pure
+Wayland without XWayland is unsupported.
 
 ### 3. Build codexRS
 
