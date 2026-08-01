@@ -11163,12 +11163,23 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             timeline.interrupt_pending = false;
             timeline.compaction_in_flight = false;
-            if let Some(task) = state.tasks.iter_mut().find(|task| task.id == task_id) {
-                task.status = if failed {
-                    TaskRunStatus::Failed
+            let task_exists =
+                if let Some(task) = state.tasks.iter_mut().find(|task| task.id == task_id) {
+                    task.status = if failed {
+                        TaskRunStatus::Failed
+                    } else {
+                        TaskRunStatus::Completed
+                    };
+                    true
                 } else {
-                    TaskRunStatus::Completed
+                    false
                 };
+            if completed_active
+                && !failed
+                && task_exists
+                && state.selected_task_id.as_deref() != Some(task_id.as_str())
+            {
+                state.status_message = Some("A background chat completed.".to_owned());
             }
             schedule_goal_continuation(state, task_id)
         }
@@ -19032,6 +19043,104 @@ mod tests {
         );
         assert!(state.timelines["t1"].interrupt_pending);
         assert_eq!(state.tasks[0].status, TaskRunStatus::Running);
+        assert_eq!(state.status_message, None);
+    }
+
+    #[test]
+    fn only_successful_background_turns_show_a_completion_banner() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("selected")));
+        reduce(&mut state, Action::TaskCreated(task("background")));
+        reduce(&mut state, Action::SelectTask("selected".to_owned()));
+
+        reduce(
+            &mut state,
+            Action::TurnStarted {
+                task_id: "background".to_owned(),
+                turn_id: "background-success".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::TurnCompleted {
+                task_id: "background".to_owned(),
+                turn_id: "background-success".to_owned(),
+                failed: false,
+            },
+        );
+        assert_eq!(
+            state.status_message.as_deref(),
+            Some("A background chat completed.")
+        );
+
+        reduce(&mut state, Action::ClearStatus);
+        reduce(
+            &mut state,
+            Action::TurnCompleted {
+                task_id: "background".to_owned(),
+                turn_id: "background-success".to_owned(),
+                failed: false,
+            },
+        );
+        reduce(
+            &mut state,
+            Action::TurnCompleted {
+                task_id: "unknown".to_owned(),
+                turn_id: "unknown-success".to_owned(),
+                failed: false,
+            },
+        );
+        assert_eq!(state.status_message, None);
+
+        reduce(
+            &mut state,
+            Action::TurnStarted {
+                task_id: "selected".to_owned(),
+                turn_id: "selected-success".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::TurnCompleted {
+                task_id: "selected".to_owned(),
+                turn_id: "selected-success".to_owned(),
+                failed: false,
+            },
+        );
+        assert_eq!(state.status_message, None);
+
+        reduce(
+            &mut state,
+            Action::TurnStarted {
+                task_id: "background".to_owned(),
+                turn_id: "background-failed".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::TurnCompleted {
+                task_id: "background".to_owned(),
+                turn_id: "background-failed".to_owned(),
+                failed: true,
+            },
+        );
+        assert_eq!(state.status_message, None);
+
+        reduce(
+            &mut state,
+            Action::TurnStarted {
+                task_id: "background".to_owned(),
+                turn_id: "background-interrupted".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::TurnInterrupted {
+                task_id: "background".to_owned(),
+                turn_id: "background-interrupted".to_owned(),
+            },
+        );
+        assert_eq!(state.status_message, None);
     }
 
     #[test]
@@ -22919,6 +23028,7 @@ mod tests {
                 failed: false,
             },
         );
+        assert_eq!(state.status_message, None);
         let effects = reduce(
             &mut state,
             Action::ReviewStarted {
