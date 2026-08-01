@@ -178,7 +178,7 @@ use codex_storage::{
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use serde_json::{Value, json};
 
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 use codex_protocol::{DynamicToolFunction, DynamicToolNamespaceTool, DynamicToolSpec};
 
 const BACKEND_COMMAND_CAPACITY: usize = 64;
@@ -10802,6 +10802,7 @@ fn computer_use_allowed_app_ids_value(app_ids: &[String]) -> Value {
     )
 }
 
+#[cfg(windows)]
 fn persist_computer_use_allowed_app(
     app_server: &AppServerConnection,
     application_id: &str,
@@ -12369,6 +12370,8 @@ fn respond_to_approval(
     computer_url_policy: &mut ComputerUseUrlPolicy,
     mut computer_overlay: Option<&mut ComputerUseSystemOverlay>,
 ) {
+    #[cfg(not(windows))]
+    let _ = computer_allowed_app_ids;
     let Some(pending) = pending_approvals.remove(&request_id) else {
         return;
     };
