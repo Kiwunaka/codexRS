@@ -5914,6 +5914,10 @@ fn run_effect(
             memory_preferences,
         } => {
             let runtime_workspace_roots = cwd.clone().map(|path| vec![path]);
+            #[cfg(windows)]
+            let dynamic_tools = Some(computer_use_dynamic_tools());
+            #[cfg(not(windows))]
+            let dynamic_tools = None;
             match app_server.start_thread(ThreadStartParams {
                 model: model.clone(),
                 service_tier: Some(service_tier.clone()),
@@ -5922,7 +5926,7 @@ fn run_effect(
                 permissions: permissions.clone(),
                 approval_policy: approval_policy.clone(),
                 approvals_reviewer: approvals_reviewer.map(protocol_approvals_reviewer),
-                dynamic_tools: Some(computer_use_dynamic_tools()),
+                dynamic_tools,
                 config: memory_preferences.map(|preferences| {
                     json!({
                         "memories.generate_memories": preferences.generate_memories,
@@ -5935,6 +5939,7 @@ fn run_effect(
                 Ok(response) => {
                     let task = map_task(response.thread);
                     let task_id = task.id.clone();
+                    #[cfg(windows)]
                     computer_capable_threads.insert(task_id.clone());
                     emit(events, Action::TaskCreated(task));
                     if let Some(preferences) = memory_preferences {
@@ -5946,6 +5951,7 @@ fn run_effect(
                             },
                         );
                     }
+                    #[cfg(windows)]
                     emit(
                         events,
                         Action::ComputerUseAvailable {

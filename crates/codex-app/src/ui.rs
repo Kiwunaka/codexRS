@@ -33686,7 +33686,7 @@ impl WorkspaceView {
                     .into_any_element()
             })
             .collect::<Vec<_>>();
-        let any_app_available = cfg!(any(windows, target_os = "linux"));
+        let any_app_available = cfg!(windows);
 
         v_flex()
             .flex_1()
