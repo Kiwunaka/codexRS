@@ -134,9 +134,12 @@ jobs:
           $name = "codexrs-$env:PACKAGE_LABEL-windows-x86_64"
           $root = Join-Path dist $name
           New-Item -ItemType Directory -Path $root -Force | Out-Null
+          New-Item -ItemType Directory -Path (Join-Path $root "docs/assets") -Force | Out-Null
           Copy-Item target/release/codexrs.exe $root
           Copy-Item target/release/codex-computer-use-overlay.exe $root
           Copy-Item README.md,README.ru.md,README.zh-CN.md,LICENSE,CHANGELOG.md,THIRD_PARTY_LICENSES.html $root
+          Copy-Item docs/architecture.md,docs/parity-matrix.md,docs/platform-support.md,docs/prior-art.md (Join-Path $root "docs")
+          Copy-Item docs/assets/codexrs-hero.png (Join-Path $root "docs/assets")
           Compress-Archive -Path $root -DestinationPath "dist/$name.zip"
 
       - name: Package Linux
@@ -146,9 +149,11 @@ jobs:
           set -euo pipefail
           name="codexrs-${PACKAGE_LABEL}-linux-x86_64"
           root="dist/${name}"
-          mkdir -p "${root}"
+          mkdir -p "${root}/docs/assets"
           install -m 0755 target/release/codexrs "${root}/codexrs"
           cp README.md README.ru.md README.zh-CN.md LICENSE CHANGELOG.md THIRD_PARTY_LICENSES.html "${root}/"
+          cp docs/architecture.md docs/parity-matrix.md docs/platform-support.md docs/prior-art.md "${root}/docs/"
+          cp docs/assets/codexrs-hero.png "${root}/docs/assets/"
           tar -C dist -czf "dist/${name}.tar.gz" "${name}"
 
       - uses: actions/upload-artifact@v7
