@@ -1,10 +1,11 @@
 use crate::{
-    h_flex, text::Text, tooltip::Tooltip, ActiveTheme, Disableable, Side, Sizable, Size, StyledExt,
+    ActiveTheme, Disableable, FocusableExt as _, Side, Sizable, Size, StyledExt, h_flex,
+    text::Text, tooltip::Tooltip,
 };
 use gpui::{
-    div, prelude::FluentBuilder as _, px, Animation, AnimationExt as _, App, ElementId,
-    InteractiveElement, IntoElement, ParentElement as _, RenderOnce, SharedString,
-    StatefulInteractiveElement, StyleRefinement, Styled, Window,
+    Animation, AnimationExt as _, App, ClickEvent, ElementId, InteractiveElement, IntoElement,
+    ParentElement as _, RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement,
+    Styled, Window, div, prelude::FluentBuilder as _, px,
 };
 use std::{rc::Rc, time::Duration};
 
@@ -91,7 +92,14 @@ impl RenderOnce for Switch {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let checked = self.checked;
         let on_click = self.on_click.clone();
+        let keyboard_on_click = on_click.clone();
         let toggle_state = window.use_keyed_state(self.id.clone(), cx, |_, _| checked);
+        let focus_handle = window
+            .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
+            .read(cx)
+            .clone()
+            .tab_stop(true);
+        let is_focused = focus_handle.is_focused(window);
 
         let (bg, toggle_bg) = match checked {
             true => (cx.theme().primary, cx.theme().switch_thumb),
@@ -127,6 +135,8 @@ impl RenderOnce for Switch {
                 .id(self.id.clone())
                 .gap_2()
                 .items_start()
+                .when(!self.disabled, |this| this.track_focus(&focus_handle))
+                .focus_ring(is_focused, px(2.), window, cx)
                 .when(self.label_side.is_left(), |this| this.flex_row_reverse())
                 .child(
                     // Switch Bar
@@ -207,6 +217,18 @@ impl RenderOnce for Switch {
                             cx.stop_propagation();
                             _ = toggle_state.update(cx, |this, _| *this = checked);
                             on_click(&!checked, window, cx);
+                        })
+                    },
+                )
+                .when_some(
+                    keyboard_on_click.filter(|_| !self.disabled),
+                    |this, on_click| {
+                        let toggle_state = toggle_state.clone();
+                        this.on_click(move |event, window, cx| {
+                            if matches!(event, ClickEvent::Keyboard(_)) {
+                                _ = toggle_state.update(cx, |this, _| *this = checked);
+                                on_click(&!checked, window, cx);
+                            }
                         })
                     },
                 ),
