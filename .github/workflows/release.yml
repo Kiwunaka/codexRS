@@ -211,8 +211,10 @@ jobs:
           The Linux tar.gz is not a system package and does not install runtime
           dependencies. Ubuntu CI builds and tests the binary; the extracted
           archive has not yet received a desktop smoke test. Linux Computer Use
-          is unavailable in RC4; X11/XWayland and pure-Wayland support remain
-          future work.
+          provides only bounded, read-only screenshot observation of X11/XWayland
+          windows when `DISPLAY` is nonempty. Text extraction, input, app launch,
+          persistent approvals, the overlay, and interruption monitoring are
+          unavailable; pure Wayland without XWayland is unsupported.
           EOF
           )"
           options=()
