@@ -25588,6 +25588,12 @@ impl WorkspaceView {
             .cloned()
             .collect::<Vec<_>>();
         let upgrade_pending = self.state.marketplace.marketplace_upgrade_pending;
+        let pending_upgrade_name = self
+            .state
+            .marketplace
+            .pending_marketplace_upgrade_name
+            .clone();
+        let global_upgrade_pending = upgrade_pending && pending_upgrade_name.is_none();
         let remove_pending = self.state.marketplace.pending_marketplace_remove.clone();
         let any_pending = upgrade_pending || remove_pending.is_some();
         let mutation_error = self.state.marketplace.marketplace_mutation_error.clone();
@@ -25610,6 +25616,10 @@ impl WorkspaceView {
                     .iter()
                     .map(|source| {
                         let marketplace_name = source.name.clone();
+                        let upgrade_marketplace_name = marketplace_name.clone();
+                        let remove_marketplace_name = marketplace_name.clone();
+                        let upgrading =
+                            pending_upgrade_name.as_deref() == Some(marketplace_name.as_str());
                         let pending = remove_pending.as_deref() == Some(marketplace_name.as_str());
                         let path = source
                             .path
@@ -25650,22 +25660,45 @@ impl WorkspaceView {
                                     ),
                             )
                             .child(
-                                Button::new(SharedString::from(format!(
-                                    "remove-marketplace-{marketplace_name}"
-                                )))
-                                .icon(IconName::Delete)
-                                .label(if pending { "Removing…" } else { "Remove" })
-                                .small()
-                                .danger()
-                                .disabled(any_pending || !source.removable)
-                                .on_click(cx.listener(
-                                    move |this, _, _, cx| {
-                                        this.confirm_remove_marketplace(
-                                            marketplace_name.clone(),
-                                            cx,
-                                        );
-                                    },
-                                )),
+                                h_flex()
+                                    .gap_2()
+                                    .child(
+                                        Button::new(SharedString::from(format!(
+                                            "upgrade-marketplace-{marketplace_name}"
+                                        )))
+                                        .icon(IconName::Redo)
+                                        .label(if upgrading { "Upgrading…" } else { "Upgrade" })
+                                        .small()
+                                        .disabled(any_pending)
+                                        .on_click(
+                                            cx.listener(move |this, _, _, cx| {
+                                                this.dispatch(
+                                                    Action::UpgradeMarketplaces(Some(
+                                                        upgrade_marketplace_name.clone(),
+                                                    )),
+                                                    cx,
+                                                );
+                                            }),
+                                        ),
+                                    )
+                                    .child(
+                                        Button::new(SharedString::from(format!(
+                                            "remove-marketplace-{marketplace_name}"
+                                        )))
+                                        .icon(IconName::Delete)
+                                        .label(if pending { "Removing…" } else { "Remove" })
+                                        .small()
+                                        .danger()
+                                        .disabled(any_pending || !source.removable)
+                                        .on_click(
+                                            cx.listener(move |this, _, _, cx| {
+                                                this.confirm_remove_marketplace(
+                                                    remove_marketplace_name.clone(),
+                                                    cx,
+                                                );
+                                            }),
+                                        ),
+                                    ),
                             )
                     })
                     .collect::<Vec<_>>();
@@ -25703,7 +25736,7 @@ impl WorkspaceView {
                                     .child(
                                         Button::new("upgrade-marketplaces")
                                             .icon(IconName::Redo)
-                                            .label(if upgrade_pending {
+                                            .label(if global_upgrade_pending {
                                                 "Upgrading…"
                                             } else {
                                                 "Upgrade"
