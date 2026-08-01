@@ -41418,8 +41418,10 @@ struct AssistantFinding {
 
 fn sanitize_assistant_markdown(value: &str) -> Option<String> {
     let tree = markdown::to_mdast(value, &ParseOptions::gfm()).ok()?;
+    let mut link_definitions = HashMap::new();
+    collect_markdown_link_definitions(&tree, &mut link_definitions);
     let mut replacements = Vec::new();
-    collect_assistant_markdown_replacements(value, &tree, &mut replacements);
+    collect_assistant_markdown_replacements(value, &tree, &link_definitions, &mut replacements);
     if replacements.is_empty() {
         return Some(value.to_owned());
     }
@@ -41448,17 +41450,25 @@ fn sanitize_assistant_markdown(value: &str) -> Option<String> {
 fn collect_assistant_markdown_replacements(
     source: &str,
     node: &Node,
+    link_definitions: &HashMap<String, String>,
     replacements: &mut Vec<MarkdownReplacement>,
 ) {
     let replacement = match node {
-        Node::Image(image) => Some(markdown_image_replacement(node, &image.alt)),
-        Node::ImageReference(image) => Some(markdown_image_replacement(node, &image.alt)),
+        Node::Image(image) => markdown_image_replacement(node, &image.alt),
+        Node::ImageReference(image) => markdown_image_replacement(node, &image.alt),
+        Node::Link(link) => markdown_link_replacement(source, node, Some(&link.url)),
+        Node::LinkReference(link) => {
+            markdown_link_replacement(source, node, link_definitions.get(&link.identifier))
+        }
+        Node::Definition(definition) if !is_supported_external_url(&definition.url) => {
+            markdown_definition_replacement(node)
+        }
         Node::Html(html) if html.value.to_ascii_lowercase().contains("<img") => {
-            Some(markdown_image_replacement(node, ""))
+            markdown_image_replacement(node, "")
         }
         _ => None,
     };
-    if let Some(replacement) = replacement.flatten() {
+    if let Some(replacement) = replacement {
         replacements.push(replacement);
         return;
     }
@@ -41485,9 +41495,62 @@ fn collect_assistant_markdown_replacements(
     }
     if let Some(children) = node.children() {
         for child in children {
-            collect_assistant_markdown_replacements(source, child, replacements);
+            collect_assistant_markdown_replacements(source, child, link_definitions, replacements);
         }
     }
+}
+
+fn collect_markdown_link_definitions(node: &Node, definitions: &mut HashMap<String, String>) {
+    if let Node::Definition(definition) = node {
+        definitions
+            .entry(definition.identifier.clone())
+            .or_insert_with(|| definition.url.clone());
+    }
+    if let Some(children) = node.children() {
+        for child in children {
+            collect_markdown_link_definitions(child, definitions);
+        }
+    }
+}
+
+fn markdown_link_replacement(
+    source: &str,
+    node: &Node,
+    url: Option<&String>,
+) -> Option<MarkdownReplacement> {
+    if url.is_some_and(|url| is_supported_external_url(url)) {
+        return None;
+    }
+    let position = node.position()?;
+    let label = node
+        .children()
+        .and_then(|children| {
+            let start = children.first()?.position()?.start.offset;
+            let end = children.last()?.position()?.end.offset;
+            (position.start.offset <= start
+                && start <= end
+                && end <= position.end.offset
+                && end <= source.len()
+                && source.is_char_boundary(start)
+                && source.is_char_boundary(end))
+            .then(|| sanitize_assistant_markdown(&source[start..end]))
+            .flatten()
+        })
+        .unwrap_or_else(|| escaped_markdown_plain_text(&node.to_string()));
+    Some(MarkdownReplacement {
+        start: position.start.offset,
+        end: position.end.offset,
+        text: label,
+    })
+}
+
+fn markdown_definition_replacement(node: &Node) -> Option<MarkdownReplacement> {
+    let position = node.position()?;
+    Some(MarkdownReplacement {
+        start: position.start.offset,
+        end: position.end.offset,
+        text: String::new(),
+    })
 }
 
 fn markdown_image_replacement(node: &Node, alt: &str) -> Option<MarkdownReplacement> {
@@ -46151,6 +46214,46 @@ mod tests {
         assert!(sanitized.starts_with("До Image: схема после."));
         assert!(sanitized.contains("\n\nImage\n\n"));
         assert!(!sanitized.contains("<img"));
+    }
+
+    #[test]
+    fn assistant_markdown_keeps_supported_external_links() {
+        let markdown = "[OpenAI](https://openai.com/research) [local][docs]\n\n[docs]: http://127.0.0.1:8080/docs";
+        assert_eq!(
+            sanitize_assistant_markdown(markdown).as_deref(),
+            Some(markdown)
+        );
+    }
+
+    #[test]
+    fn assistant_markdown_neutralizes_unsupported_link_targets_without_losing_labels() {
+        let markdown = "[**Unsafe** `label`](javascript:alert(1)) [file](file:///C:/secret) [relative](docs/readme.md) [reference][bad]\n\n[bad]: data:text/plain,hidden\n\n`[keep](file:///C:/code)`\n\n```text\n[keep](javascript:alert(1))\n```";
+        let Some(sanitized) = sanitize_assistant_markdown(markdown) else {
+            panic!("valid markdown");
+        };
+
+        assert!(sanitized.contains("**Unsafe** `label` file relative reference"));
+        assert!(!sanitized.contains("[**Unsafe** `label`](javascript:alert(1))"));
+        assert!(!sanitized.contains("[file](file:///C:/secret)"));
+        assert!(!sanitized.contains("[relative](docs/readme.md)"));
+        assert!(!sanitized.contains("[reference][bad]"));
+        assert!(!sanitized.contains("[bad]: data:text/plain,hidden"));
+        assert!(sanitized.contains("`[keep](file:///C:/code)`"));
+        assert!(sanitized.contains("```text\n[keep](javascript:alert(1))\n```"));
+    }
+
+    #[test]
+    fn assistant_markdown_neutralizes_images_inside_unsafe_link_labels() {
+        let markdown =
+            "[![secret](https://example.test/private.png) **details**](javascript:alert(1))";
+        let Some(sanitized) = sanitize_assistant_markdown(markdown) else {
+            panic!("valid markdown");
+        };
+
+        assert_eq!(sanitized, "Image: secret **details**");
+        assert!(!sanitized.contains("!["));
+        assert!(!sanitized.contains("example.test"));
+        assert!(!sanitized.contains("javascript:"));
     }
 
     #[test]
