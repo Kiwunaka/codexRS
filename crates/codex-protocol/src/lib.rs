@@ -507,6 +507,12 @@ pub struct CreditsSnapshot {
     pub balance: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RateLimitResetCreditsSummary {
+    pub available_count: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RateLimitSnapshot {
@@ -522,6 +528,7 @@ pub struct RateLimitSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct GetAccountRateLimitsResponse {
     pub rate_limits: RateLimitSnapshot,
+    pub rate_limit_reset_credits: Option<RateLimitResetCreditsSummary>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -3719,11 +3726,17 @@ mod tests {
                 "rateLimitReachedType": null
             },
             "rateLimitsByLimitId": null,
-            "rateLimitResetCredits": null
+            "rateLimitResetCredits": {
+                "availableCount": 2,
+                "credits": null
+            }
         }));
         assert!(matches!(
             limits,
-            Ok(GetAccountRateLimitsResponse { rate_limits })
+            Ok(GetAccountRateLimitsResponse {
+                rate_limits,
+                rate_limit_reset_credits: Some(reset_credits),
+            })
                 if rate_limits.primary.as_ref().is_some_and(|window| {
                     window.used_percent == 37.5 && window.window_duration_mins == Some(300)
                 })
@@ -3732,6 +3745,7 @@ mod tests {
                         .as_ref()
                         .and_then(|credits| credits.balance.as_deref())
                         == Some("125.5")
+                    && reset_credits.available_count == 2
         ));
 
         let token_usage = serde_json::from_value::<GetAccountTokenUsageResponse>(json!({

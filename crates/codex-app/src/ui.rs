@@ -35240,6 +35240,14 @@ impl WorkspaceView {
                 cards.push(settings_card("Token activity", message, cx));
             }
 
+            if let Some(available_count) = account.rate_limit_reset_credits_available {
+                cards.push(settings_card(
+                    "Usage limit resets",
+                    usage_limit_reset_summary_copy(available_count),
+                    cx,
+                ));
+            }
+
             if let Some(message) = account.usage_error {
                 cards.push(settings_card("General usage limits", message, cx));
             } else if account.usage_limits.is_empty() {
@@ -40949,6 +40957,14 @@ fn format_token_activity_days(days: i64) -> String {
     )
 }
 
+fn usage_limit_reset_summary_copy(available_count: u32) -> String {
+    match available_count {
+        0 => "You don't have any usage limit resets available.".to_owned(),
+        1 => "You have 1 usage limit reset available.".to_owned(),
+        count => format!("You have {count} usage limit resets available."),
+    }
+}
+
 fn approval_file_change_count(item: &TimelineItem) -> usize {
     if item.kind != TimelineKind::FileChange {
         return 1;
@@ -44153,7 +44169,8 @@ mod tests {
         sidebar_layout_width, split_diff_rows, startup_recovery_card, status_context_total_label,
         status_rate_limit_label, status_rate_limit_reset_metadata_at, task_slot_id,
         terminal_tab_label, timeline_activity_content, turn_diff_update_is_accepted,
-        validate_plugin_logo_dimensions, worktree_fork_queue_full, worktree_use_disabled,
+        usage_limit_reset_summary_copy, validate_plugin_logo_dimensions, worktree_fork_queue_full,
+        worktree_use_disabled,
     };
     use codex_core::{
         AccountAuthOperation, AccountKind, AccountProfile, AccountState, AppCard, AppState,
@@ -44188,6 +44205,22 @@ mod tests {
         assert_eq!(format_token_activity_duration(i64::MAX), "106752Bd");
         assert_eq!(format_token_activity_days(1), "1 day");
         assert_eq!(format_token_activity_days(i64::MAX), "9223372037B days");
+    }
+
+    #[test]
+    fn usage_limit_reset_summary_copy_pluralizes_the_available_count() {
+        assert_eq!(
+            usage_limit_reset_summary_copy(0),
+            "You don't have any usage limit resets available."
+        );
+        assert_eq!(
+            usage_limit_reset_summary_copy(1),
+            "You have 1 usage limit reset available."
+        );
+        assert_eq!(
+            usage_limit_reset_summary_copy(2),
+            "You have 2 usage limit resets available."
+        );
     }
 
     #[test]
