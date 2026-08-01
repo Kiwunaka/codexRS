@@ -5,6 +5,21 @@ All notable changes to codexRS are documented here. The project follows
 
 ## [Unreleased]
 
+## [0.1.0-rc.3] - 2026-08-01
+
+### Added
+
+- Native Code review with saved Inline/Detached delivery preference.
+- Composer `Continue in` Work picker for local work or a new worktree.
+- Permission picker descriptions for the available profiles.
+
+### Fixed
+
+- Release archives include the README-linked documentation and assets.
+- Windows rejects case-aliased nested worktree paths.
+- Stale repository snapshots and cross-repository branch results no longer
+  update the active repository; duplicate worktree handoffs are blocked.
+
 ## [0.1.0-rc.2] - 2026-07-31
 
 ### Added
