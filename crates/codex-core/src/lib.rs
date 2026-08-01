@@ -2510,6 +2510,7 @@ pub struct MarketplaceState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GitState {
+    pub refresh_generation: u64,
     pub repository_root: Option<PathBuf>,
     pub branch: Option<String>,
     pub default_branch: Option<String>,
@@ -5293,7 +5294,11 @@ pub enum Action {
     },
     ClosePullRequestDetail,
     RefreshGit,
-    GitSnapshotLoaded(Box<GitState>),
+    GitSnapshotLoaded {
+        generation: u64,
+        git: Box<GitState>,
+        error: Option<String>,
+    },
     StartReview {
         target: ReviewTarget,
         delivery: ReviewDelivery,
@@ -5987,6 +5992,7 @@ pub enum Effect {
         window_id: String,
     },
     RefreshGit {
+        generation: u64,
         cwd: PathBuf,
     },
     StartReview {
@@ -6506,6 +6512,19 @@ fn selected_task_cwds(state: &AppState) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
+fn next_git_refresh_generation(state: &mut AppState) -> u64 {
+    state.git.refresh_generation = state.git.refresh_generation.saturating_add(1);
+    state.git.refresh_generation
+}
+
+fn clear_git_for_context_change(state: &mut AppState) {
+    let refresh_generation = next_git_refresh_generation(state);
+    state.git = GitState {
+        refresh_generation,
+        ..GitState::default()
+    };
+}
+
 fn composer_workspace_roots(state: &AppState) -> Vec<PathBuf> {
     let mut roots = selected_task_cwds(state);
     if roots.is_empty()
@@ -6611,6 +6630,9 @@ fn change_fuzzy_file_search(state: &mut AppState, query: Option<String>) -> Vec<
 }
 
 fn prepare_new_chat(state: &mut AppState, cwd: Option<PathBuf>) -> Vec<Effect> {
+    if state.selected_task_id.is_some() || state.new_chat_cwd != cwd {
+        clear_git_for_context_change(state);
+    }
     let mut effects = clear_fuzzy_file_search(state);
     state.route = MainRoute::Tasks;
     state.selected_task_id = None;
@@ -8200,6 +8222,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     Some("The selected project folder is unavailable.".to_owned());
                 Vec::new()
             } else {
+                if state.new_chat_cwd.as_ref() != Some(&path) {
+                    clear_git_for_context_change(state);
+                }
                 remember_local_project(state, &path);
                 let mut effects = clear_fuzzy_file_search(state);
                 state.route = MainRoute::Tasks;
@@ -8698,6 +8723,10 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         Action::TaskCreated(task) => {
             let task_id = task.id.clone();
             let cwd = task.cwd.clone();
+            let previous_task_id = state.selected_task_id.clone();
+            let previous_cwd = selected_task_cwds(state).into_iter().next();
+            let git_context_changed = previous_task_id.as_deref() != Some(task_id.as_str())
+                || previous_cwd.as_ref() != Some(&cwd);
             remember_local_project(state, &cwd);
             state.new_chat_cwd = None;
             state.chat_memory.new_chat_preferences = None;
@@ -8710,9 +8739,13 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 .timelines
                 .insert(task_id.clone(), TimelineState::default());
             state.goals.insert(task_id, ThreadGoalState::default());
+            if git_context_changed {
+                clear_git_for_context_change(state);
+            }
+            let generation = next_git_refresh_generation(state);
             vec![
                 Effect::RememberWorkspace { path: cwd.clone() },
-                Effect::RefreshGit { cwd },
+                Effect::RefreshGit { generation, cwd },
             ]
         }
         Action::LoadMoreTasks => {
@@ -8825,6 +8858,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::SelectTask(task_id) => {
             let previous_cwds = composer_workspace_roots(state);
+            let previous_task_id = state.selected_task_id.clone();
+            let previous_cwd = selected_task_cwds(state).into_iter().next();
             if !state.tasks.iter().any(|task| task.id == task_id)
                 && let Some(task) = state
                     .task_search
@@ -8854,16 +8889,18 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             if let Some(cwd) = selected_cwd.as_ref() {
                 remember_local_project(state, cwd);
             }
-            let mut effects = selected_cwd
-                .map(|cwd| {
-                    vec![
-                        Effect::RememberWorkspace { path: cwd.clone() },
-                        Effect::RefreshGit { cwd },
-                    ]
-                })
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>();
+            let git_context_changed = previous_task_id.as_deref() != Some(task_id.as_str())
+                || previous_cwd != selected_cwd;
+            if git_context_changed {
+                clear_git_for_context_change(state);
+            }
+            let mut effects = selected_cwd.map_or_else(Vec::new, |cwd| {
+                let generation = next_git_refresh_generation(state);
+                vec![
+                    Effect::RememberWorkspace { path: cwd.clone() },
+                    Effect::RefreshGit { generation, cwd },
+                ]
+            });
             let selected_cwds = composer_workspace_roots(state);
             if selected_cwds != previous_cwds {
                 state.marketplace.skills_status = Some(LoadStatus::Loading);
@@ -15217,20 +15254,31 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             clear_pull_request_diff(state);
             Vec::new()
         }
-        Action::RefreshGit => state
-            .selected_task_id
-            .as_deref()
-            .and_then(|task_id| state.tasks.iter().find(|task| task.id == task_id))
-            .map(|task| {
-                vec![Effect::RefreshGit {
-                    cwd: task.cwd.clone(),
-                }]
-            })
-            .unwrap_or_else(|| {
+        Action::RefreshGit => {
+            let cwd = state
+                .selected_task_id
+                .as_deref()
+                .and_then(|task_id| state.tasks.iter().find(|task| task.id == task_id))
+                .map(|task| task.cwd.clone());
+            if let Some(cwd) = cwd {
+                let generation = next_git_refresh_generation(state);
+                vec![Effect::RefreshGit { generation, cwd }]
+            } else {
                 state.status_message = Some("Select a task before refreshing Git.".to_owned());
                 Vec::new()
-            }),
-        Action::GitSnapshotLoaded(git) => {
+            }
+        }
+        Action::GitSnapshotLoaded {
+            generation,
+            mut git,
+            error,
+        } => {
+            if generation != state.git.refresh_generation {
+                return Vec::new();
+            }
+            if let Some(error) = error {
+                state.status_message = Some(bounded_string(error, 16 * 1024));
+            }
             let previous_repository_root = state.git.repository_root.clone();
             let previous_scope = state.git.selected_scope;
             let previous_commit_sha = state.git.selected_commit_sha.clone();
@@ -15245,6 +15293,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                         git.default_branch.as_deref() != Some(branch.as_str())
                             && git.default_branch.is_some()
                     });
+            git.refresh_generation = generation;
             state.git = *git;
             state.git.selected_commit_sha = previous_commit_sha
                 .filter(|sha| state.git.commits.iter().any(|commit| commit.sha == *sha));
@@ -19531,6 +19580,7 @@ mod tests {
                     path: repository.clone(),
                 },
                 Effect::RefreshGit {
+                    generation: 2,
                     cwd: repository.clone(),
                 },
                 Effect::RefreshSkills {
@@ -19569,6 +19619,57 @@ mod tests {
                 generation: 1,
                 cursor: Some("next-page".to_owned()),
             }]
+        );
+    }
+
+    #[test]
+    fn stale_git_snapshot_and_error_are_ignored_after_switching_tasks() {
+        let mut state = AppState::default();
+        let first_root = repository_path();
+        let second_root = first_root.with_file_name("repo-second");
+        let mut first = task_in_repository("first");
+        first.cwd = first_root.clone();
+        let mut second = task_in_repository("second");
+        second.cwd = second_root.clone();
+        state.tasks = vec![first, second];
+
+        reduce(&mut state, Action::SelectTask("first".to_owned()));
+        let first_generation = state.git.refresh_generation;
+        reduce(&mut state, Action::SelectTask("second".to_owned()));
+        let second_generation = state.git.refresh_generation;
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::GitSnapshotLoaded {
+                    generation: first_generation,
+                    git: Box::new(GitState {
+                        repository_root: Some(first_root),
+                        ..GitState::default()
+                    }),
+                    error: Some("stale repository error".to_owned()),
+                },
+            )
+            .is_empty()
+        );
+        assert!(state.git.repository_root.is_none());
+        assert!(state.status_message.is_none());
+
+        reduce(
+            &mut state,
+            Action::GitSnapshotLoaded {
+                generation: second_generation,
+                git: Box::new(GitState {
+                    repository_root: Some(second_root.clone()),
+                    ..GitState::default()
+                }),
+                error: Some("current repository error".to_owned()),
+            },
+        );
+        assert_eq!(state.git.repository_root.as_ref(), Some(&second_root));
+        assert_eq!(
+            state.status_message.as_deref(),
+            Some("current repository error")
         );
     }
 
@@ -22115,8 +22216,16 @@ mod tests {
             repository_root: Some(root.clone()),
             ..GitState::default()
         };
+        let refresh_generation = state.git.refresh_generation;
         assert_eq!(
-            reduce(&mut state, Action::GitSnapshotLoaded(Box::new(refreshed))),
+            reduce(
+                &mut state,
+                Action::GitSnapshotLoaded {
+                    generation: refresh_generation,
+                    git: Box::new(refreshed),
+                    error: None,
+                },
+            ),
             [Effect::LoadBranchDiff {
                 generation: 2,
                 cwd: root,
@@ -22172,8 +22281,16 @@ mod tests {
             repository_root: Some(PathBuf::from("C:\\repo")),
             ..GitState::default()
         };
+        let refresh_generation = state.git.refresh_generation;
         assert_eq!(
-            reduce(&mut state, Action::GitSnapshotLoaded(Box::new(refreshed))),
+            reduce(
+                &mut state,
+                Action::GitSnapshotLoaded {
+                    generation: refresh_generation,
+                    git: Box::new(refreshed),
+                    error: None,
+                },
+            ),
             [Effect::LoadBranchDiff {
                 generation: 5,
                 cwd: PathBuf::from("C:\\repo"),
@@ -22216,8 +22333,16 @@ mod tests {
             review_default_base: Some("origin/main".to_owned()),
             ..GitState::default()
         };
+        let refresh_generation = state.git.refresh_generation;
         assert_eq!(
-            reduce(&mut state, Action::GitSnapshotLoaded(Box::new(refreshed))),
+            reduce(
+                &mut state,
+                Action::GitSnapshotLoaded {
+                    generation: refresh_generation,
+                    git: Box::new(refreshed),
+                    error: None,
+                },
+            ),
             [Effect::LoadBranchDiff {
                 generation: 3,
                 cwd: root.clone(),
@@ -22520,6 +22645,7 @@ mod tests {
         assert!(state.timelines["source"].active_turn_id.is_none());
         assert!(state.timelines["source"].active_review_turn_id.is_none());
         reduce(&mut state, Action::SelectTask("source".to_owned()));
+        state.git.repository_root = Some(repository_path());
         reduce(
             &mut state,
             Action::StartReview {
@@ -22580,6 +22706,7 @@ mod tests {
         assert!(state.tasks.iter().any(|task| task.id == review.id));
 
         reduce(&mut state, Action::SelectTask("source".to_owned()));
+        state.git.repository_root = Some(repository_path());
         reduce(
             &mut state,
             Action::StartReview {
@@ -22613,6 +22740,7 @@ mod tests {
         );
 
         reduce(&mut state, Action::SelectTask("source".to_owned()));
+        state.git.repository_root = Some(repository_path());
         reduce(
             &mut state,
             Action::StartReview {
@@ -22665,6 +22793,7 @@ mod tests {
         assert_eq!(state.selected_task_id.as_deref(), Some("unloaded-review"));
 
         reduce(&mut state, Action::SelectTask("source".to_owned()));
+        state.git.repository_root = Some(repository_path());
         reduce(
             &mut state,
             Action::StartReview {
@@ -22690,6 +22819,7 @@ mod tests {
         assert!(!state.timelines.contains_key(&review_id));
 
         reduce(&mut state, Action::SelectTask("source".to_owned()));
+        state.git.repository_root = Some(repository_path());
         reduce(
             &mut state,
             Action::StartReview {
@@ -22857,8 +22987,16 @@ mod tests {
             changed_files: 2,
             ..GitState::default()
         };
+        let refresh_generation = state.git.refresh_generation;
         assert_eq!(
-            reduce(&mut state, Action::GitSnapshotLoaded(Box::new(git))),
+            reduce(
+                &mut state,
+                Action::GitSnapshotLoaded {
+                    generation: refresh_generation,
+                    git: Box::new(git),
+                    error: None,
+                },
+            ),
             [Effect::LoadGitPullRequest {
                 root: PathBuf::from("C:\\repo"),
                 branch: "feature/native-pr".to_owned(),
