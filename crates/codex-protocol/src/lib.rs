@@ -1965,6 +1965,17 @@ pub struct ModelSummary {
     pub service_tiers: Vec<ModelServiceTier>,
     #[serde(default)]
     pub default_service_tier: Option<String>,
+    #[serde(default)]
+    pub upgrade_info: Option<ModelUpgradeInfo>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelUpgradeInfo {
+    pub model: String,
+    pub upgrade_copy: Option<String>,
+    pub model_link: Option<String>,
+    pub migration_markdown: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -4449,7 +4460,13 @@ mod tests {
                     "name": "Fast",
                     "description": "1.5x speed, increased usage"
                 }],
-                "defaultServiceTier": "priority"
+                "defaultServiceTier": "priority",
+                "upgradeInfo": {
+                    "model": "gpt-5.7",
+                    "upgradeCopy": "GPT-5.7 is ready for your next chat.",
+                    "modelLink": "https://platform.openai.com/docs/models",
+                    "migrationMarkdown": "# Migration notes"
+                }
             }],
             "nextCursor": null
         }));
@@ -4461,6 +4478,18 @@ mod tests {
                     && response.data[0].supported_reasoning_efforts[0].reasoning_effort == "low"
                     && response.data[0].service_tiers[0].id == "priority"
                     && response.data[0].default_service_tier.as_deref() == Some("priority")
+                    && response.data[0]
+                        .upgrade_info
+                        .as_ref()
+                        .is_some_and(|upgrade| {
+                            upgrade.model == "gpt-5.7"
+                                && upgrade.upgrade_copy.as_deref()
+                                    == Some("GPT-5.7 is ready for your next chat.")
+                                && upgrade.model_link.as_deref()
+                                    == Some("https://platform.openai.com/docs/models")
+                                && upgrade.migration_markdown.as_deref()
+                                    == Some("# Migration notes")
+                        })
         ));
 
         let profiles = serde_json::from_value::<PermissionProfileListResponse>(json!({

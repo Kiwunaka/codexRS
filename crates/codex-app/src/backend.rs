@@ -56,7 +56,8 @@ use codex_core::{
     McpResourceContentCard, McpResourceTemplateCard, McpServerCard, McpServerDraft,
     McpServerInfoCard, McpServerStartupFailureReason as CoreMcpServerStartupFailureReason,
     McpServerStartupState as CoreMcpServerStartupState, McpToolCard, McpTransportKind,
-    McpUrlElicitation, ModelOption, NetworkApprovalContext as CoreNetworkApprovalContext,
+    McpUrlElicitation, ModelOption, ModelUpgradeNotice,
+    NetworkApprovalContext as CoreNetworkApprovalContext,
     NetworkApprovalProtocol as CoreNetworkApprovalProtocol,
     NetworkPolicyAction as CoreNetworkPolicyAction,
     NetworkPolicyAmendment as CoreNetworkPolicyAmendment, OutputArtifact, OutputArtifactKind,
@@ -149,9 +150,9 @@ use codex_protocol::{
     McpServerStartupState as ProtocolMcpServerStartupState,
     McpServerStatus as ProtocolMcpServerStatus, McpServerStatusDetail,
     McpServerStatusUpdatedNotification, ModelListParams, ModelSafetyBufferingUpdatedNotification,
-    ModelSummary, ModelVerification, ModelVerificationNotification, NetworkApprovalProtocol,
-    NetworkPolicyAmendment, NetworkPolicyAmendmentDecision, NetworkPolicyRuleAction,
-    PermissionGrantScope, PermissionProfile, PermissionProfileListParams,
+    ModelSummary, ModelUpgradeInfo, ModelVerification, ModelVerificationNotification,
+    NetworkApprovalProtocol, NetworkPolicyAmendment, NetworkPolicyAmendmentDecision,
+    NetworkPolicyRuleAction, PermissionGrantScope, PermissionProfile, PermissionProfileListParams,
     PermissionsRequestApprovalParams, PermissionsRequestApprovalResponse, PlanType,
     PluginInstallParams, PluginListMarketplaceKind, PluginListParams, PluginReadParams,
     PluginUninstallParams, RemoteControlClient, RemoteControlClientsListParams,
@@ -202,6 +203,8 @@ const MAX_WEB_SEARCH_SOURCES: usize = 32;
 const MAX_CITATION_FIELD_BYTES: usize = 4 * 1024;
 const MAX_SOURCE_TITLE_BYTES: usize = 512;
 const MAX_SOURCE_URL_BYTES: usize = 8 * 1024;
+const MAX_MODEL_UPGRADE_COPY_BYTES: usize = 4 * 1024;
+const MAX_MODEL_UPGRADE_LINK_BYTES: usize = 8 * 1024;
 const MAX_REVIEW_ID_BYTES: usize = 256;
 const CODE_REVIEW_START_FAILED: &str = "Couldn't start review.";
 const TRUSTED_ACCESS_FOR_CYBER_WARNING: &str = "Your conversations have multiple flags for possible cybersecurity risk. Responses may take longer because extra safety checks are on. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber";
@@ -15980,6 +15983,7 @@ fn map_model_options(models: Vec<ModelSummary>) -> Vec<ModelOption> {
             id: model.model,
             display_name: model.display_name,
             description: bounded(model.description, MAX_MCP_SERVER_FIELD_BYTES),
+            upgrade_notice: map_model_upgrade_notice(model.upgrade_info),
             is_default: model.is_default,
             default_effort: model.default_reasoning_effort,
             supported_efforts: model
@@ -16004,6 +16008,18 @@ fn map_model_options(models: Vec<ModelSummary>) -> Vec<ModelOption> {
             default_service_tier: model.default_service_tier,
         })
         .collect()
+}
+
+fn map_model_upgrade_notice(upgrade_info: Option<ModelUpgradeInfo>) -> Option<ModelUpgradeNotice> {
+    let upgrade_info = upgrade_info?;
+    let copy = bounded(upgrade_info.upgrade_copy?, MAX_MODEL_UPGRADE_COPY_BYTES);
+    if copy.trim().is_empty() {
+        return None;
+    }
+    let model_link = upgrade_info
+        .model_link
+        .filter(|model_link| model_link.len() <= MAX_MODEL_UPGRADE_LINK_BYTES);
+    Some(ModelUpgradeNotice { copy, model_link })
 }
 
 fn remote_pairing_status_params(pairing: &RemotePairing) -> RemoteControlPairingStatusParams {
@@ -16101,18 +16117,19 @@ mod tests {
         MAX_MCP_SERVER_FIELD_BYTES, McpBrowserOriginElicitation, McpBrowserResourceElicitation,
         McpElicitation, McpElicitationContent, McpElicitationValue, McpFormElicitation,
         McpFormFieldKind, McpServerDraft, McpServerStartupFailureReason, McpServerStartupState,
-        McpTransportKind, NetworkPolicyAction, OutputArtifactKind, PermissionFileSystemAccess,
-        PermissionRequestDetail, Personality, PluginDirectoryTab, PrimaryWindowPlacement,
-        PullRequestMergeMethod, ReducedMotionPreference, RemoteControlRuntimeStatus, RemotePairing,
-        RetryableTurnSubmission, RetryableUserMessage, ReviewDelivery, TimelineItem, TimelineKind,
-        TimelineSource, UserInputAnswer, UserInputAnswers,
+        McpTransportKind, ModelUpgradeNotice, NetworkPolicyAction, OutputArtifactKind,
+        PermissionFileSystemAccess, PermissionRequestDetail, Personality, PluginDirectoryTab,
+        PrimaryWindowPlacement, PullRequestMergeMethod, ReducedMotionPreference,
+        RemoteControlRuntimeStatus, RemotePairing, RetryableTurnSubmission, RetryableUserMessage,
+        ReviewDelivery, TimelineItem, TimelineKind, TimelineSource, UserInputAnswer,
+        UserInputAnswers,
     };
     use codex_platform::{AppServerEvent, ComputerApplication, ComputerKey};
     use codex_protocol::{
         AppInfo, AppToolSummary, ConfigReadResponse, ConnectorMetadata, FuzzyFileSearchMatchType,
         FuzzyFileSearchResult as ProtocolFuzzyFileResult, LoginAccountResponse,
-        McpServerStatus as ProtocolMcpServerStatus, ModelSummary, PluginListMarketplaceKind,
-        RemoteControlClient, RemoteControlConnectionStatus, UserInput,
+        McpServerStatus as ProtocolMcpServerStatus, ModelSummary, ModelUpgradeInfo,
+        PluginListMarketplaceKind, RemoteControlClient, RemoteControlConnectionStatus, UserInput,
     };
     use crossbeam_channel::bounded;
     use serde_json::{Value, json};
@@ -16121,7 +16138,8 @@ mod tests {
         AppLogo, AppServerReconnectScheduler, BrowserPolicyTarget,
         COMPUTER_USE_USER_INPUT_STALE_MESSAGE, ComputerUseAccessibilityClient,
         ComputerUsePermission, GOAL_CONTINUATION_DELAY, GitRefreshDebouncer,
-        GoalContinuationScheduler, MAX_ITEM_TEXT_BYTES, McpElicitationMapError, PendingApproval,
+        GoalContinuationScheduler, MAX_ITEM_TEXT_BYTES, MAX_MODEL_UPGRADE_COPY_BYTES,
+        MAX_MODEL_UPGRADE_LINK_BYTES, McpElicitationMapError, PendingApproval,
         PendingWorktreeRuntime, STABLE_OPT_OUT_NOTIFICATION_METHODS, TASK_SEARCH_DEBOUNCE,
         TRUSTED_ACCESS_FOR_CYBER_URL, TRUSTED_ACCESS_FOR_CYBER_WARNING, TaskSearchDebouncer,
         TerminalParserCallbacks, agent_configuration_snapshot, appearance_theme_key,
@@ -16540,6 +16558,7 @@ mod tests {
             supported_reasoning_efforts: Vec::new(),
             service_tiers: Vec::new(),
             default_service_tier: None,
+            upgrade_info: None,
         }]);
 
         assert_eq!(models.len(), 1);
@@ -16549,6 +16568,38 @@ mod tests {
             models[0]
                 .description
                 .is_char_boundary(models[0].description.len())
+        );
+    }
+
+    #[test]
+    fn model_options_bound_upgrade_notices_and_omit_non_notice_fields() {
+        let upgrade_copy = format!("{}é", "x".repeat(MAX_MODEL_UPGRADE_COPY_BYTES - 1));
+        let models = map_model_options(vec![ModelSummary {
+            id: "gpt-fast".to_owned(),
+            model: "gpt-fast".to_owned(),
+            display_name: "GPT Fast".to_owned(),
+            description: String::new(),
+            hidden: false,
+            is_default: true,
+            default_reasoning_effort: "medium".to_owned(),
+            supported_reasoning_efforts: Vec::new(),
+            service_tiers: Vec::new(),
+            default_service_tier: None,
+            upgrade_info: Some(ModelUpgradeInfo {
+                model: "gpt-new".to_owned(),
+                upgrade_copy: Some(upgrade_copy),
+                model_link: Some("x".repeat(MAX_MODEL_UPGRADE_LINK_BYTES + 1)),
+                migration_markdown: Some("# Provider-only migration notes".to_owned()),
+            }),
+        }]);
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(
+            models[0].upgrade_notice,
+            Some(ModelUpgradeNotice {
+                copy: "x".repeat(MAX_MODEL_UPGRADE_COPY_BYTES - 1),
+                model_link: None,
+            })
         );
     }
 
