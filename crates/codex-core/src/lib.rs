@@ -15651,7 +15651,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             apps_needing_auth.retain(|app| seen_app_ids.insert(app.id.clone()));
             state.marketplace.apps_needing_auth = apps_needing_auth;
             let cwds = selected_task_cwds(state);
-            vec![
+            let mut effects = vec![
                 Effect::RefreshMarketplace {
                     cwds: cwds.clone(),
                     directory_tab: state.marketplace.selected_directory_tab,
@@ -15662,7 +15662,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     cwds,
                     force_refetch: false,
                 },
-            ]
+            ];
+            effects.extend(reduce(state, Action::AppsInvalidated));
+            effects
         }
         Action::DismissPluginAuthApps => {
             state.marketplace.apps_needing_auth.clear();
@@ -27614,6 +27616,10 @@ mod tests {
                 enabled: false,
             })
             .collect::<Vec<_>>();
+        state.selected_task_id = Some("thread-1".to_owned());
+        state.marketplace.apps_status = Some(LoadStatus::Ready);
+        state.marketplace.installed_apps_status = Some(LoadStatus::Ready);
+        state.marketplace.installed_apps_thread_id = Some("thread-1".to_owned());
         assert!(
             reduce(
                 &mut state,
@@ -27648,10 +27654,17 @@ mod tests {
                 Effect::RefreshComposerPlugins {
                     cwds: Vec::new(),
                     force_refetch: false,
+                },
+                Effect::RefreshApps {
+                    force_refetch: false,
+                    thread_id: Some("thread-1".to_owned()),
                 }
             ]
         );
         assert!(state.marketplace.pending_plugin_id.is_none());
+        assert_eq!(state.marketplace.apps_status, Some(LoadStatus::Loading));
+        assert!(state.marketplace.installed_apps_status.is_none());
+        assert!(state.marketplace.installed_apps_thread_id.is_none());
         assert_eq!(
             state.marketplace.apps_needing_auth.len(),
             MAX_PLUGIN_DETAIL_ITEMS - 1
@@ -27690,6 +27703,14 @@ mod tests {
         );
         assert!(!state.marketplace.skills[0].enabled);
         assert!(state.marketplace.pending_skill_path.is_none());
+        assert!(
+            reduce(&mut state, Action::SetMarketplaceManageMode(true)).contains(
+                &Effect::RefreshInstalledApps {
+                    force_refresh: false,
+                    thread_id: Some("thread-1".to_owned()),
+                }
+            )
+        );
     }
 
     #[test]
