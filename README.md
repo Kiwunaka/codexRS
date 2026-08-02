@@ -158,8 +158,8 @@ The Linux archive is not a system package: it does not install runtime
 dependencies or desktop integration automatically. Run
 `codexrs --install-desktop-entry` to create a per-user desktop entry for the
 current extracted binary; the command never changes an existing entry. Ubuntu
-CI builds and tests the binary, but the extracted archive has not received a
-desktop smoke test. Linux Computer Use
+CI starts the extracted archive in an isolated Xvfb session; broader
+desktop-environment smoke coverage remains pending. Linux Computer Use
 provides only bounded, read-only screenshot observation of X11/XWayland windows
 when `DISPLAY` is nonempty. Text extraction, input, app launch, persistent
 approvals, the overlay, and interruption monitoring are unavailable; pure

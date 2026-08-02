@@ -100,7 +100,9 @@ jobs:
             libxcb1-dev \
             libxkbcommon-dev \
             libxkbcommon-x11-dev \
-            pkg-config
+            pkg-config \
+            xauth \
+            xvfb
 
       - uses: actions/download-artifact@v8
         with:
@@ -137,7 +139,7 @@ jobs:
           New-Item -ItemType Directory -Path (Join-Path $root "docs/assets") -Force | Out-Null
           Copy-Item target/release/codexrs.exe $root
           Copy-Item target/release/codex-computer-use-overlay.exe $root
-          Copy-Item README.md,README.ru.md,README.zh-CN.md,LICENSE,CHANGELOG.md,THIRD_PARTY_LICENSES.html $root
+          Copy-Item README.md,README.ru.md,README.zh-CN.md,LICENSE,CHANGELOG.md,CONTRIBUTING.md,AGENTS.md,ROADMAP.md,SUPPORT.md,SECURITY.md,CODE_OF_CONDUCT.md,THIRD_PARTY_LICENSES.html $root
           Copy-Item docs/architecture.md,docs/parity-matrix.md,docs/platform-support.md,docs/prior-art.md (Join-Path $root "docs")
           Copy-Item docs/assets/codexrs-hero.png (Join-Path $root "docs/assets")
           Compress-Archive -Path $root -DestinationPath "dist/$name.zip"
@@ -151,10 +153,21 @@ jobs:
           root="dist/${name}"
           mkdir -p "${root}/docs/assets"
           install -m 0755 target/release/codexrs "${root}/codexrs"
-          cp README.md README.ru.md README.zh-CN.md LICENSE CHANGELOG.md THIRD_PARTY_LICENSES.html "${root}/"
+          cp README.md README.ru.md README.zh-CN.md LICENSE CHANGELOG.md CONTRIBUTING.md AGENTS.md ROADMAP.md SUPPORT.md SECURITY.md CODE_OF_CONDUCT.md THIRD_PARTY_LICENSES.html "${root}/"
           cp docs/architecture.md docs/parity-matrix.md docs/platform-support.md docs/prior-art.md "${root}/docs/"
           cp docs/assets/codexrs-hero.png "${root}/docs/assets/"
           tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+
+      - name: Linux archive desktop startup smoke
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          name="codexrs-${PACKAGE_LABEL}-linux-x86_64"
+          smoke_root="$(mktemp -d)"
+          trap 'rm -rf -- "$smoke_root"' EXIT
+          tar -xzf "dist/${name}.tar.gz" -C "$smoke_root"
+          bash scripts/linux_desktop_smoke.sh "$smoke_root/${name}/codexrs"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -212,8 +225,9 @@ jobs:
           checksum you do not trust.
 
           The Linux tar.gz is not a system package and does not install runtime
-          dependencies. Ubuntu CI builds and tests the binary; the extracted
-          archive has not yet received a desktop smoke test. Linux Computer Use
+          dependencies. Ubuntu CI starts the extracted archive in an isolated
+          Xvfb session; broader desktop-environment smoke coverage remains
+          pending. Linux Computer Use
           provides only bounded, read-only screenshot observation of X11/XWayland
           windows when `DISPLAY` is nonempty. Text extraction, input, app launch,
           persistent approvals, the overlay, and interruption monitoring are
