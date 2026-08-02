@@ -11577,6 +11577,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             effects
         }
         Action::TurnStarted { task_id, turn_id } => {
+            if state.background_completion_task_id.as_deref() == Some(task_id.as_str()) {
+                state.background_completion_task_id = None;
+            }
             let timeline = state.timelines.entry(task_id.clone()).or_default();
             if timeline.active_turn_id.as_deref() != Some(turn_id.as_str()) {
                 timeline.retryable_turn = None;
@@ -20070,6 +20073,28 @@ mod tests {
             Some("background")
         );
         assert_eq!(state.status_message, None);
+
+        reduce(
+            &mut state,
+            Action::TurnStarted {
+                task_id: "background".to_owned(),
+                turn_id: "background-second-success".to_owned(),
+            },
+        );
+        assert_eq!(state.background_completion_task_id, None);
+        reduce(
+            &mut state,
+            Action::TurnCompleted {
+                task_id: "background".to_owned(),
+                turn_id: "background-second-success".to_owned(),
+                completed: true,
+                failed: false,
+            },
+        );
+        assert_eq!(
+            state.background_completion_task_id.as_deref(),
+            Some("background")
+        );
 
         reduce(&mut state, Action::SetStatus("Unrelated status".to_owned()));
         reduce(&mut state, Action::ClearStatus);
