@@ -13735,7 +13735,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.account.token_activity_error = token_activity_error
                 .map(|message| bounded_string(message, MAX_ACCOUNT_FIELD_BYTES));
             state.account.error = None;
-            if connected {
+            if connected && state.account.auth_operation != AccountAuthOperation::LoggingOut {
                 state.account.auth_operation = AccountAuthOperation::Idle;
                 state.account.login_id = None;
                 state.account.login_verification_url = None;
@@ -25767,6 +25767,56 @@ mod tests {
             reduce(&mut state, Action::AccountLoggedOut),
             [Effect::LoadAccount]
         );
+        assert!(state.account.profile.is_none());
+    }
+
+    #[test]
+    fn stale_account_load_does_not_cancel_logout() {
+        let mut state = AppState::default();
+        state.account.profile = Some(AccountProfile {
+            kind: AccountKind::ChatGpt,
+            email: Some("developer@example.com".to_owned()),
+            plan: Some("Plus".to_owned()),
+            uses_codex_managed_credentials: None,
+        });
+
+        assert_eq!(
+            reduce(&mut state, Action::LogoutAccount),
+            [Effect::LogoutAccount]
+        );
+        assert_eq!(
+            state.account.auth_operation,
+            AccountAuthOperation::LoggingOut
+        );
+
+        reduce(
+            &mut state,
+            Action::AccountLoaded {
+                profile: Some(AccountProfile {
+                    kind: AccountKind::ChatGpt,
+                    email: Some("developer@example.com".to_owned()),
+                    plan: Some("Plus".to_owned()),
+                    uses_codex_managed_credentials: None,
+                }),
+                requires_openai_auth: true,
+                usage_limits: Vec::new(),
+                credits: None,
+                rate_limit_reset_credits_available: None,
+                usage_error: None,
+                token_activity: None,
+                token_activity_error: None,
+            },
+        );
+        assert_eq!(
+            state.account.auth_operation,
+            AccountAuthOperation::LoggingOut
+        );
+
+        assert_eq!(
+            reduce(&mut state, Action::AccountLoggedOut),
+            [Effect::LoadAccount]
+        );
+        assert_eq!(state.account.auth_operation, AccountAuthOperation::Idle);
         assert!(state.account.profile.is_none());
     }
 

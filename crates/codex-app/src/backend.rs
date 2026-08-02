@@ -3204,6 +3204,9 @@ fn run_backend(commands: Receiver<BackendCommand>, events: Sender<Action>) {
                             computer_tool_request_meta(&event).filter(|request| {
                                 computer_use_tool_supported_on_platform(&request.tool)
                             });
+                        let computer_monitor_transition = computer_request
+                            .as_ref()
+                            .is_some_and(computer_tool_updates_interruption_monitor);
                         if computer_request.is_some()
                             && let Some(turn) = computer_interruption
                                 .as_ref()
@@ -3212,7 +3215,7 @@ fn run_backend(commands: Receiver<BackendCommand>, events: Sender<Action>) {
                         {
                             computer_accessibility.mark_user_input(&window_id);
                         }
-                        if computer_request.is_some()
+                        if computer_monitor_transition
                             && let Some(monitor) = computer_interruption.as_ref()
                         {
                             monitor.disarm();
@@ -3267,8 +3270,9 @@ fn run_backend(commands: Receiver<BackendCommand>, events: Sender<Action>) {
                                 Some(&browser_permissions),
                             )
                         }
-                        if let (Some(monitor), Some(request)) =
-                            (computer_interruption.as_ref(), computer_request)
+                        if computer_monitor_transition
+                            && let (Some(monitor), Some(request)) =
+                                (computer_interruption.as_ref(), computer_request)
                         {
                             monitor.arm(request.thread_id, request.turn_id, request.window_id);
                         }
@@ -3606,6 +3610,10 @@ fn computer_tool_requires_interruption_monitor(tool: &str) -> bool {
             | "set_value"
             | "type_text"
     )
+}
+
+fn computer_tool_updates_interruption_monitor(request: &ComputerToolRequestMeta) -> bool {
+    request.window_id.is_some() || computer_tool_requires_interruption_monitor(&request.tool)
 }
 
 fn handle_computer_use_interruption(
@@ -16739,6 +16747,35 @@ mod tests {
             })
             .is_none()
         );
+    }
+
+    #[test]
+    fn computer_discovery_preserves_the_interruption_monitor_target() {
+        let request = |tool: &str, window_id: Option<&str>| super::ComputerToolRequestMeta {
+            id: Value::Null,
+            thread_id: "thread-1".to_owned(),
+            turn_id: "turn-1".to_owned(),
+            tool: tool.to_owned(),
+            window_id: window_id.map(str::to_owned),
+        };
+
+        assert!(!super::computer_tool_updates_interruption_monitor(
+            &request("list_apps", None)
+        ));
+        assert!(!super::computer_tool_updates_interruption_monitor(
+            &request("list_windows", None,)
+        ));
+        assert!(!super::computer_tool_updates_interruption_monitor(
+            &request("get_window", None)
+        ));
+        assert!(super::computer_tool_updates_interruption_monitor(&request(
+            "get_window_state",
+            Some("7"),
+        )));
+        assert!(super::computer_tool_updates_interruption_monitor(&request(
+            "launch_app",
+            None,
+        )));
     }
 
     #[test]

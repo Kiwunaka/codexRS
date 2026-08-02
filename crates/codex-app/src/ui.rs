@@ -249,6 +249,15 @@ fn shell_width_class(width: f32) -> ShellWidthClass {
     }
 }
 
+fn right_panels_hide_for_width_transition(
+    previous: Option<ShellWidthClass>,
+    current: ShellWidthClass,
+) -> bool {
+    current == ShellWidthClass::Narrow
+        || (current == ShellWidthClass::Compact
+            && matches!(previous, None | Some(ShellWidthClass::Wide)))
+}
+
 fn task_workspace_active(route: MainRoute, selected_task_id: Option<&str>) -> bool {
     route == MainRoute::Tasks && selected_task_id.is_some()
 }
@@ -8063,18 +8072,14 @@ impl WorkspaceView {
             }
         }
 
-        match current {
-            ShellWidthClass::Narrow => self.hide_right_panels_for_resize(),
-            ShellWidthClass::Compact => match previous {
-                None | Some(ShellWidthClass::Wide) if self.sidebar_visible => {
-                    self.hide_right_panels_for_resize();
-                }
-                Some(ShellWidthClass::Narrow) if !self.sidebar_visible => {
-                    self.restore_right_panels_after_resize();
-                }
-                _ => {}
-            },
-            ShellWidthClass::Wide => self.restore_right_panels_after_resize(),
+        if right_panels_hide_for_width_transition(previous, current) {
+            self.hide_right_panels_for_resize();
+        } else if current == ShellWidthClass::Wide
+            || (current == ShellWidthClass::Compact
+                && previous == Some(ShellWidthClass::Narrow)
+                && !self.sidebar_visible)
+        {
+            self.restore_right_panels_after_resize();
         }
     }
 
@@ -45485,7 +45490,8 @@ mod tests {
         process_manager_auto_refresh_allowed, project_trigger_matches, project_workspace_options,
         pull_request_merge_submission_enabled, reasoning_effort_target, reduced_motion_enabled,
         remote_control_status_label, render_conversation_markdown, replace_composer_file_query,
-        repository_uses_split_diff, reserve_thread_find_history_page, sanitize_assistant_markdown,
+        repository_uses_split_diff, reserve_thread_find_history_page,
+        right_panels_hide_for_width_transition, sanitize_assistant_markdown,
         selected_approval_request, selected_model_upgrade_notice, selected_task_copy_value,
         settings_section_matches, settings_section_refreshes_account, shell_width_class,
         sidebar_layout_width, split_diff_rows, startup_recovery_card, status_context_total_label,
@@ -47634,6 +47640,18 @@ mod tests {
         assert_eq!(shell_width_class(720.1), ShellWidthClass::Compact);
         assert_eq!(shell_width_class(720.0), ShellWidthClass::Narrow);
         assert_eq!(shell_width_class(480.0), ShellWidthClass::Narrow);
+        assert!(right_panels_hide_for_width_transition(
+            Some(ShellWidthClass::Wide),
+            ShellWidthClass::Compact,
+        ));
+        assert!(right_panels_hide_for_width_transition(
+            None,
+            ShellWidthClass::Compact,
+        ));
+        assert!(!right_panels_hide_for_width_transition(
+            Some(ShellWidthClass::Compact),
+            ShellWidthClass::Compact,
+        ));
     }
 
     #[test]

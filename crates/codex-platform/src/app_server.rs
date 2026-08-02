@@ -1958,6 +1958,8 @@ fn notification_requires_resync(event: &AppServerEvent) -> bool {
                     | "item/plan/delta"
                     | "item/reasoning/summaryTextDelta"
                     | "item/reasoning/textDelta"
+                    | "item/commandExecution/outputDelta"
+                    | "item/fileChange/outputDelta"
                     | "item/completed"
                     | "turn/completed"
                     | "remoteControl/status/changed"
@@ -2375,6 +2377,8 @@ mod tests {
             "item/plan/delta",
             "item/reasoning/summaryTextDelta",
             "item/reasoning/textDelta",
+            "item/commandExecution/outputDelta",
+            "item/fileChange/outputDelta",
             "item/completed",
             "turn/completed",
             "remoteControl/status/changed",
@@ -2388,7 +2392,7 @@ mod tests {
         }
         assert!(!notification_requires_resync(
             &AppServerEvent::Notification {
-                method: "item/commandExecution/outputDelta".to_owned(),
+                method: "warning".to_owned(),
                 params: Value::Null,
             }
         ));
