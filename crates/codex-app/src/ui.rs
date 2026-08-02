@@ -1521,7 +1521,9 @@ gpui::actions!(
         ShowKeyboardShortcutsShortcut,
         ToggleFullscreenShortcut,
         RemoveLocalProjectFocusNext,
-        RemoveLocalProjectFocusPrev
+        RemoveLocalProjectFocusPrev,
+        DeleteArchivedTasksFocusNext,
+        DeleteArchivedTasksFocusPrev
     ]
 );
 
@@ -3131,6 +3133,7 @@ enum PaletteCommand {
     OpenMcpSettings,
     OpenPersonalitySettings,
     OpenPlugins,
+    OpenConnectionsSettings,
     OpenGeneralSettings,
     OpenAppearanceSettings,
     OpenKeyboardShortcutsSettings,
@@ -3139,7 +3142,7 @@ enum PaletteCommand {
 }
 
 impl PaletteCommand {
-    const ALL: [Self; 43] = [
+    const ALL: [Self; 44] = [
         Self::NewChat,
         Self::OpenFolder,
         Self::SearchChats,
@@ -3183,6 +3186,7 @@ impl PaletteCommand {
         Self::OpenMcpSettings,
         Self::OpenPersonalitySettings,
         Self::OpenPlugins,
+        Self::OpenConnectionsSettings,
     ];
 
     const fn title(self) -> &'static str {
@@ -3225,6 +3229,7 @@ impl PaletteCommand {
             Self::OpenMcpSettings => "MCP",
             Self::OpenPersonalitySettings => "Personality",
             Self::OpenPlugins => "Open plugins",
+            Self::OpenConnectionsSettings => "Connections",
             Self::OpenGeneralSettings => "General",
             Self::OpenAppearanceSettings => "Appearance",
             Self::OpenKeyboardShortcutsSettings => "Keyboard shortcuts",
@@ -3273,6 +3278,7 @@ impl PaletteCommand {
             Self::OpenMcpSettings => "Configure MCP servers",
             Self::OpenPersonalitySettings => "Adjust tone and response style",
             Self::OpenPlugins => "Browse the plugins marketplace",
+            Self::OpenConnectionsSettings => "Manage remote connections and paired devices",
             Self::OpenGeneralSettings => "Open General settings",
             Self::OpenAppearanceSettings => "Open Appearance settings",
             Self::OpenKeyboardShortcutsSettings => "Customize keyboard shortcuts",
@@ -3382,6 +3388,7 @@ impl PaletteCommand {
             Self::OpenMcpSettings => IconName::Settings2,
             Self::OpenPersonalitySettings => IconName::Bot,
             Self::OpenPlugins => IconName::GalleryVerticalEnd,
+            Self::OpenConnectionsSettings => IconName::Globe,
             Self::OpenGeneralSettings => IconName::Settings,
             Self::OpenAppearanceSettings => IconName::Sun,
             Self::OpenKeyboardShortcutsSettings => IconName::Asterisk,
@@ -3427,6 +3434,7 @@ impl PaletteCommand {
             Self::OpenMcpSettings
             | Self::OpenPersonalitySettings
             | Self::OpenPlugins
+            | Self::OpenConnectionsSettings
             | Self::DisableGitReview
             | Self::EnableGitReview => PaletteGroup::Configure,
             Self::LogOut | Self::Feedback | Self::OpenProcessManager => PaletteGroup::App,
@@ -3858,6 +3866,9 @@ impl CommandPaletteView {
                 workspace.open_settings_section(SettingsSection::Personalization, cx);
             }
             PaletteCommand::OpenPlugins => workspace.navigate(MainRoute::Marketplace, cx),
+            PaletteCommand::OpenConnectionsSettings => {
+                workspace.open_settings_section(SettingsSection::Connections, cx);
+            }
             PaletteCommand::OpenGeneralSettings => {
                 workspace.open_settings_section(SettingsSection::General, cx);
             }
@@ -4377,6 +4388,16 @@ pub fn run() {
                     RemoveLocalProjectFocusPrev,
                     Some("RemoveLocalProjectModal"),
                 ),
+                KeyBinding::new(
+                    "tab",
+                    DeleteArchivedTasksFocusNext,
+                    Some("DeleteArchivedTasksModal"),
+                ),
+                KeyBinding::new(
+                    "shift-tab",
+                    DeleteArchivedTasksFocusPrev,
+                    Some("DeleteArchivedTasksModal"),
+                ),
             ]);
             let default_bounds =
                 Bounds::centered(None, size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)), cx);
@@ -4835,6 +4856,8 @@ struct WorkspaceView {
     remote_confirmation_focus_requested: bool,
     remove_local_project_focus: FocusHandle,
     remove_local_project_focus_requested: bool,
+    delete_archived_tasks_focus: FocusHandle,
+    delete_archived_tasks_focus_requested: bool,
     account_logout_focus: FocusHandle,
     account_logout_focus_requested: bool,
     plugin_install_confirmation_focus: FocusHandle,
@@ -4907,6 +4930,7 @@ impl WorkspaceView {
         let remote_pairing_focus = cx.focus_handle();
         let remote_confirmation_focus = cx.focus_handle();
         let remove_local_project_focus = cx.focus_handle();
+        let delete_archived_tasks_focus = cx.focus_handle();
         let account_logout_focus = cx.focus_handle();
         let plugin_install_confirmation_focus = cx.focus_handle();
         let initial_appearance_preferences = AppearancePreferences::default();
@@ -5903,6 +5927,8 @@ impl WorkspaceView {
             remote_confirmation_focus_requested: false,
             remove_local_project_focus,
             remove_local_project_focus_requested: false,
+            delete_archived_tasks_focus,
+            delete_archived_tasks_focus_requested: false,
             account_logout_focus,
             account_logout_focus_requested: false,
             plugin_install_confirmation_focus,
@@ -8214,6 +8240,36 @@ impl WorkspaceView {
             window.focus_next();
             if !self.remove_local_project_focus.contains_focused(window, cx) {
                 self.remove_local_project_focus.focus(window);
+                window.focus_next();
+            }
+        }
+        cx.stop_propagation();
+    }
+
+    fn cycle_delete_archived_tasks_focus(
+        &mut self,
+        backwards: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if backwards {
+            window.focus_prev();
+            if self.delete_archived_tasks_focus.is_focused(window)
+                || !self
+                    .delete_archived_tasks_focus
+                    .contains_focused(window, cx)
+            {
+                self.delete_archived_tasks_focus.focus(window);
+                window.focus_next();
+                window.focus_next();
+            }
+        } else {
+            window.focus_next();
+            if !self
+                .delete_archived_tasks_focus
+                .contains_focused(window, cx)
+            {
+                self.delete_archived_tasks_focus.focus(window);
                 window.focus_next();
             }
         }
@@ -12295,7 +12351,7 @@ impl WorkspaceView {
         )
         .item(PopupMenuItem::link(
             "What's New",
-            "https://developers.openai.com/codex/changelog",
+            "https://github.com/Kiwunaka/codexRS/releases",
         ))
         .item(PopupMenuItem::separator())
         .item(PopupMenuItem::link(
@@ -40589,6 +40645,20 @@ impl WorkspaceView {
                     .bg(cx.theme().popover)
                     .shadow_xl()
                     .occlude()
+                    .track_focus(&self.delete_archived_tasks_focus)
+                    .tab_group()
+                    .tab_stop(true)
+                    .key_context("DeleteArchivedTasksModal")
+                    .on_action(
+                        cx.listener(|this, _: &DeleteArchivedTasksFocusNext, window, cx| {
+                            this.cycle_delete_archived_tasks_focus(false, window, cx);
+                        }),
+                    )
+                    .on_action(
+                        cx.listener(|this, _: &DeleteArchivedTasksFocusPrev, window, cx| {
+                            this.cycle_delete_archived_tasks_focus(true, window, cx);
+                        }),
+                    )
                     .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
                     .child(
                         div()
@@ -40786,6 +40856,17 @@ impl Render for WorkspaceView {
             }
         } else {
             self.remove_local_project_focus_requested = false;
+        }
+        if matches!(
+            self.workspace_modal,
+            Some(WorkspaceModal::DeleteArchivedTasks { .. })
+        ) {
+            if !self.delete_archived_tasks_focus_requested {
+                self.delete_archived_tasks_focus.focus(window);
+                self.delete_archived_tasks_focus_requested = true;
+            }
+        } else {
+            self.delete_archived_tasks_focus_requested = false;
         }
         if matches!(self.workspace_modal, Some(WorkspaceModal::LogOutAccount)) {
             if !self.account_logout_focus_requested {
@@ -45943,6 +46024,13 @@ mod tests {
                 PaletteCommand::OpenPersonalitySettings,
                 "Personality",
                 "Adjust tone and response style",
+                None,
+                PaletteGroup::Configure,
+            ),
+            (
+                PaletteCommand::OpenConnectionsSettings,
+                "Connections",
+                "Manage remote connections and paired devices",
                 None,
                 PaletteGroup::Configure,
             ),
