@@ -362,11 +362,14 @@ fn window_bounds_intersect_display(bounds: WindowBounds, cx: &App) -> bool {
 struct AppearanceRuntime {
     base_font_family: SharedString,
     base_mono_font_family: SharedString,
-    _reduced_motion: ReducedMotionPreference,
     use_pointer_cursors: bool,
 }
 
 impl Global for AppearanceRuntime {}
+
+fn reduced_motion_enabled(preference: ReducedMotionPreference) -> bool {
+    matches!(preference, ReducedMotionPreference::On)
+}
 
 #[derive(Clone, Copy)]
 struct AppearanceTokens {
@@ -423,10 +426,13 @@ fn apply_appearance_preferences(preferences: &AppearancePreferences, cx: &mut Ap
         let theme = Theme::global(cx);
         (theme.font_family.clone(), theme.mono_font_family.clone())
     });
+    gpui_component::motion::set_reduced_motion(
+        reduced_motion_enabled(preferences.reduced_motion),
+        cx,
+    );
     cx.set_global(AppearanceRuntime {
         base_font_family: base_font_family.clone(),
         base_mono_font_family: base_mono_font_family.clone(),
-        _reduced_motion: preferences.reduced_motion,
         use_pointer_cursors: preferences.use_pointer_cursors,
     });
 
@@ -31399,7 +31405,7 @@ impl WorkspaceView {
                 this.commit_appearance_preferences(preferences, cx);
             }))
             .into_any_element();
-        let reduced_motion = preferences.reduced_motion;
+        let motion_is_reduced = reduced_motion_enabled(preferences.reduced_motion);
         let motion_control = h_flex()
             .p(px(2.0))
             .gap_1()
@@ -31407,7 +31413,6 @@ impl WorkspaceView {
             .bg(cx.theme().muted)
             .children(
                 [
-                    (ReducedMotionPreference::System, "System"),
                     (ReducedMotionPreference::On, "On"),
                     (ReducedMotionPreference::Off, "Off"),
                 ]
@@ -31420,7 +31425,7 @@ impl WorkspaceView {
                     .label(label)
                     .xsmall()
                     .ghost()
-                    .selected(reduced_motion == preference)
+                    .selected(motion_is_reduced == reduced_motion_enabled(preference))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let mut preferences = this.state.appearance_preferences.clone();
                         preferences.reduced_motion = preference;
@@ -31519,7 +31524,7 @@ impl WorkspaceView {
                     ))
                     .child(self.render_appearance_preference_row(
                         "Reduce motion",
-                        "Reduce animations or match your system",
+                        "Choose whether to reduce animations",
                         motion_control,
                         true,
                         cx,
@@ -44777,7 +44782,7 @@ mod tests {
         output_artifact_type_label, parse_appearance_theme_share_string, parse_mcp_list,
         parse_mcp_record, parse_unified_diff, plugin_logo_format,
         process_manager_auto_refresh_allowed, project_trigger_matches, project_workspace_options,
-        pull_request_merge_submission_enabled, reasoning_effort_target,
+        pull_request_merge_submission_enabled, reasoning_effort_target, reduced_motion_enabled,
         remote_control_status_label, render_conversation_markdown, replace_composer_file_query,
         repository_uses_split_diff, reserve_thread_find_history_page, sanitize_assistant_markdown,
         selected_approval_request, selected_model_upgrade_notice, selected_task_copy_value,
@@ -44797,9 +44802,9 @@ mod tests {
         McpAuthStatus, ModelOption, ModelUpgradeNotice, PendingWorktreeFork,
         PendingWorktreeForkPhase, PluginCard, ProcessManagerState, PullRequestCiStatus,
         PullRequestDetail, PullRequestIdentity, PullRequestMutationKind, PullRequestState,
-        PullRequestSummary, ReasoningEffortOption, RemoteControlRuntimeStatus, ServiceTierOption,
-        SkillCard, SkillScope, TaskRunStatus, TaskSummary, TerminalTabState, TimelineItem,
-        TimelineKind, TurnDiffState,
+        PullRequestSummary, ReasoningEffortOption, ReducedMotionPreference,
+        RemoteControlRuntimeStatus, ServiceTierOption, SkillCard, SkillScope, TaskRunStatus,
+        TaskSummary, TerminalTabState, TimelineItem, TimelineKind, TurnDiffState,
     };
 
     fn task(id: &str, cwd: &str) -> TaskSummary {
@@ -44814,6 +44819,13 @@ mod tests {
             forked_from_id: None,
             status: TaskRunStatus::Idle,
         }
+    }
+
+    #[test]
+    fn reduced_motion_preference_enables_motion_reduction_only_when_on() {
+        assert!(!reduced_motion_enabled(ReducedMotionPreference::System));
+        assert!(reduced_motion_enabled(ReducedMotionPreference::On));
+        assert!(!reduced_motion_enabled(ReducedMotionPreference::Off));
     }
 
     #[test]
