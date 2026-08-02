@@ -2494,6 +2494,7 @@ pub struct MarketplaceState {
     pub manage_mode: bool,
     pub selected_manage_tab: MarketplaceManageTab,
     pub status: Option<LoadStatus>,
+    marketplace_generation: u64,
     pub apps_status: Option<LoadStatus>,
     pub installed_apps_status: Option<LoadStatus>,
     pub installed_apps_thread_id: Option<String>,
@@ -4775,6 +4776,11 @@ pub enum Action {
     AddComposerDesktopApp(String),
     RemoveComposerAttachment(usize),
     SubmitComposer,
+    ComposerSubmissionFailed {
+        task_id: Option<String>,
+        prompt: RetryableUserMessage,
+        message: String,
+    },
     InterruptActiveTurn,
     TurnStarted {
         task_id: String,
@@ -5131,11 +5137,15 @@ pub enum Action {
     ClearFeedbackError,
     RefreshMarketplace,
     MarketplaceLoaded {
+        generation: u64,
         plugins: Vec<PluginCard>,
         sources: Vec<MarketplaceSourceCard>,
         marketplace_load_error_count: usize,
     },
-    MarketplaceFailed(String),
+    MarketplaceFailed {
+        generation: u64,
+        message: String,
+    },
     ComposerPluginsLoaded {
         generation: u64,
         plugins: Vec<PluginCard>,
@@ -5537,6 +5547,10 @@ pub enum Action {
         text: String,
         truncated: bool,
     },
+    DiffFailed {
+        generation: u64,
+        message: String,
+    },
     BranchDiffLoaded {
         generation: u64,
         base_sha: String,
@@ -5861,6 +5875,7 @@ pub enum Effect {
         decision: BrowserResourceElicitationDecision,
     },
     RefreshMarketplace {
+        generation: u64,
         cwds: Vec<PathBuf>,
         directory_tab: PluginDirectoryTab,
         force_refetch: bool,
@@ -6961,12 +6976,15 @@ fn load_marketplace_route_effect(state: &mut AppState) -> Option<Effect> {
     match state.marketplace.selected_tab {
         MarketplaceTab::Plugins if state.marketplace.status != Some(LoadStatus::Ready) => {
             state.marketplace.status = Some(LoadStatus::Loading);
-            Some(Effect::RefreshMarketplace {
-                cwds: selected_task_cwds(state),
-                directory_tab: state.marketplace.selected_directory_tab,
-                force_refetch: false,
-                include_all_marketplaces: false,
-            })
+            let cwds = selected_task_cwds(state);
+            let directory_tab = state.marketplace.selected_directory_tab;
+            Some(refresh_marketplace_effect(
+                state,
+                cwds,
+                directory_tab,
+                false,
+                false,
+            ))
         }
         MarketplaceTab::Skills
             if !matches!(
@@ -7589,6 +7607,24 @@ fn refresh_composer_plugins_effect(
     }
 }
 
+fn refresh_marketplace_effect(
+    state: &mut AppState,
+    cwds: Vec<PathBuf>,
+    directory_tab: PluginDirectoryTab,
+    force_refetch: bool,
+    include_all_marketplaces: bool,
+) -> Effect {
+    state.marketplace.marketplace_generation =
+        state.marketplace.marketplace_generation.saturating_add(1);
+    Effect::RefreshMarketplace {
+        generation: state.marketplace.marketplace_generation,
+        cwds,
+        directory_tab,
+        force_refetch,
+        include_all_marketplaces,
+    }
+}
+
 fn refresh_installed_apps_effect(state: &AppState, force_refresh: bool) -> Effect {
     Effect::RefreshInstalledApps {
         force_refresh,
@@ -7681,7 +7717,16 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 });
             }
             if let Some(task_id) = state.selected_task_id.clone() {
-                effects.push(resume_task_effect(state, task_id));
+                effects.push(resume_task_effect(state, task_id.clone()));
+                let timeline = state.timelines.entry(task_id.clone()).or_default();
+                timeline.generation = timeline.generation.saturating_add(1);
+                timeline.status = LoadStatus::Loading;
+                timeline.next_cursor = None;
+                effects.push(Effect::LoadTimeline {
+                    task_id,
+                    generation: timeline.generation,
+                    cursor: None,
+                });
             }
             if let Some(effect) = load_marketplace_route_effect(state) {
                 effects.push(effect);
@@ -11569,6 +11614,18 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 }]
             }
         }
+        Action::ComposerSubmissionFailed {
+            task_id,
+            mut prompt,
+            message,
+        } => {
+            state.status_message = Some(bounded_string(message, 16 * 1024));
+            if state.selected_task_id == task_id {
+                normalize_retryable_user_message(&mut prompt);
+                restore_retry_prompt(state, &prompt);
+            }
+            Vec::new()
+        }
         Action::InterruptActiveTurn => {
             let Some(task_id) = state.selected_task_id.clone() else {
                 return Vec::new();
@@ -14017,6 +14074,17 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             if login_id.as_deref() != Some(expected) {
                 return Vec::new();
             }
+            if state.account.auth_operation == AccountAuthOperation::CancelingLogin {
+                if success {
+                    state.account.auth_operation = AccountAuthOperation::LoggingOut;
+                    state.account.login_id = None;
+                    state.account.login_verification_url = None;
+                    state.account.login_user_code = None;
+                    state.account.auth_error = None;
+                    return vec![Effect::LogoutAccount];
+                }
+                return Vec::new();
+            }
             state.account.auth_operation = AccountAuthOperation::Idle;
             state.account.login_id = None;
             state.account.login_verification_url = None;
@@ -14120,18 +14188,26 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         Action::RefreshMarketplace => {
             clear_plugin_install_confirmation(state);
             state.marketplace.status = Some(LoadStatus::Loading);
-            vec![Effect::RefreshMarketplace {
-                cwds: selected_task_cwds(state),
-                directory_tab: state.marketplace.selected_directory_tab,
-                force_refetch: true,
-                include_all_marketplaces: state.marketplace.manage_mode,
-            }]
+            let cwds = selected_task_cwds(state);
+            let directory_tab = state.marketplace.selected_directory_tab;
+            let include_all_marketplaces = state.marketplace.manage_mode;
+            vec![refresh_marketplace_effect(
+                state,
+                cwds,
+                directory_tab,
+                true,
+                include_all_marketplaces,
+            )]
         }
         Action::MarketplaceLoaded {
+            generation,
             mut plugins,
             mut sources,
             marketplace_load_error_count,
         } => {
+            if generation != state.marketplace.marketplace_generation {
+                return Vec::new();
+            }
             plugins.truncate(MAX_MARKETPLACE_ITEMS);
             for plugin in &mut plugins {
                 plugin.id = bounded_string(plugin.id.trim().to_owned(), 512);
@@ -14189,7 +14265,13 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
-        Action::MarketplaceFailed(message) => {
+        Action::MarketplaceFailed {
+            generation,
+            message,
+        } => {
+            if generation != state.marketplace.marketplace_generation {
+                return Vec::new();
+            }
             state.marketplace.status = Some(LoadStatus::Failed);
             state.marketplace.errors = vec![message];
             Vec::new()
@@ -14264,12 +14346,14 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             let cwds = selected_task_cwds(state);
             let skill_cwds = composer_workspace_roots(state);
             let cwd = cwds.first().cloned();
-            let mut effects = vec![Effect::RefreshMarketplace {
-                cwds: cwds.clone(),
-                directory_tab: state.marketplace.selected_directory_tab,
-                force_refetch: false,
-                include_all_marketplaces: manage_mode,
-            }];
+            let directory_tab = state.marketplace.selected_directory_tab;
+            let mut effects = vec![refresh_marketplace_effect(
+                state,
+                cwds.clone(),
+                directory_tab,
+                false,
+                manage_mode,
+            )];
             if manage_mode && state.marketplace.apps_status != Some(LoadStatus::Ready) {
                 state.marketplace.apps_status = Some(LoadStatus::Loading);
                 effects.push(refresh_apps_effect(state, false));
@@ -14395,12 +14479,16 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             } else {
                 format!("Added marketplace {marketplace_name}.")
             });
-            vec![Effect::RefreshMarketplace {
-                cwds: selected_task_cwds(state),
-                directory_tab: state.marketplace.selected_directory_tab,
-                force_refetch: true,
-                include_all_marketplaces: state.marketplace.manage_mode,
-            }]
+            let cwds = selected_task_cwds(state);
+            let directory_tab = state.marketplace.selected_directory_tab;
+            let include_all_marketplaces = state.marketplace.manage_mode;
+            vec![refresh_marketplace_effect(
+                state,
+                cwds,
+                directory_tab,
+                true,
+                include_all_marketplaces,
+            )]
         }
         Action::MarketplaceAddFailed(message) => {
             state.marketplace.marketplace_add_pending = false;
@@ -14448,12 +14536,15 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.marketplace.marketplace_mutation_error = None;
             state.marketplace.status = Some(LoadStatus::Loading);
             state.status_message = Some(format!("Removed marketplace {marketplace_name}."));
-            vec![Effect::RefreshMarketplace {
-                cwds: selected_task_cwds(state),
-                directory_tab: state.marketplace.selected_directory_tab,
-                force_refetch: true,
-                include_all_marketplaces: true,
-            }]
+            let cwds = selected_task_cwds(state);
+            let directory_tab = state.marketplace.selected_directory_tab;
+            vec![refresh_marketplace_effect(
+                state,
+                cwds,
+                directory_tab,
+                true,
+                true,
+            )]
         }
         Action::MarketplaceRemoveFailed {
             marketplace_name,
@@ -14531,12 +14622,15 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 )
             });
             state.marketplace.status = Some(LoadStatus::Loading);
-            vec![Effect::RefreshMarketplace {
-                cwds: selected_task_cwds(state),
-                directory_tab: state.marketplace.selected_directory_tab,
-                force_refetch: true,
-                include_all_marketplaces: true,
-            }]
+            let cwds = selected_task_cwds(state);
+            let directory_tab = state.marketplace.selected_directory_tab;
+            vec![refresh_marketplace_effect(
+                state,
+                cwds,
+                directory_tab,
+                true,
+                true,
+            )]
         }
         Action::MarketplaceUpgradeFailed(message) => {
             state.marketplace.marketplace_upgrade_pending = false;
@@ -14596,12 +14690,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.marketplace.app_detail = None;
             state.marketplace.app_detail_error = None;
             state.marketplace.status = Some(LoadStatus::Loading);
-            vec![Effect::RefreshMarketplace {
-                cwds: selected_task_cwds(state),
-                directory_tab: tab,
-                force_refetch: false,
-                include_all_marketplaces: false,
-            }]
+            let cwds = selected_task_cwds(state);
+            vec![refresh_marketplace_effect(state, cwds, tab, false, false)]
         }
         Action::OpenPluginDetails { plugin_id } => {
             let Some(plugin) = state
@@ -14680,12 +14770,15 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             match tab {
                 MarketplaceTab::Plugins if state.marketplace.status != Some(LoadStatus::Ready) => {
                     state.marketplace.status = Some(LoadStatus::Loading);
-                    vec![Effect::RefreshMarketplace {
-                        cwds: selected_task_cwds(state),
-                        directory_tab: state.marketplace.selected_directory_tab,
-                        force_refetch: false,
-                        include_all_marketplaces: false,
-                    }]
+                    let cwds = selected_task_cwds(state);
+                    let directory_tab = state.marketplace.selected_directory_tab;
+                    vec![refresh_marketplace_effect(
+                        state,
+                        cwds,
+                        directory_tab,
+                        false,
+                        false,
+                    )]
                 }
                 MarketplaceTab::Skills
                     if !matches!(
@@ -15710,13 +15803,16 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             apps_needing_auth.retain(|app| seen_app_ids.insert(app.id.clone()));
             state.marketplace.apps_needing_auth = apps_needing_auth;
             let cwds = selected_task_cwds(state);
+            let directory_tab = state.marketplace.selected_directory_tab;
+            let include_all_marketplaces = state.marketplace.manage_mode;
             let mut effects = vec![
-                Effect::RefreshMarketplace {
-                    cwds: cwds.clone(),
-                    directory_tab: state.marketplace.selected_directory_tab,
-                    force_refetch: false,
-                    include_all_marketplaces: state.marketplace.manage_mode,
-                },
+                refresh_marketplace_effect(
+                    state,
+                    cwds.clone(),
+                    directory_tab,
+                    false,
+                    include_all_marketplaces,
+                ),
                 refresh_composer_plugins_effect(state, cwds, false),
             ];
             effects.extend(reduce(state, Action::AppsInvalidated));
@@ -15769,13 +15865,16 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     Some("Plugin state is overridden by higher-priority configuration.".to_owned());
             }
             let cwds = selected_task_cwds(state);
+            let directory_tab = state.marketplace.selected_directory_tab;
+            let include_all_marketplaces = state.marketplace.manage_mode;
             vec![
-                Effect::RefreshMarketplace {
-                    cwds: cwds.clone(),
-                    directory_tab: state.marketplace.selected_directory_tab,
-                    force_refetch: false,
-                    include_all_marketplaces: state.marketplace.manage_mode,
-                },
+                refresh_marketplace_effect(
+                    state,
+                    cwds.clone(),
+                    directory_tab,
+                    false,
+                    include_all_marketplaces,
+                ),
                 refresh_composer_plugins_effect(state, cwds, false),
             ]
         }
@@ -17018,6 +17117,20 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.git.diff_status = Some(LoadStatus::Ready);
                 state.git.diff_error = None;
                 state.git.diff_truncated = truncated;
+            }
+            Vec::new()
+        }
+        Action::DiffFailed {
+            generation,
+            message,
+        } => {
+            if generation == state.git.diff_generation {
+                let message = bounded_string(message, 16 * 1024);
+                state.git.unified_diff.clear();
+                state.git.diff_status = Some(LoadStatus::Failed);
+                state.git.diff_error = Some(message.clone());
+                state.git.diff_truncated = false;
+                state.status_message = Some(message);
             }
             Vec::new()
         }
@@ -21764,6 +21877,72 @@ mod tests {
     }
 
     #[test]
+    fn failed_submission_restores_only_the_owning_chat_prompt() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(&mut state, Action::TaskCreated(task("t2")));
+        reduce(&mut state, Action::SelectTask("t1".to_owned()));
+        reduce(
+            &mut state,
+            Action::TaskRuntimeLoaded {
+                task_id: "t1".to_owned(),
+                generation: 1,
+                active_turn_id: None,
+                active_turn_is_review: false,
+                run_status: Some(TaskRunStatus::Idle),
+            },
+        );
+        let attachment = ComposerAttachment {
+            path: repository_path().join("note.txt"),
+            name: "note.txt".to_owned(),
+            kind: ComposerAttachmentKind::Mention,
+        };
+        let prompt = RetryableUserMessage {
+            text: "inspect the diff".to_owned(),
+            attachments: vec![attachment.clone()],
+        };
+        state.composer = prompt.text.clone();
+        state.composer_attachments = prompt.attachments.clone();
+
+        assert!(matches!(
+            reduce(&mut state, Action::SubmitComposer).as_slice(),
+            [Effect::StartTurn { task_id, .. }] if task_id == "t1"
+        ));
+        assert!(state.composer.is_empty());
+        assert!(state.composer_attachments.is_empty());
+
+        reduce(
+            &mut state,
+            Action::ComposerSubmissionFailed {
+                task_id: Some("t1".to_owned()),
+                prompt: prompt.clone(),
+                message: "failed to start turn".to_owned(),
+            },
+        );
+        assert_eq!(state.composer, prompt.text);
+        assert_eq!(state.composer_attachments, [attachment]);
+        assert_eq!(
+            state.status_message.as_deref(),
+            Some("failed to start turn")
+        );
+
+        state.composer.clear();
+        state.composer_attachments.clear();
+        reduce(&mut state, Action::SelectTask("t2".to_owned()));
+        reduce(
+            &mut state,
+            Action::ComposerSubmissionFailed {
+                task_id: Some("t1".to_owned()),
+                prompt,
+                message: "late failure".to_owned(),
+            },
+        );
+        assert!(state.composer.is_empty());
+        assert!(state.composer_attachments.is_empty());
+        assert_eq!(state.status_message.as_deref(), Some("late failure"));
+    }
+
+    #[test]
     fn new_and_fork_slash_commands_reuse_the_existing_chat_actions() {
         let mut state = AppState::default();
         let repository = repository_path();
@@ -24066,6 +24245,43 @@ mod tests {
     }
 
     #[test]
+    fn selected_file_diff_failure_is_not_reported_as_empty_success() {
+        let mut state = AppState::default();
+        state.git.repository_root = Some(repository_path());
+        let path = PathBuf::from("src/lib.rs");
+        reduce(
+            &mut state,
+            Action::SelectDiffPath {
+                path: path.clone(),
+                scope: GitDiffScope::Unstaged,
+            },
+        );
+
+        reduce(
+            &mut state,
+            Action::DiffFailed {
+                generation: 0,
+                message: "stale failure".to_owned(),
+            },
+        );
+        assert_eq!(state.git.diff_status, Some(LoadStatus::Loading));
+        assert!(state.git.diff_error.is_none());
+
+        reduce(
+            &mut state,
+            Action::DiffFailed {
+                generation: 1,
+                message: "failed to load diff".to_owned(),
+            },
+        );
+        assert_eq!(state.git.selected_path.as_ref(), Some(&path));
+        assert_eq!(state.git.diff_status, Some(LoadStatus::Failed));
+        assert_eq!(state.git.diff_error.as_deref(), Some("failed to load diff"));
+        assert!(state.git.unified_diff.is_empty());
+        assert!(!state.git.diff_truncated);
+    }
+
+    #[test]
     fn review_sources_use_latest_bounded_diffs_and_fall_back_from_removed_commits() {
         let root = PathBuf::from("C:\\repo");
         let mut state = AppState::default();
@@ -25956,6 +26172,51 @@ mod tests {
     }
 
     #[test]
+    fn successful_login_completion_after_cancel_is_logged_out() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::StartAccountLogin);
+        reduce(
+            &mut state,
+            Action::AccountLoginStarted {
+                login_id: "login-1".to_owned(),
+                authorization_url: "https://auth.openai.com/".to_owned(),
+                user_code: Some("ABCD-EFGH".to_owned()),
+            },
+        );
+        assert_eq!(
+            reduce(&mut state, Action::CancelAccountLogin),
+            [Effect::CancelAccountLogin {
+                login_id: "login-1".to_owned(),
+            }]
+        );
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::AccountLoginCompleted {
+                    login_id: Some("login-1".to_owned()),
+                    success: true,
+                },
+            ),
+            [Effect::LogoutAccount]
+        );
+        assert_eq!(
+            state.account.auth_operation,
+            AccountAuthOperation::LoggingOut
+        );
+        assert!(state.account.login_id.is_none());
+        assert!(state.account.login_verification_url.is_none());
+        assert!(state.account.login_user_code.is_none());
+
+        assert_eq!(
+            reduce(&mut state, Action::AccountLoggedOut),
+            [Effect::LoadAccount]
+        );
+        assert_eq!(state.account.auth_operation, AccountAuthOperation::Idle);
+        assert!(state.account.profile.is_none());
+    }
+
+    #[test]
     fn api_key_login_is_single_flight_and_loads_after_anonymous_completion() {
         let mut state = AppState::default();
 
@@ -26408,6 +26669,7 @@ mod tests {
                     inspector: InspectorPane::Hidden,
                 },
                 Effect::RefreshMarketplace {
+                    generation: 1,
                     cwds: vec![repository.clone()],
                     directory_tab: PluginDirectoryTab::CuratedByOpenAi,
                     force_refetch: false,
@@ -26442,6 +26704,7 @@ mod tests {
         reduce(
             &mut state,
             Action::MarketplaceLoaded {
+                generation: 0,
                 plugins: Vec::new(),
                 sources: Vec::new(),
                 marketplace_load_error_count: 2,
@@ -26455,13 +26718,17 @@ mod tests {
 
         reduce(
             &mut state,
-            Action::MarketplaceFailed("request failed".to_owned()),
+            Action::MarketplaceFailed {
+                generation: 1,
+                message: "request failed".to_owned(),
+            },
         );
         assert_eq!(state.marketplace.marketplace_load_error_count, 2);
 
         reduce(
             &mut state,
             Action::MarketplaceLoaded {
+                generation: 1,
                 plugins: Vec::new(),
                 sources: Vec::new(),
                 marketplace_load_error_count: 0,
@@ -26482,6 +26749,7 @@ mod tests {
                 Action::SelectPluginDirectoryTab(PluginDirectoryTab::SharedWithYou),
             ),
             [Effect::RefreshMarketplace {
+                generation: 1,
                 cwds: Vec::new(),
                 directory_tab: PluginDirectoryTab::SharedWithYou,
                 force_refetch: false,
@@ -26505,6 +26773,93 @@ mod tests {
     }
 
     #[test]
+    fn stale_plugin_directory_catalog_is_ignored() {
+        fn plugin(id: &str) -> PluginCard {
+            PluginCard {
+                id: id.to_owned(),
+                install_name: id.to_owned(),
+                marketplace: "marketplace".to_owned(),
+                name: id.to_owned(),
+                description: String::new(),
+                category: None,
+                developer: None,
+                logo_url: None,
+                logo_url_dark: None,
+                default_prompt: None,
+                version: None,
+                keywords: Vec::new(),
+                installed: false,
+                enabled: false,
+                installable: true,
+                disabled_by_admin: false,
+                requires_install_confirmation: false,
+                featured: false,
+                featured_rank: None,
+            }
+        }
+
+        let mut state = AppState::default();
+        reduce(
+            &mut state,
+            Action::SelectPluginDirectoryTab(PluginDirectoryTab::SharedWithYou),
+        );
+        reduce(
+            &mut state,
+            Action::SelectPluginDirectoryTab(PluginDirectoryTab::Workspace),
+        );
+
+        reduce(
+            &mut state,
+            Action::MarketplaceLoaded {
+                generation: 1,
+                plugins: vec![plugin("stale")],
+                sources: Vec::new(),
+                marketplace_load_error_count: 0,
+            },
+        );
+        assert_eq!(state.marketplace.status, Some(LoadStatus::Loading));
+        assert!(state.marketplace.plugins.is_empty());
+
+        reduce(
+            &mut state,
+            Action::MarketplaceLoaded {
+                generation: 2,
+                plugins: vec![plugin("current")],
+                sources: Vec::new(),
+                marketplace_load_error_count: 0,
+            },
+        );
+        assert_eq!(state.marketplace.status, Some(LoadStatus::Ready));
+        assert_eq!(state.marketplace.plugins[0].id, "current");
+        assert!(
+            reduce(
+                &mut state,
+                Action::InstallPlugin {
+                    plugin_id: "stale".to_owned(),
+                    plugin_name: "stale".to_owned(),
+                    marketplace: "marketplace".to_owned(),
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::InstallPlugin {
+                    plugin_id: "current".to_owned(),
+                    plugin_name: "current".to_owned(),
+                    marketplace: "marketplace".to_owned(),
+                },
+            ),
+            [Effect::InstallPlugin {
+                plugin_id: "current".to_owned(),
+                plugin_name: "current".to_owned(),
+                marketplace: "marketplace".to_owned(),
+            }]
+        );
+    }
+
+    #[test]
     fn marketplace_management_uses_the_typed_add_effect_and_refreshes_after_success() {
         let mut state = AppState::default();
 
@@ -26512,6 +26867,7 @@ mod tests {
             reduce(&mut state, Action::SetMarketplaceManageMode(true)),
             [
                 Effect::RefreshMarketplace {
+                    generation: 1,
                     cwds: Vec::new(),
                     directory_tab: PluginDirectoryTab::CuratedByOpenAi,
                     force_refetch: false,
@@ -26577,6 +26933,7 @@ mod tests {
                 },
             ),
             [Effect::RefreshMarketplace {
+                generation: 2,
                 cwds: Vec::new(),
                 directory_tab: PluginDirectoryTab::CuratedByOpenAi,
                 force_refetch: true,
@@ -27309,6 +27666,7 @@ mod tests {
                 Action::MarketplaceRemoved("team-plugins".to_owned()),
             ),
             [Effect::RefreshMarketplace {
+                generation: 1,
                 cwds: Vec::new(),
                 directory_tab: PluginDirectoryTab::CuratedByOpenAi,
                 force_refetch: true,
@@ -27336,6 +27694,7 @@ mod tests {
                 },
             ),
             [Effect::RefreshMarketplace {
+                generation: 2,
                 cwds: Vec::new(),
                 directory_tab: PluginDirectoryTab::CuratedByOpenAi,
                 force_refetch: true,
@@ -27403,6 +27762,7 @@ mod tests {
 
         let effects = reduce(&mut state, Action::Connected);
         assert!(effects.contains(&Effect::RefreshMarketplace {
+            generation: 1,
             cwds: Vec::new(),
             directory_tab: PluginDirectoryTab::CuratedByOpenAi,
             force_refetch: false,
@@ -27456,6 +27816,7 @@ mod tests {
         reduce(
             &mut state,
             Action::MarketplaceLoaded {
+                generation: 0,
                 plugins: vec![plugin],
                 sources: Vec::new(),
                 marketplace_load_error_count: 0,
@@ -27491,6 +27852,7 @@ mod tests {
         reduce(
             &mut state,
             Action::MarketplaceLoaded {
+                generation: 0,
                 plugins: Vec::new(),
                 sources: Vec::new(),
                 marketplace_load_error_count: 0,
@@ -27834,6 +28196,7 @@ mod tests {
             reduce(
                 &mut state,
                 Action::MarketplaceLoaded {
+                    generation: 0,
                     plugins: vec![plugin],
                     sources: Vec::new(),
                     marketplace_load_error_count: 0,
@@ -27897,6 +28260,7 @@ mod tests {
         reduce(
             &mut state,
             Action::MarketplaceLoaded {
+                generation: 0,
                 plugins: vec![plugin],
                 sources: Vec::new(),
                 marketplace_load_error_count: 0,
@@ -27983,6 +28347,7 @@ mod tests {
             ),
             [
                 Effect::RefreshMarketplace {
+                    generation: 1,
                     cwds: Vec::new(),
                     directory_tab: PluginDirectoryTab::CuratedByOpenAi,
                     force_refetch: false,
@@ -28944,6 +29309,81 @@ mod tests {
                 last_error: None,
             }
         );
+    }
+
+    #[test]
+    fn reconnect_reloads_the_selected_timeline_authoritatively() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        let partial = TimelineItem {
+            id: "partial".to_owned(),
+            turn_id: "turn-1".to_owned(),
+            kind: TimelineKind::Agent,
+            text: "partial output".to_owned(),
+            detail: None,
+            process_id: None,
+            memory_citations: Vec::new(),
+            sources: Vec::new(),
+            attachments: Vec::new(),
+            output_artifacts: Vec::new(),
+            edit_supported: false,
+            completed: false,
+        };
+        let timeline = state.timelines.entry("t1".to_owned()).or_default();
+        timeline.status = LoadStatus::Ready;
+        timeline.generation = 7;
+        timeline.next_cursor = Some("stale-page".to_owned());
+        timeline.items = vec![partial.clone()];
+        timeline.rebuild_item_indices();
+        state.connection = ConnectionStatus::Recovering {
+            attempt: 1,
+            retry_in_ms: None,
+            last_error: None,
+        };
+
+        let effects = reduce(&mut state, Action::Connected);
+
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::ResumeTask { task_id, .. } if task_id == "t1"
+        )));
+        assert!(effects.contains(&Effect::LoadTimeline {
+            task_id: "t1".to_owned(),
+            generation: 8,
+            cursor: None,
+        }));
+        let timeline = &state.timelines["t1"];
+        assert_eq!(timeline.status, LoadStatus::Loading);
+        assert!(timeline.next_cursor.is_none());
+        assert_eq!(timeline.items(), std::slice::from_ref(&partial));
+
+        reduce(
+            &mut state,
+            Action::TimelineLoaded {
+                task_id: "t1".to_owned(),
+                generation: 7,
+                items: Vec::new(),
+                next_cursor: None,
+                append: false,
+            },
+        );
+        assert_eq!(
+            state.timelines["t1"].items(),
+            std::slice::from_ref(&partial)
+        );
+
+        reduce(
+            &mut state,
+            Action::TimelineLoaded {
+                task_id: "t1".to_owned(),
+                generation: 8,
+                items: Vec::new(),
+                next_cursor: None,
+                append: false,
+            },
+        );
+        assert!(state.timelines["t1"].items().is_empty());
+        assert_eq!(state.timelines["t1"].status, LoadStatus::Ready);
     }
 
     fn remote_requirements(managed_allow_remote_control: Option<bool>) -> PermissionRequirements {
