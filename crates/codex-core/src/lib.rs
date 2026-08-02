@@ -9008,6 +9008,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         Action::LoadMoreTasks => {
             if state.task_status == LoadStatus::Loading || state.next_task_cursor.is_none() {
                 Vec::new()
+            } else if state.tasks.len() >= MAX_VISIBLE_THREADS {
+                state.next_task_cursor = None;
+                Vec::new()
             } else {
                 state.task_status = LoadStatus::Loading;
                 vec![Effect::LoadTasks {
@@ -9044,7 +9047,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.tasks = tasks;
             }
             state.tasks.truncate(MAX_VISIBLE_THREADS);
-            state.next_task_cursor = next_cursor;
+            state.next_task_cursor = (state.tasks.len() < MAX_VISIBLE_THREADS)
+                .then_some(next_cursor)
+                .flatten();
             state.task_status = LoadStatus::Ready;
             let Some(unresolved) = state.review_start.unresolved_detached.clone() else {
                 return Vec::new();
@@ -17707,9 +17712,9 @@ mod tests {
         LoadStatus, LocalProjectSummary, MAX_ACCOUNT_FIELD_BYTES, MAX_BROWSER_DOWNLOADS,
         MAX_COMPOSER_BYTES, MAX_GIT_BRANCH_BYTES, MAX_GIT_DIFF_BYTES, MAX_GIT_INSTRUCTIONS_BYTES,
         MAX_GIT_SHA_BYTES, MAX_PINNED_TASK_ID_BYTES, MAX_PLUGIN_DETAIL_ITEMS,
-        MAX_REVIEW_START_ERROR_BYTES, MAX_TIMELINE_ITEMS, MAX_TURN_DIFF_BYTES, MainRoute,
-        MarketplaceManageTab, MarketplaceSectionFilter, MarketplaceSourceCard, MarketplaceTab,
-        MarketplaceUpgradeFailure, McpAuthStatus, McpBrowserOriginElicitation,
+        MAX_REVIEW_START_ERROR_BYTES, MAX_TIMELINE_ITEMS, MAX_TURN_DIFF_BYTES, MAX_VISIBLE_THREADS,
+        MainRoute, MarketplaceManageTab, MarketplaceSectionFilter, MarketplaceSourceCard,
+        MarketplaceTab, MarketplaceUpgradeFailure, McpAuthStatus, McpBrowserOriginElicitation,
         McpBrowserResourceElicitation, McpElicitation, McpElicitationContent,
         McpElicitationDecision, McpElicitationValue, McpFormElicitation, McpFormField,
         McpFormFieldKind, McpFormImagePickerItem, McpFormOption, McpFormStringFormat,
@@ -24533,6 +24538,48 @@ mod tests {
 
         assert!(state.tasks.is_empty());
         assert_eq!(state.task_generation, 2);
+    }
+
+    #[test]
+    fn loading_more_tasks_stops_at_the_visible_chat_cap() {
+        let mut state = AppState {
+            tasks: (0..MAX_VISIBLE_THREADS)
+                .map(|index| task(&format!("task-{index}")))
+                .collect(),
+            next_task_cursor: Some("more".to_owned()),
+            ..AppState::default()
+        };
+
+        assert!(reduce(&mut state, Action::LoadMoreTasks).is_empty());
+        assert!(state.next_task_cursor.is_none());
+    }
+
+    #[test]
+    fn appended_task_page_at_visible_chat_cap_clears_next_cursor() {
+        let mut state = AppState {
+            task_generation: 7,
+            tasks: (0..MAX_VISIBLE_THREADS)
+                .map(|index| task(&format!("task-{index}")))
+                .collect(),
+            ..AppState::default()
+        };
+
+        reduce(
+            &mut state,
+            Action::TasksLoaded {
+                generation: 7,
+                tasks: vec![task("older-task")],
+                next_cursor: Some("more".to_owned()),
+                append: true,
+            },
+        );
+
+        assert_eq!(state.tasks.len(), MAX_VISIBLE_THREADS);
+        assert_eq!(
+            state.tasks.first().map(|task| task.id.as_str()),
+            Some("task-0")
+        );
+        assert!(state.next_task_cursor.is_none());
     }
 
     #[test]
