@@ -253,6 +253,15 @@ fn task_workspace_active(route: MainRoute, selected_task_id: Option<&str>) -> bo
     route == MainRoute::Tasks && selected_task_id.is_some()
 }
 
+fn bottom_terminal_panel_toggle_available(state: &AppState) -> bool {
+    task_workspace_active(state.route, state.selected_task_id.as_deref())
+        && state.terminal.location == TerminalDockLocation::Bottom
+        && state
+            .selected_task_id
+            .as_deref()
+            .is_some_and(|task_id| state.terminal.tabs_for(task_id).next().is_some())
+}
+
 fn repository_uses_split_diff(preference: bool, width_class: Option<ShellWidthClass>) -> bool {
     preference && width_class == Some(ShellWidthClass::Wide)
 }
@@ -9602,8 +9611,8 @@ impl WorkspaceView {
                 task_workspace_active(self.state.route, self.state.selected_task_id.as_deref())
                     && self.state.git.repository_root.is_some()
             }
-            "toggleBottomPanel" | "toggleSidePanel" | "toggleTerminal" | "openBrowserTab"
-            | "toggleBrowserPanel" => {
+            "toggleBottomPanel" => bottom_terminal_panel_toggle_available(&self.state),
+            "toggleSidePanel" | "toggleTerminal" | "openBrowserTab" | "toggleBrowserPanel" => {
                 task_workspace_active(self.state.route, self.state.selected_task_id.as_deref())
             }
             "focusBrowserAddressBar" => {
@@ -9730,7 +9739,7 @@ impl WorkspaceView {
             "navigateBrowserForward" => self.dispatch(Action::NavigateBrowserForward, cx),
             "toggleSidebar" => self.toggle_sidebar(cx),
             "toggleBottomPanel" => {
-                if task_workspace_active(self.state.route, self.state.selected_task_id.as_deref()) {
+                if bottom_terminal_panel_toggle_available(&self.state) {
                     self.dispatch(Action::ToggleBottomPanel, cx);
                 }
             }
@@ -12529,6 +12538,7 @@ impl WorkspaceView {
         view: WeakEntity<Self>,
         shortcuts: Arc<HashMap<&'static str, String>>,
         task_workspace_active: bool,
+        bottom_panel_available: bool,
         has_multiple_tasks: bool,
         find_available: bool,
         can_navigate_back: bool,
@@ -12548,7 +12558,7 @@ impl WorkspaceView {
         menu = menu.item(
             Self::shortcut_popup_menu_item("Toggle Bottom Panel", "toggleBottomPanel", &shortcuts)
                 .action(Box::new(ToggleBottomPanelShortcut))
-                .disabled(!task_workspace_active)
+                .disabled(!bottom_panel_available)
                 .on_click(move |_, _, cx| {
                     let _ = bottom_panel_view.update(cx, |this, cx| {
                         this.dispatch(Action::ToggleBottomPanel, cx);
@@ -12781,6 +12791,7 @@ impl WorkspaceView {
         let account_idle = self.state.account.auth_operation == AccountAuthOperation::Idle;
         let task_workspace_active =
             task_workspace_active(self.state.route, self.state.selected_task_id.as_deref());
+        let bottom_panel_available = bottom_terminal_panel_toggle_available(&self.state);
         let find_available = task_workspace_active;
         let has_multiple_tasks = self.state.tasks.len() > 1;
         let can_navigate_back = self.can_navigate_history(false);
@@ -12865,6 +12876,7 @@ impl WorkspaceView {
                                     view_menu_view.clone(),
                                     view_shortcuts.clone(),
                                     task_workspace_active,
+                                    bottom_panel_available,
                                     has_multiple_tasks,
                                     find_available,
                                     can_navigate_back,
@@ -45447,14 +45459,14 @@ mod tests {
         archived_chat_projects, archived_delete_confirmation_copy, background_chat_running_count,
         background_chat_window_title, background_completion_notification_transition,
         background_terminal_summary, bedrock_workspace_notice,
-        bounded_keyboard_shortcut_search_query, bounded_settings_search_query,
-        bounded_thread_find_query, browser_display_url, browser_navigation_url,
-        browser_surface_coordinates, build_plugin_catalog_sections, case_insensitive_match_ranges,
-        command_task_slot, composer_app_commands, composer_at_skill_commands,
-        composer_desktop_app_commands, composer_file_query, composer_file_search_max_height,
-        composer_model_picker_items, composer_model_placeholder, composer_plugin_commands,
-        composer_service_tier_command_for_query, composer_service_tier_commands,
-        composer_skill_command_for_query, composer_skill_commands,
+        bottom_terminal_panel_toggle_available, bounded_keyboard_shortcut_search_query,
+        bounded_settings_search_query, bounded_thread_find_query, browser_display_url,
+        browser_navigation_url, browser_surface_coordinates, build_plugin_catalog_sections,
+        case_insensitive_match_ranges, command_task_slot, composer_app_commands,
+        composer_at_skill_commands, composer_desktop_app_commands, composer_file_query,
+        composer_file_search_max_height, composer_model_picker_items, composer_model_placeholder,
+        composer_plugin_commands, composer_service_tier_command_for_query,
+        composer_service_tier_commands, composer_skill_command_for_query, composer_skill_commands,
         composer_slash_command_for_prefix, connection_send_failure, decode_mcp_form_image_data_url,
         default_branch_name, diff_file_review_rows, diff_file_sections,
         extract_code_comment_findings, fetch_plugin_logo_blocking, find_timeline_matches,
@@ -45493,7 +45505,8 @@ mod tests {
         PullRequestCiStatus, PullRequestDetail, PullRequestIdentity, PullRequestMutationKind,
         PullRequestState, PullRequestSummary, ReasoningEffortOption, ReducedMotionPreference,
         RemoteControlRuntimeStatus, ServiceTierOption, SkillCard, SkillScope, TaskRunStatus,
-        TaskSummary, TerminalTabState, TimelineItem, TimelineKind, TurnDiffState,
+        TaskSummary, TerminalDockLocation, TerminalTabState, TimelineItem, TimelineKind,
+        TurnDiffState,
     };
 
     fn task(id: &str, cwd: &str) -> TaskSummary {
@@ -47631,6 +47644,39 @@ mod tests {
             MainRoute::Repository,
             Some("task-1")
         ));
+    }
+
+    #[test]
+    fn bottom_terminal_panel_toggle_requires_bottom_dock_and_task_terminal() {
+        let mut state = AppState {
+            route: MainRoute::Tasks,
+            selected_task_id: Some("task-1".to_owned()),
+            ..AppState::default()
+        };
+        let terminal_tab = TerminalTabState {
+            id: 1,
+            task_id: "task-1".to_owned(),
+            cwd: PathBuf::from("/work/codexrs"),
+            shell: None,
+            process_id: None,
+            title: String::new(),
+            output: String::new(),
+            starting: false,
+            running: true,
+            stopping: false,
+            truncated: false,
+            exit_code: None,
+            error: None,
+        };
+        state.terminal.tabs.push(terminal_tab.clone());
+        assert!(bottom_terminal_panel_toggle_available(&state));
+
+        state.terminal.tabs.clear();
+        assert!(!bottom_terminal_panel_toggle_available(&state));
+
+        state.terminal.tabs.push(terminal_tab);
+        state.terminal.location = TerminalDockLocation::Right;
+        assert!(!bottom_terminal_panel_toggle_available(&state));
     }
 
     #[test]
