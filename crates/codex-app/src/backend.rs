@@ -5131,31 +5131,46 @@ fn run_effect(
                 Ok(response) => {
                     let supports_token_activity =
                         account_supports_token_activity(response.account.as_ref());
-                    let (usage_limits, credits, usage_error) = if response.account.is_some() {
-                        match app_server.read_account_rate_limits() {
-                            Ok(response) => {
-                                let snapshot = response.rate_limits;
-                                let usage_limits = [snapshot.primary, snapshot.secondary]
-                                    .into_iter()
-                                    .flatten()
-                                    .map(map_usage_limit_window)
-                                    .collect();
-                                let credits = snapshot.credits.map(|credits| AccountCredits {
-                                    has_credits: credits.has_credits,
-                                    unlimited: credits.unlimited,
-                                    balance: credits.balance.map(|balance| bounded(balance, 512)),
-                                });
-                                (usage_limits, credits, None)
+                    let (usage_limits, credits, rate_limit_reset_credits_available, usage_error) =
+                        if response.account.is_some() {
+                            match app_server.read_account_rate_limits() {
+                                Ok(response) => {
+                                    let snapshot = response.rate_limits;
+                                    let usage_limits = [snapshot.primary, snapshot.secondary]
+                                        .into_iter()
+                                        .flatten()
+                                        .map(map_usage_limit_window)
+                                        .collect();
+                                    let credits = snapshot.credits.map(|credits| AccountCredits {
+                                        has_credits: credits.has_credits,
+                                        unlimited: credits.unlimited,
+                                        balance: credits
+                                            .balance
+                                            .map(|balance| bounded(balance, 512)),
+                                    });
+                                    let rate_limit_reset_credits_available =
+                                        response.rate_limit_reset_credits.and_then(|summary| {
+                                            map_rate_limit_reset_credit_count(
+                                                summary.available_count,
+                                            )
+                                        });
+                                    (
+                                        usage_limits,
+                                        credits,
+                                        rate_limit_reset_credits_available,
+                                        None,
+                                    )
+                                }
+                                Err(_) => (
+                                    Vec::new(),
+                                    None,
+                                    None,
+                                    Some("Could not load usage limits.".to_owned()),
+                                ),
                             }
-                            Err(_) => (
-                                Vec::new(),
-                                None,
-                                Some("Could not load usage limits.".to_owned()),
-                            ),
-                        }
-                    } else {
-                        (Vec::new(), None, None)
-                    };
+                        } else {
+                            (Vec::new(), None, None, None)
+                        };
                     let (token_activity, token_activity_error) = if supports_token_activity {
                         match app_server.read_account_token_usage() {
                             Ok(response) => {
@@ -5173,6 +5188,7 @@ fn run_effect(
                             requires_openai_auth: response.requires_openai_auth,
                             usage_limits,
                             credits,
+                            rate_limit_reset_credits_available,
                             usage_error,
                             token_activity,
                             token_activity_error,
@@ -14288,6 +14304,10 @@ fn map_account_token_activity(summary: AccountTokenUsageSummary) -> AccountToken
     }
 }
 
+fn map_rate_limit_reset_credit_count(available_count: i64) -> Option<u32> {
+    u32::try_from(available_count).ok()
+}
+
 fn browser_account_login_started_action(response: LoginAccountResponse) -> Option<Action> {
     match response {
         LoginAccountResponse::ChatGpt { login_id, auth_url } => {
@@ -16203,13 +16223,13 @@ mod tests {
         linux_computer_use_dynamic_tools, map_account_token_activity, map_app_detail,
         map_app_server_approval, map_apps, map_fuzzy_file_search_results, map_mcp_elicitation,
         map_mcp_resource_contents, map_mcp_runtime_catalog, map_model_options,
-        map_remote_control_snapshot, map_remote_devices_page, map_timeline_item,
-        map_user_input_request, mcp_elicitation_content_json, mcp_server_config_value,
-        newest_review_mode_from_items, parse_appearance_preferences, parse_appearance_theme,
-        parse_browser_download_preferences, parse_browser_permissions, parse_computer_key_chord,
-        parse_generated_commit_message, parse_generated_commit_pull_request_messages,
-        parse_generated_pull_request_message, parse_git_preferences,
-        parse_keyboard_shortcut_preferences, parse_primary_window_placement,
+        map_rate_limit_reset_credit_count, map_remote_control_snapshot, map_remote_devices_page,
+        map_timeline_item, map_user_input_request, mcp_elicitation_content_json,
+        mcp_server_config_value, newest_review_mode_from_items, parse_appearance_preferences,
+        parse_appearance_theme, parse_browser_download_preferences, parse_browser_permissions,
+        parse_computer_key_chord, parse_generated_commit_message,
+        parse_generated_commit_pull_request_messages, parse_generated_pull_request_message,
+        parse_git_preferences, parse_keyboard_shortcut_preferences, parse_primary_window_placement,
         personalization_snapshot, plugin_directory_includes_marketplace,
         plugin_directory_marketplace_kinds, plugin_requires_install_confirmation,
         pull_request_generation_prompt, pull_request_output_schema, record_retryable_steer,
@@ -16621,6 +16641,9 @@ mod tests {
                 longest_streak_days: Some(21),
             }
         );
+        assert_eq!(map_rate_limit_reset_credit_count(2), Some(2));
+        assert_eq!(map_rate_limit_reset_credit_count(-1), None);
+        assert_eq!(map_rate_limit_reset_credit_count(i64::MAX), None);
     }
 
     #[test]

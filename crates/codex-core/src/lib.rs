@@ -3739,6 +3739,7 @@ pub struct AccountState {
     pub requires_openai_auth: bool,
     pub usage_limits: Vec<UsageLimitWindow>,
     pub credits: Option<AccountCredits>,
+    pub rate_limit_reset_credits_available: Option<u32>,
     pub usage_error: Option<String>,
     pub token_activity: Option<AccountTokenActivitySummary>,
     pub token_activity_error: Option<String>,
@@ -3758,6 +3759,7 @@ impl Default for AccountState {
             requires_openai_auth: false,
             usage_limits: Vec::new(),
             credits: None,
+            rate_limit_reset_credits_available: None,
             usage_error: None,
             token_activity: None,
             token_activity_error: None,
@@ -5048,6 +5050,7 @@ pub enum Action {
         requires_openai_auth: bool,
         usage_limits: Vec<UsageLimitWindow>,
         credits: Option<AccountCredits>,
+        rate_limit_reset_credits_available: Option<u32>,
         usage_error: Option<String>,
         token_activity: Option<AccountTokenActivitySummary>,
         token_activity_error: Option<String>,
@@ -13502,6 +13505,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             requires_openai_auth,
             mut usage_limits,
             mut credits,
+            rate_limit_reset_credits_available,
             usage_error,
             token_activity,
             token_activity_error,
@@ -13530,6 +13534,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.account.requires_openai_auth = requires_openai_auth;
             state.account.usage_limits = usage_limits;
             state.account.credits = credits;
+            state.account.rate_limit_reset_credits_available = rate_limit_reset_credits_available;
             state.account.usage_error =
                 usage_error.map(|message| bounded_string(message, MAX_ACCOUNT_FIELD_BYTES));
             state.account.token_activity = token_activity;
@@ -24982,6 +24987,7 @@ mod tests {
                     unlimited: false,
                     balance: Some(format!("  {}  ", "9".repeat(600))),
                 }),
+                rate_limit_reset_credits_available: Some(2),
                 usage_error: None,
                 token_activity: Some(AccountTokenActivitySummary {
                     lifetime_tokens: Some(1_250_000),
@@ -25012,6 +25018,7 @@ mod tests {
                 .and_then(|profile| profile.email.as_ref())
                 .is_some_and(|email| email.len() <= 512)
         );
+        assert_eq!(state.account.rate_limit_reset_credits_available, Some(2));
         assert!(
             state
                 .account
@@ -25098,6 +25105,7 @@ mod tests {
                 requires_openai_auth: true,
                 usage_limits: Vec::new(),
                 credits: None,
+                rate_limit_reset_credits_available: None,
                 usage_error: None,
                 token_activity: None,
                 token_activity_error: None,
