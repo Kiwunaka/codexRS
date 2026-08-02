@@ -3887,7 +3887,7 @@ impl CommandPaletteView {
                 workspace.open_settings_section(SettingsSection::Connections, cx);
             }
             PaletteCommand::OpenGeneralSettings => {
-                workspace.open_settings_section(SettingsSection::General, cx);
+                workspace.open_general_settings(window, cx);
             }
             PaletteCommand::OpenAppearanceSettings => {
                 workspace.open_settings_section(SettingsSection::Appearance, cx);
@@ -8068,6 +8068,13 @@ impl WorkspaceView {
         self.open_settings_section(SettingsSection::McpServers, cx);
     }
 
+    fn open_general_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings_search.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+        });
+        self.open_settings_section(SettingsSection::General, cx);
+    }
+
     fn open_plugins_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.plugin_search.update(cx, |input, cx| {
             input.set_value("", window, cx);
@@ -9678,7 +9685,7 @@ impl WorkspaceView {
             "personalitySettings" => {
                 self.open_settings_section(SettingsSection::Personalization, cx);
             }
-            "settings" => self.open_settings_section(SettingsSection::General, cx),
+            "settings" => self.open_general_settings(window, cx),
             "openProcessManager" => self.open_process_manager(cx),
             "logOut" => self.confirm_account_logout(cx),
             "feedback" => self.open_feedback_modal(window, cx),
@@ -12419,9 +12426,9 @@ impl WorkspaceView {
         menu.item(
             Self::shortcut_popup_menu_item("Settings…", "settings", &shortcuts)
                 .action(Box::new(OpenSettingsShortcut))
-                .on_click(move |_, _, cx| {
+                .on_click(move |_, window, cx| {
                     let _ = view.update(cx, |this, cx| {
-                        this.open_settings_section(SettingsSection::General, cx);
+                        this.open_general_settings(window, cx);
                     });
                 }),
         )
@@ -13410,8 +13417,8 @@ impl WorkspaceView {
                     })
                     .child(Icon::new(IconName::Settings).xsmall())
                     .child(div().text_sm().child("Settings"))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.open_settings_section(SettingsSection::General, cx);
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.open_general_settings(window, cx);
                     })),
             )
             .child(
