@@ -3224,6 +3224,24 @@ fn run_backend(
                         {
                             computer_accessibility.mark_user_input(&window_id);
                         }
+                        let active_computer_turn = computer_interruption
+                            .as_ref()
+                            .and_then(ComputerUseInterruptionMonitor::active_turn);
+                        if computer_request.as_ref().is_some_and(|request| {
+                            computer_tool_target_requires_refresh(
+                                request,
+                                active_computer_turn.as_ref(),
+                            )
+                        }) {
+                            if let Some(request) = computer_request.as_ref() {
+                                respond_dynamic_tool_failure(
+                                    app_server,
+                                    &request.id,
+                                    COMPUTER_USE_USER_INPUT_STALE_MESSAGE,
+                                );
+                            }
+                            continue;
+                        }
                         if computer_monitor_transition
                             && let Some(monitor) = computer_interruption.as_ref()
                         {
@@ -3623,6 +3641,21 @@ fn computer_tool_requires_interruption_monitor(tool: &str) -> bool {
 
 fn computer_tool_updates_interruption_monitor(request: &ComputerToolRequestMeta) -> bool {
     request.window_id.is_some() || computer_tool_requires_interruption_monitor(&request.tool)
+}
+
+fn computer_tool_target_requires_refresh(
+    request: &ComputerToolRequestMeta,
+    active_turn: Option<&ComputerUseTurnKey>,
+) -> bool {
+    if request.tool == "get_window_state" {
+        return false;
+    }
+    let (Some(window_id), Some(active_turn)) = (request.window_id.as_deref(), active_turn) else {
+        return false;
+    };
+    active_turn.thread_id != request.thread_id
+        || active_turn.turn_id != request.turn_id
+        || active_turn.window_id.as_deref() != Some(window_id)
 }
 
 fn handle_computer_use_interruption(
@@ -16472,7 +16505,7 @@ mod tests {
         ReviewDelivery, TimelineItem, TimelineKind, TimelineSource, UserInputAnswer,
         UserInputAnswers,
     };
-    use codex_platform::{AppServerEvent, ComputerApplication, ComputerKey};
+    use codex_platform::{AppServerEvent, ComputerApplication, ComputerKey, ComputerUseTurnKey};
     use codex_protocol::{
         Account as ProtocolAccount, AccountTokenUsageDailyBucket, AccountTokenUsageSummary,
         AppInfo, AppToolSummary, ConfigReadResponse, ConnectorMetadata, FuzzyFileSearchMatchType,
@@ -16502,14 +16535,14 @@ mod tests {
         combined_git_generation_prompt, combined_git_output_schema, commit_generation_prompt,
         commit_message_output_schema, composer_config_key, composer_inputs,
         computer_application_value, computer_tool_request_meta,
-        computer_tool_requires_interruption_monitor, computer_use_allowed_app_ids,
-        computer_use_allowed_app_ids_value, computer_use_app_authorized,
-        computer_use_dynamic_tools, computer_window_argument, computer_window_schema,
-        device_code_account_login_started_action, drag_coordinates, encode_appearance_preferences,
-        encode_browser_download_preferences, encode_browser_permissions, encode_git_preferences,
-        encode_keyboard_shortcut_preferences, encode_primary_window_placement,
-        forbidden_computer_target_message, handle_notification, hook_state_config_value,
-        index_app_logos, initialize_capabilities, is_hidden_timeline_item,
+        computer_tool_requires_interruption_monitor, computer_tool_target_requires_refresh,
+        computer_use_allowed_app_ids, computer_use_allowed_app_ids_value,
+        computer_use_app_authorized, computer_use_dynamic_tools, computer_window_argument,
+        computer_window_schema, device_code_account_login_started_action, drag_coordinates,
+        encode_appearance_preferences, encode_browser_download_preferences,
+        encode_browser_permissions, encode_git_preferences, encode_keyboard_shortcut_preferences,
+        encode_primary_window_placement, forbidden_computer_target_message, handle_notification,
+        hook_state_config_value, index_app_logos, initialize_capabilities, is_hidden_timeline_item,
         linux_computer_use_dynamic_tools, map_account_profile, map_account_token_activity,
         map_app_detail, map_app_server_approval, map_apps, map_fuzzy_file_search_results,
         map_mcp_elicitation, map_mcp_resource_contents, map_mcp_runtime_catalog, map_model_options,
@@ -16845,6 +16878,44 @@ mod tests {
             "launch_app",
             None,
         )));
+    }
+
+    #[test]
+    fn computer_actions_require_state_after_switching_exact_targets() {
+        let request =
+            |thread_id: &str, tool: &str, window_id: Option<&str>| super::ComputerToolRequestMeta {
+                id: Value::Null,
+                thread_id: thread_id.to_owned(),
+                turn_id: "turn-1".to_owned(),
+                tool: tool.to_owned(),
+                window_id: window_id.map(str::to_owned),
+            };
+        let active = ComputerUseTurnKey {
+            thread_id: "thread-1".to_owned(),
+            turn_id: "turn-1".to_owned(),
+            window_id: Some("7".to_owned()),
+        };
+
+        assert!(!computer_tool_target_requires_refresh(
+            &request("thread-1", "click", Some("7")),
+            Some(&active),
+        ));
+        assert!(computer_tool_target_requires_refresh(
+            &request("thread-1", "click", Some("8")),
+            Some(&active),
+        ));
+        assert!(computer_tool_target_requires_refresh(
+            &request("thread-2", "click", Some("7")),
+            Some(&active),
+        ));
+        assert!(!computer_tool_target_requires_refresh(
+            &request("thread-1", "get_window_state", Some("8")),
+            Some(&active),
+        ));
+        assert!(!computer_tool_target_requires_refresh(
+            &request("thread-1", "launch_app", None),
+            Some(&active),
+        ));
     }
 
     #[test]
