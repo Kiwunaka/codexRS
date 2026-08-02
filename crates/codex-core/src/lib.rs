@@ -6686,6 +6686,15 @@ fn selected_task_cwds(state: &AppState) -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
+pub fn selected_thread_runtime_ready(state: &AppState) -> bool {
+    state.selected_task_id.as_deref().is_none_or(|task_id| {
+        state
+            .timelines
+            .get(task_id)
+            .is_some_and(|timeline| timeline.runtime_status_loaded)
+    })
+}
+
 fn next_git_refresh_generation(state: &mut AppState) -> u64 {
     state.git.refresh_generation = state.git.refresh_generation.saturating_add(1);
     state.git.refresh_generation
@@ -11451,6 +11460,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 }];
             }
             if text.is_empty() && state.composer_attachments.is_empty() {
+                return Vec::new();
+            }
+            if !selected_thread_runtime_ready(state) {
                 return Vec::new();
             }
             if state.review_start.pending.as_ref().is_some_and(|pending| {
@@ -19562,6 +19574,16 @@ mod tests {
                 approvals_reviewer: Some(ApprovalsReviewer::AutoReview),
             }]
         );
+        reduce(
+            &mut state,
+            Action::TaskRuntimeLoaded {
+                task_id: "t1".to_owned(),
+                generation: 0,
+                active_turn_id: None,
+                active_turn_is_review: false,
+                run_status: Some(TaskRunStatus::Idle),
+            },
+        );
 
         reduce(
             &mut state,
@@ -19751,6 +19773,40 @@ mod tests {
             state.composer_controls.selected_permission_mode.as_deref(),
             Some("preset:auto-review")
         );
+
+        reduce(
+            &mut state,
+            Action::ComposerChanged("inspect the diff".to_owned()),
+        );
+        assert!(reduce(&mut state, Action::SubmitComposer).is_empty());
+        assert_eq!(state.composer, "inspect the diff");
+        assert_eq!(state.composer_error, None);
+
+        reduce(
+            &mut state,
+            Action::TaskRuntimeLoaded {
+                task_id: "t1".to_owned(),
+                generation: 0,
+                active_turn_id: None,
+                active_turn_is_review: false,
+                run_status: Some(TaskRunStatus::Idle),
+            },
+        );
+        assert!(matches!(
+            reduce(&mut state, Action::SubmitComposer).as_slice(),
+            [Effect::StartTurn {
+                task_id,
+                text,
+                model: Some(model),
+                effort: Some(effort),
+                service_tier: Some(service_tier),
+                ..
+            }] if task_id == "t1"
+                && text == "inspect the diff"
+                && model == "gpt-fast"
+                && effort == "xhigh"
+                && service_tier == "priority"
+        ));
     }
 
     #[test]
