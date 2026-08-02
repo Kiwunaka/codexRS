@@ -4704,7 +4704,7 @@ fn first_run_workspace_picker_visible(state: &AppState) -> bool {
     state.selected_task_id.is_none()
         && state.connection == ConnectionStatus::Online
         && state.account.status == LoadStatus::Ready
-        && state.account.profile.is_some()
+        && (state.account.profile.is_some() || !state.account.requires_openai_auth)
         && state.account.auth_operation == AccountAuthOperation::Idle
         && state.task_status == LoadStatus::Ready
         && state.tasks.is_empty()
@@ -45750,7 +45750,7 @@ mod tests {
     }
 
     #[test]
-    fn first_run_workspace_picker_requires_an_online_authenticated_empty_workspace() {
+    fn first_run_workspace_picker_allows_an_online_no_auth_empty_workspace() {
         let profile = AccountProfile {
             kind: AccountKind::ChatGpt,
             email: None,
@@ -45784,7 +45784,10 @@ mod tests {
         state.account.status = LoadStatus::Ready;
 
         state.account.profile = None;
+        assert!(super::first_run_workspace_picker_visible(&state));
+        state.account.requires_openai_auth = true;
         assert!(!super::first_run_workspace_picker_visible(&state));
+        state.account.requires_openai_auth = false;
         state.account.profile = Some(profile);
 
         state.account.auth_operation = AccountAuthOperation::LoggingOut;
