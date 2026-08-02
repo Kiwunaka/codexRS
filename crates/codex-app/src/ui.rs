@@ -6877,6 +6877,8 @@ impl WorkspaceView {
         if self.last_window_title.as_deref() == Some(title.as_str()) {
             return;
         }
+        self.background_completion_notifier
+            .set_background_chat_count(background_chat_running_count(&self.state));
         window.set_window_title(&title);
         self.last_window_title = Some(title);
     }
@@ -41447,7 +41449,15 @@ impl Render for WorkspaceView {
 }
 
 fn background_chat_window_title(state: &AppState) -> String {
-    let running_count = state
+    match background_chat_running_count(state) {
+        0 => PRIMARY_WINDOW_TITLE.to_owned(),
+        1 => format!("{PRIMARY_WINDOW_TITLE} · 1 chat running"),
+        count => format!("{PRIMARY_WINDOW_TITLE} · {count} chats running"),
+    }
+}
+
+fn background_chat_running_count(state: &AppState) -> usize {
+    state
         .tasks
         .iter()
         .take(MAX_VISIBLE_THREADS)
@@ -41458,13 +41468,7 @@ fn background_chat_window_title(state: &AppState) -> String {
                     TaskRunStatus::Running | TaskRunStatus::WaitingForApproval
                 )
         })
-        .count();
-
-    match running_count {
-        0 => PRIMARY_WINDOW_TITLE.to_owned(),
-        1 => format!("{PRIMARY_WINDOW_TITLE} · 1 chat running"),
-        count => format!("{PRIMARY_WINDOW_TITLE} · {count} chats running"),
-    }
+        .count()
 }
 
 fn background_completion_notification_transition(
@@ -45121,16 +45125,16 @@ mod tests {
         account_daily_usage_rows, account_device_code, adjacent_task_id, app_chatgpt_url,
         app_mention_prompt, appearance_color, appearance_color_value,
         appearance_theme_share_string, archived_chat_groups, archived_chat_projects,
-        archived_delete_confirmation_copy, background_chat_window_title,
-        background_completion_notification_transition, background_terminal_summary,
-        bounded_keyboard_shortcut_search_query, bounded_settings_search_query,
-        bounded_thread_find_query, browser_display_url, browser_navigation_url,
-        browser_surface_coordinates, build_plugin_catalog_sections, case_insensitive_match_ranges,
-        command_task_slot, composer_app_commands, composer_at_skill_commands,
-        composer_desktop_app_commands, composer_file_query, composer_file_search_max_height,
-        composer_model_picker_items, composer_model_placeholder, composer_plugin_commands,
-        composer_service_tier_command_for_query, composer_service_tier_commands,
-        composer_skill_command_for_query, composer_skill_commands,
+        archived_delete_confirmation_copy, background_chat_running_count,
+        background_chat_window_title, background_completion_notification_transition,
+        background_terminal_summary, bounded_keyboard_shortcut_search_query,
+        bounded_settings_search_query, bounded_thread_find_query, browser_display_url,
+        browser_navigation_url, browser_surface_coordinates, build_plugin_catalog_sections,
+        case_insensitive_match_ranges, command_task_slot, composer_app_commands,
+        composer_at_skill_commands, composer_desktop_app_commands, composer_file_query,
+        composer_file_search_max_height, composer_model_picker_items, composer_model_placeholder,
+        composer_plugin_commands, composer_service_tier_command_for_query,
+        composer_service_tier_commands, composer_skill_command_for_query, composer_skill_commands,
         composer_slash_command_for_prefix, connection_send_failure, decode_mcp_form_image_data_url,
         default_branch_name, diff_file_review_rows, diff_file_sections,
         extract_code_comment_findings, fetch_plugin_logo_blocking, find_timeline_matches,
@@ -45196,17 +45200,20 @@ mod tests {
     #[test]
     fn background_chat_window_title_counts_only_non_selected_running_chats() {
         let mut state = AppState::default();
+        assert_eq!(background_chat_running_count(&state), 0);
         assert_eq!(background_chat_window_title(&state), "codexRS");
 
         let mut selected = task("selected", "C:/selected");
         selected.status = TaskRunStatus::Running;
         state.selected_task_id = Some(selected.id.clone());
         state.tasks.push(selected);
+        assert_eq!(background_chat_running_count(&state), 0);
         assert_eq!(background_chat_window_title(&state), "codexRS");
 
         let mut running = task("running", "C:/running");
         running.status = TaskRunStatus::Running;
         state.tasks.push(running);
+        assert_eq!(background_chat_running_count(&state), 1);
         assert_eq!(
             background_chat_window_title(&state),
             "codexRS · 1 chat running"
@@ -45215,6 +45222,7 @@ mod tests {
         let mut waiting = task("waiting", "C:/waiting");
         waiting.status = TaskRunStatus::WaitingForApproval;
         state.tasks.push(waiting);
+        assert_eq!(background_chat_running_count(&state), 2);
         assert_eq!(
             background_chat_window_title(&state),
             "codexRS · 2 chats running"
@@ -45222,6 +45230,7 @@ mod tests {
 
         state.tasks[1].status = TaskRunStatus::Completed;
         state.tasks[2].status = TaskRunStatus::Idle;
+        assert_eq!(background_chat_running_count(&state), 0);
         assert_eq!(background_chat_window_title(&state), "codexRS");
     }
 
