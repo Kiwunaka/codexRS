@@ -2032,6 +2032,14 @@ pub struct ModelSummary {
     pub default_service_tier: Option<String>,
     #[serde(default)]
     pub upgrade_info: Option<ModelUpgradeInfo>,
+    #[serde(default)]
+    pub availability_nux: Option<ModelAvailabilityNux>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelAvailabilityNux {
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -4612,6 +4620,9 @@ mod tests {
                     "upgradeCopy": "GPT-5.7 is ready for your next chat.",
                     "modelLink": "https://platform.openai.com/docs/models",
                     "migrationMarkdown": "# Migration notes"
+                },
+                "availabilityNux": {
+                    "message": "Try the newest model."
                 }
             }],
             "nextCursor": null
@@ -4636,6 +4647,10 @@ mod tests {
                                 && upgrade.migration_markdown.as_deref()
                                     == Some("# Migration notes")
                         })
+                    && response.data[0]
+                        .availability_nux
+                        .as_ref()
+                        .is_some_and(|nux| nux.message == "Try the newest model.")
         ));
 
         let profiles = serde_json::from_value::<PermissionProfileListResponse>(json!({
