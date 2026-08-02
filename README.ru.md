@@ -25,7 +25,7 @@
 </p>
 
 > [!IMPORTANT]
-> Текущее дерево готовится как `v0.1.0-rc.4`. На Windows уже пройден сквозной
+> Текущее дерево готовится как `v0.1.0-rc.5`. На Windows уже пройден сквозной
 > smoke-тест исходной сборки с точным stable-эталоном. Linux проверяется в
 > нативном CI, но до стабильного релиза нужны тесты на большем числе окружений.
 
@@ -133,12 +133,12 @@ codex --version
 ### 2. Скачайте portable preview
 
 Скачивайте только со страницы [GitHub Releases](https://github.com/Kiwunaka/codexRS/releases).
-Артефакты RC4: `codexrs-v0.1.0-rc.4-windows-x86_64.zip` и
-`codexrs-v0.1.0-rc.4-linux-x86_64.tar.gz`; рядом публикуется
+Артефакты RC5: `codexrs-v0.1.0-rc.5-windows-x86_64.zip` и
+`codexrs-v0.1.0-rc.5-linux-x86_64.tar.gz`; рядом публикуется
 `SHA256SUMS.txt`. Проверьте checksum до распаковки: в Linux выполните
-`grep ' \./codexrs-v0.1.0-rc.4-linux-x86_64.tar.gz$' SHA256SUMS.txt | sha256sum -c -`,
+`grep ' \./codexrs-v0.1.0-rc.5-linux-x86_64.tar.gz$' SHA256SUMS.txt | sha256sum -c -`,
 а в Windows сравните
-`(Get-FileHash .\codexrs-v0.1.0-rc.4-windows-x86_64.zip -Algorithm SHA256).Hash`
+`(Get-FileHash .\codexrs-v0.1.0-rc.5-windows-x86_64.zip -Algorithm SHA256).Hash`
 с соответствующей строкой. Checksum помогает заметить повреждение после
 загрузки с доверенной страницы релиза, но не является независимой подписью
 издателя.

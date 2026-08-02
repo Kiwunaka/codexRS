@@ -25,7 +25,7 @@
 </p>
 
 > [!IMPORTANT]
-> The current tree targets `v0.1.0-rc.4`. Windows has passed an end-to-end
+> The current tree targets `v0.1.0-rc.5`. Windows has passed an end-to-end
 > source-build smoke test against the exact stable reference. Linux is covered
 > by native CI and still needs broader desktop-environment testing before a
 > stable release.
@@ -135,13 +135,13 @@ If it is not on `PATH`, set `CODEX_RS_CODEX_BIN` to the native `codex` or
 ### 2. Download the portable preview
 
 Download only from the [GitHub Releases](https://github.com/Kiwunaka/codexRS/releases)
-page. The RC4 assets are
-`codexrs-v0.1.0-rc.4-windows-x86_64.zip` and
-`codexrs-v0.1.0-rc.4-linux-x86_64.tar.gz`, with `SHA256SUMS.txt`.
+page. The RC5 assets are
+`codexrs-v0.1.0-rc.5-windows-x86_64.zip` and
+`codexrs-v0.1.0-rc.5-linux-x86_64.tar.gz`, with `SHA256SUMS.txt`.
 Verify the archive checksum before extraction; for example, on Linux run
-`grep ' \./codexrs-v0.1.0-rc.4-linux-x86_64.tar.gz$' SHA256SUMS.txt | sha256sum -c -`,
+`grep ' \./codexrs-v0.1.0-rc.5-linux-x86_64.tar.gz$' SHA256SUMS.txt | sha256sum -c -`,
 and on Windows compare
-`(Get-FileHash .\codexrs-v0.1.0-rc.4-windows-x86_64.zip -Algorithm SHA256).Hash`
+`(Get-FileHash .\codexrs-v0.1.0-rc.5-windows-x86_64.zip -Algorithm SHA256).Hash`
 with the matching entry. The checksum helps detect corruption after obtaining
 it from the trusted release page; it is not an independent publisher signature.
 

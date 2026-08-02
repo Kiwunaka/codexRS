@@ -5,6 +5,34 @@ All notable changes to codexRS are documented here. The project follows
 
 ## [Unreleased]
 
+## [0.1.0-rc.5] - 2026-08-02
+
+### Added
+
+- First-run setup supports browser and device-code ChatGPT sign-in plus native
+  project-folder selection.
+- Goal files attach through the public turn-input path.
+- Linux gains bounded screenshot-only X11/XWayland Computer Use and an
+  explicit per-user desktop-entry installer.
+- The model picker shows descriptions, availability, and upgrade notices.
+- Usage & billing shows a bounded ChatGPT token-activity summary and the
+  available usage-limit-reset count.
+- Marketplace sources can be upgraded individually, and plugin installation
+  requires the stable confirmation interstitial.
+- Background completion banners provide native Open and Dismiss actions.
+
+### Fixed
+
+- Startup recovery preserves distinct backend and app-server failure actions.
+- App catalogs stay scoped to the selected chat and ignore stale paginated
+  results after chat switches.
+- Partial marketplace failures remain visible without discarding valid apps.
+- Compact Changes layouts remain usable on narrow windows, and unsafe
+  assistant Markdown links are neutralized.
+- Managed worktrees accept locked entries while rejecting relative paths before
+  backend dispatch.
+- The logout confirmation keeps keyboard focus inside its native modal.
+
 ## [0.1.0-rc.4] - 2026-08-01
 
 ### Added
