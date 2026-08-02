@@ -640,6 +640,7 @@ pub enum AppServerEvent {
 pub struct ReceivedAppServerEvent {
     event: AppServerEvent,
     frame_bytes: usize,
+    requires_delivery: bool,
     _lease: Option<ByteLease>,
 }
 
@@ -650,17 +651,21 @@ pub struct AppServerEventGuard {
 
 impl ReceivedAppServerEvent {
     fn budgeted(event: AppServerEvent, frame_bytes: usize, lease: ByteLease) -> Self {
+        let requires_delivery = app_server_event_requires_delivery(&event);
         Self {
             event,
             frame_bytes,
+            requires_delivery,
             _lease: Some(lease),
         }
     }
 
     fn unbudgeted(event: AppServerEvent) -> Self {
+        let requires_delivery = app_server_event_requires_delivery(&event);
         Self {
             event,
             frame_bytes: 0,
+            requires_delivery,
             _lease: None,
         }
     }
@@ -675,10 +680,16 @@ impl ReceivedAppServerEvent {
         self.frame_bytes
     }
 
+    #[must_use]
+    pub fn requires_delivery(&self) -> bool {
+        self.requires_delivery
+    }
+
     pub fn into_parts(self) -> (AppServerEvent, AppServerEventGuard) {
         let Self {
             event,
             frame_bytes: _,
+            requires_delivery: _,
             _lease,
         } = self;
         (event, AppServerEventGuard { _lease })
@@ -2085,6 +2096,14 @@ fn notification_requires_resync(event: &AppServerEvent) -> bool {
         AppServerEvent::Notification { method, .. }
             if notification_method_requires_resync(method)
     )
+}
+
+fn app_server_event_requires_delivery(event: &AppServerEvent) -> bool {
+    match event {
+        AppServerEvent::Notification { .. } => notification_requires_resync(event),
+        AppServerEvent::Request { .. } | AppServerEvent::Disconnected => true,
+        AppServerEvent::NotificationsDropped { .. } => false,
+    }
 }
 
 fn notification_method_requires_resync(method: &str) -> bool {

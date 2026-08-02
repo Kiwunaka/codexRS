@@ -4,7 +4,7 @@ use std::{
 };
 
 #[derive(Clone, Debug)]
-pub(crate) struct ByteBudget {
+pub struct ByteBudget {
     inner: Arc<ByteBudgetInner>,
 }
 
@@ -16,14 +16,14 @@ struct ByteBudgetInner {
 }
 
 #[derive(Debug)]
-pub(crate) struct ByteLease {
+pub struct ByteLease {
     inner: Arc<ByteBudgetInner>,
     bytes: usize,
 }
 
 impl ByteBudget {
     #[must_use]
-    pub(crate) fn new(limit: usize) -> Self {
+    pub fn new(limit: usize) -> Self {
         Self {
             inner: Arc::new(ByteBudgetInner {
                 limit,
@@ -34,13 +34,13 @@ impl ByteBudget {
     }
 
     #[must_use]
-    pub(crate) fn try_acquire(&self, bytes: usize) -> Option<ByteLease> {
+    pub fn try_acquire(&self, bytes: usize) -> Option<ByteLease> {
         let mut used = lock_unpoisoned(&self.inner.used);
         self.acquire_if_available(&mut used, bytes)
     }
 
     #[must_use]
-    pub(crate) fn acquire_timeout(&self, bytes: usize, timeout: Duration) -> Option<ByteLease> {
+    pub fn acquire_timeout(&self, bytes: usize, timeout: Duration) -> Option<ByteLease> {
         if bytes > self.inner.limit {
             return None;
         }

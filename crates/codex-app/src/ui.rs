@@ -101,7 +101,7 @@ use gpui_component::{
 };
 use markdown::{ParseOptions, mdast::Node};
 
-use crate::backend::Backend;
+use crate::backend::{Backend, QueuedAction};
 
 const WINDOW_WIDTH: f32 = 1_278.0;
 const WINDOW_HEIGHT: f32 = 818.0;
@@ -7027,12 +7027,15 @@ impl WorkspaceView {
                 Ok(Some(action)) => actions.push(action),
                 Ok(None) => break,
                 Err(error) => {
-                    actions.push(Action::ConnectionFailed(error.to_owned()));
+                    actions.push(QueuedAction::unbudgeted(Action::ConnectionFailed(
+                        error.to_owned(),
+                    )));
                     break;
                 }
             }
         }
-        for action in actions {
+        for queued in actions {
+            let (action, _action_guard) = queued.into_parts();
             let storage_opened = matches!(&action, Action::StorageOpened { .. });
             let appearance_preferences_loaded =
                 matches!(&action, Action::AppearancePreferencesLoaded(_));
