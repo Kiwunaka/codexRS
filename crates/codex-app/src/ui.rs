@@ -37,11 +37,12 @@ use codex_core::{
     MAX_GIT_PULL_REQUEST_TITLE_CHARS, MAX_KEYBOARD_SHORTCUT_ACCELERATOR_BYTES,
     MAX_KEYBOARD_SHORTCUTS_PER_COMMAND, MAX_LOCAL_PROJECT_NAME_BYTES,
     MAX_MCP_FORM_IMAGE_DATA_URL_BYTES, MAX_MCP_FORM_VALUE_BYTES, MAX_PENDING_WORKTREE_FORKS,
-    MAX_TASK_SEARCH_RESULTS, MAX_TIMELINE_ITEMS, MAX_USER_INPUT_VALUE_BYTES, MAX_VISIBLE_THREADS,
-    MAX_WORKTREE_ROOT_BYTES, MainRoute, MarketplaceManageTab, MarketplaceSectionFilter,
-    MarketplaceTab, McpAuthStatus, McpBrowserOriginElicitation, McpBrowserResourceElicitation,
-    McpElicitation, McpElicitationContent, McpElicitationDecision, McpElicitationValue,
-    McpFormElicitation, McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpResourceCard,
+    MAX_SEEN_MODEL_UPGRADE_ID_BYTES, MAX_TASK_SEARCH_RESULTS, MAX_TIMELINE_ITEMS,
+    MAX_USER_INPUT_VALUE_BYTES, MAX_VISIBLE_THREADS, MAX_WORKTREE_ROOT_BYTES, MainRoute,
+    MarketplaceManageTab, MarketplaceSectionFilter, MarketplaceTab, McpAuthStatus,
+    McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
+    McpElicitationContent, McpElicitationDecision, McpElicitationValue, McpFormElicitation,
+    McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpResourceCard,
     McpResourceContentCard, McpResourceTemplateCard, McpServerCard, McpServerDraft,
     McpServerStartupFailureReason, McpServerStartupState, McpToolCard, McpTransportKind,
     ModelOption, ModelUpgradeNotice, NetworkApprovalProtocol, OutputArtifact, OutputArtifactKind,
@@ -2070,6 +2071,11 @@ enum PaletteMode {
 
 #[derive(Debug, Clone)]
 enum WorkspaceModal {
+    ModelAvailabilityNux {
+        model_id: String,
+        display_name: String,
+        message: String,
+    },
     PendingWorktreeFork,
     EditGoal,
     Feedback,
@@ -2134,6 +2140,13 @@ enum WorkspaceModal {
         path: PathBuf,
         name: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ModelAvailabilityNuxCandidate {
+    model_id: String,
+    display_name: String,
+    message: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4615,6 +4628,54 @@ fn selected_model_upgrade_notice(
         .and_then(|model| model.upgrade_notice.clone())
 }
 
+const MODEL_AVAILABILITY_NUX_SOL_COPY: &str = "Our most capable model yet. GPT-5.6 Sol can tackle complex code changes, dig into research, produce polished documents, and take on your most ambitious work. Sol is highly capable at lower reasoning efforts—try starting lower, then turn it up for harder jobs.";
+
+fn model_availability_nux_candidate(
+    state: &AppState,
+    workspace_modal_open: bool,
+    command_palette_open: bool,
+    login_visible: bool,
+) -> Option<ModelAvailabilityNuxCandidate> {
+    if state.route != MainRoute::Tasks
+        || !state.storage.ready
+        || state.composer_controls.models_status != LoadStatus::Ready
+        || state.account.status != LoadStatus::Ready
+        || matches!(
+            state.account.profile.as_ref().map(|profile| profile.kind),
+            Some(AccountKind::AmazonBedrock)
+        )
+        || workspace_modal_open
+        || command_palette_open
+        || login_visible
+    {
+        return None;
+    }
+
+    state.composer_controls.models.iter().find_map(|model| {
+        if model.id.is_empty()
+            || model.id.len() > MAX_SEEN_MODEL_UPGRADE_ID_BYTES
+            || model.id.chars().any(char::is_control)
+            || matches!(model.id.as_str(), "gpt-5.4" | "gpt-5.5")
+            || state
+                .seen_model_upgrade_ids
+                .iter()
+                .any(|seen| seen == &model.id)
+        {
+            return None;
+        }
+        let message = model.availability_nux.as_ref()?;
+        Some(ModelAvailabilityNuxCandidate {
+            model_id: model.id.clone(),
+            display_name: model.display_name.clone(),
+            message: if model.id == "gpt-5.6-sol" {
+                MODEL_AVAILABILITY_NUX_SOL_COPY.to_owned()
+            } else {
+                message.clone()
+            },
+        })
+    })
+}
+
 fn model_upgrade_learn_more_visible(model_link: Option<&str>) -> bool {
     model_link.is_some_and(is_supported_external_url)
 }
@@ -6777,6 +6838,7 @@ impl WorkspaceView {
                 let _ = reduce(&mut self.state, action);
             }
         }
+        self.maybe_open_model_availability_nux(cx);
         cx.notify();
     }
 
@@ -7019,6 +7081,7 @@ impl WorkspaceView {
                     );
                 }
             }
+            self.maybe_open_model_availability_nux(cx);
             self.continue_conversation_markdown_copy(cx);
             self.continue_thread_find_history_load(cx);
         }
@@ -9919,6 +9982,14 @@ impl WorkspaceView {
     }
 
     fn close_workspace_modal(&mut self, cx: &mut Context<Self>) {
+        if let Some(WorkspaceModal::ModelAvailabilityNux { model_id, .. }) =
+            self.workspace_modal.as_ref()
+        {
+            let model_id = model_id.clone();
+            self.workspace_modal = None;
+            self.dispatch(Action::DismissModelAvailabilityNux(model_id), cx);
+            return;
+        }
         if matches!(
             self.workspace_modal,
             Some(WorkspaceModal::PendingWorktreeFork)
@@ -10027,6 +10098,24 @@ impl WorkspaceView {
         self.browser_site_error = None;
         self.appearance_import_error = None;
         self.mcp_editor_error = None;
+        self.maybe_open_model_availability_nux(cx);
+        cx.notify();
+    }
+
+    fn maybe_open_model_availability_nux(&mut self, cx: &mut Context<Self>) {
+        let Some(candidate) = model_availability_nux_candidate(
+            &self.state,
+            self.workspace_modal.is_some(),
+            self.command_palette.is_some(),
+            self.api_key_login_visible || self.bedrock_login_visible,
+        ) else {
+            return;
+        };
+        self.workspace_modal = Some(WorkspaceModal::ModelAvailabilityNux {
+            model_id: candidate.model_id,
+            display_name: candidate.display_name,
+            message: candidate.message,
+        });
         cx.notify();
     }
 
@@ -39204,6 +39293,65 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         match modal {
+            WorkspaceModal::ModelAvailabilityNux {
+                model_id,
+                display_name,
+                message,
+            } => {
+                let show_continue = self.state.composer_controls.selected_model.as_deref()
+                    != Some(model_id.as_str());
+                let try_model_id = model_id.clone();
+                let panel = v_flex()
+                    .w(px(modal_surface_width(self.shell_viewport_width, 460.0)))
+                    .p_5()
+                    .gap_4()
+                    .rounded(px(16.0))
+                    .bg(cx.theme().popover)
+                    .shadow_xl()
+                    .occlude()
+                    .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(format!("Introducing {display_name}")),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(message),
+                    )
+                    .child(
+                        h_flex()
+                            .justify_end()
+                            .gap_2()
+                            .when(show_continue, |actions| {
+                                actions.child(
+                                    Button::new("continue-current-model-availability-nux")
+                                        .label("Continue with current model")
+                                        .ghost()
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.close_workspace_modal(cx);
+                                        })),
+                                )
+                            })
+                            .child(
+                                Button::new("try-model-availability-nux")
+                                    .label(format!("Try {display_name} now"))
+                                    .primary()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.dispatch(
+                                            Action::SelectModel(try_model_id.clone()),
+                                            cx,
+                                        );
+                                        this.close_workspace_modal(cx);
+                                    })),
+                            ),
+                    )
+                    .into_any_element();
+                self.render_workspace_modal_overlay(panel, true, cx)
+            }
             WorkspaceModal::PendingWorktreeFork => {
                 let panel = self.render_pending_worktree_fork_modal(cx);
                 self.render_workspace_modal_overlay(panel, true, cx)
@@ -39479,6 +39627,7 @@ impl WorkspaceView {
             && !feedback_pending;
         let panel = match modal {
             WorkspaceModal::PendingWorktreeFork
+            | WorkspaceModal::ModelAvailabilityNux { .. }
             | WorkspaceModal::ChatMemories
             | WorkspaceModal::ResetMemories
             | WorkspaceModal::ImportProviders
@@ -44838,9 +44987,9 @@ mod tests {
         ArchivedChatKindFilter, ArchivedChatProjectFilter, ArchivedChatSortKey, AssistantFinding,
         CONVERSATION_MARKDOWN_TRUNCATED_NOTICE, DiffLineKind, DiffReviewRow, INIT_AGENTS_PROMPT,
         KeyboardShortcutGroup, MAX_CONVERSATION_MARKDOWN_BYTES, MAX_NAVIGATION_HISTORY_ENTRIES,
-        MAX_THREAD_FIND_HISTORY_PAGES, MAX_THREAD_FIND_MATCHES, NavigationHistory,
-        NavigationLocation, PaletteCommand, PaletteGroup, ReasoningEffortStep, SettingsSection,
-        ShellWidthClass, TaskCopyKind, ThreadFindSurface, accelerators_conflict,
+        MAX_THREAD_FIND_HISTORY_PAGES, MAX_THREAD_FIND_MATCHES, MODEL_AVAILABILITY_NUX_SOL_COPY,
+        NavigationHistory, NavigationLocation, PaletteCommand, PaletteGroup, ReasoningEffortStep,
+        SettingsSection, ShellWidthClass, TaskCopyKind, ThreadFindSurface, accelerators_conflict,
         account_daily_usage_rows, account_device_code, adjacent_task_id, app_chatgpt_url,
         app_mention_prompt, appearance_color, appearance_color_value,
         appearance_theme_share_string, archived_chat_groups, archived_chat_projects,
@@ -44864,9 +45013,9 @@ mod tests {
         is_supported_plugin_logo_url, is_terminal_shortcut_key, keyboard_shortcut_search_matches,
         keyboard_shortcut_settings_matches, keyboard_shortcut_stable_order,
         linked_pull_request_merge_command_enabled, mcp_auth_status_label, modal_surface_max_height,
-        modal_surface_width, model_upgrade_learn_more_visible, normalized_accelerator,
-        output_artifact_type_label, parse_appearance_theme_share_string, parse_mcp_list,
-        parse_mcp_record, parse_unified_diff, plugin_logo_format,
+        modal_surface_width, model_availability_nux_candidate, model_upgrade_learn_more_visible,
+        normalized_accelerator, output_artifact_type_label, parse_appearance_theme_share_string,
+        parse_mcp_list, parse_mcp_record, parse_unified_diff, plugin_logo_format,
         process_manager_auto_refresh_allowed, project_trigger_matches, project_workspace_options,
         pull_request_merge_submission_enabled, reasoning_effort_target, reduced_motion_enabled,
         remote_control_status_label, render_conversation_markdown, replace_composer_file_query,
@@ -45028,6 +45177,7 @@ mod tests {
                 display_name: "GPT Fast".to_owned(),
                 description: " Fast responses ".to_owned(),
                 upgrade_notice: None,
+                availability_nux: None,
                 is_default: true,
                 default_effort: "medium".to_owned(),
                 supported_efforts: Vec::new(),
@@ -45039,6 +45189,7 @@ mod tests {
                 display_name: "GPT Standard".to_owned(),
                 description: "   ".to_owned(),
                 upgrade_notice: None,
+                availability_nux: None,
                 is_default: false,
                 default_effort: "medium".to_owned(),
                 supported_efforts: Vec::new(),
@@ -45068,6 +45219,7 @@ mod tests {
                     copy: "Use GPT New for the next chat.".to_owned(),
                     model_link: Some("https://platform.openai.com/docs/models".to_owned()),
                 }),
+                availability_nux: None,
                 is_default: true,
                 default_effort: "medium".to_owned(),
                 supported_efforts: Vec::new(),
@@ -45082,6 +45234,7 @@ mod tests {
                     copy: "Ignore this notice.".to_owned(),
                     model_link: Some("javascript:alert(1)".to_owned()),
                 }),
+                availability_nux: None,
                 is_default: false,
                 default_effort: "medium".to_owned(),
                 supported_efforts: Vec::new(),
@@ -45106,6 +45259,78 @@ mod tests {
                 .and_then(|notice| notice.model_link.as_deref())
         ));
         assert!(selected_model_upgrade_notice(&models, Some("missing")).is_none());
+    }
+
+    #[test]
+    fn model_availability_nux_candidate_uses_catalog_order_and_gates() {
+        let mut state = AppState::default();
+        state.storage.ready = true;
+        state.account.status = LoadStatus::Ready;
+        state.composer_controls.models_status = LoadStatus::Ready;
+        state.composer_controls.models = vec![
+            ModelOption {
+                id: "gpt-5.4".to_owned(),
+                display_name: "Excluded".to_owned(),
+                description: String::new(),
+                upgrade_notice: None,
+                availability_nux: Some("Ignore".to_owned()),
+                is_default: false,
+                default_effort: "medium".to_owned(),
+                supported_efforts: Vec::new(),
+                service_tiers: Vec::new(),
+                default_service_tier: None,
+            },
+            ModelOption {
+                id: "gpt-current".to_owned(),
+                display_name: "GPT Current".to_owned(),
+                description: String::new(),
+                upgrade_notice: None,
+                availability_nux: Some("Try GPT Current.".to_owned()),
+                is_default: true,
+                default_effort: "medium".to_owned(),
+                supported_efforts: Vec::new(),
+                service_tiers: Vec::new(),
+                default_service_tier: None,
+            },
+        ];
+
+        assert_eq!(
+            model_availability_nux_candidate(&state, false, false, false)
+                .as_ref()
+                .map(|candidate| (candidate.model_id.as_str(), candidate.message.as_str())),
+            Some(("gpt-current", "Try GPT Current."))
+        );
+        state.composer_controls.models[0].id = "gpt-5.5".to_owned();
+        assert_eq!(
+            model_availability_nux_candidate(&state, false, false, false)
+                .as_ref()
+                .map(|candidate| candidate.model_id.as_str()),
+            Some("gpt-current")
+        );
+        state.composer_controls.models[1].id = "gpt-5.6-sol".to_owned();
+        assert_eq!(
+            model_availability_nux_candidate(&state, false, false, false)
+                .as_ref()
+                .map(|candidate| candidate.message.as_str()),
+            Some(MODEL_AVAILABILITY_NUX_SOL_COPY)
+        );
+        state.composer_controls.models[1].id = "gpt-current".to_owned();
+        state.seen_model_upgrade_ids = vec!["gpt-current".to_owned()];
+        assert!(model_availability_nux_candidate(&state, false, false, false).is_none());
+        state.seen_model_upgrade_ids.clear();
+        state.account.profile = Some(AccountProfile {
+            kind: AccountKind::AmazonBedrock,
+            email: None,
+            plan: None,
+            uses_codex_managed_credentials: None,
+        });
+        assert!(model_availability_nux_candidate(&state, false, false, false).is_none());
+        state.account.profile = None;
+        assert!(model_availability_nux_candidate(&state, true, false, false).is_none());
+        assert!(model_availability_nux_candidate(&state, false, true, false).is_none());
+        assert!(model_availability_nux_candidate(&state, false, false, true).is_none());
+        state.route = MainRoute::Settings;
+        assert!(model_availability_nux_candidate(&state, false, false, false).is_none());
     }
 
     #[test]

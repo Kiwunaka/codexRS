@@ -153,31 +153,31 @@ use codex_protocol::{
     McpServerStartupFailureReason as ProtocolMcpServerStartupFailureReason,
     McpServerStartupState as ProtocolMcpServerStartupState,
     McpServerStatus as ProtocolMcpServerStatus, McpServerStatusDetail,
-    McpServerStatusUpdatedNotification, ModelListParams, ModelSafetyBufferingUpdatedNotification,
-    ModelSummary, ModelUpgradeInfo, ModelVerification, ModelVerificationNotification,
-    NetworkApprovalProtocol, NetworkPolicyAmendment, NetworkPolicyAmendmentDecision,
-    NetworkPolicyRuleAction, PermissionGrantScope, PermissionProfile, PermissionProfileListParams,
-    PermissionsRequestApprovalParams, PermissionsRequestApprovalResponse, PlanType,
-    PluginInstallParams, PluginListMarketplaceKind, PluginListParams, PluginReadParams,
-    PluginUninstallParams, RemoteControlClient, RemoteControlClientsListParams,
-    RemoteControlClientsRevokeParams, RemoteControlConnectionStatus,
-    RemoteControlPairingStartParams, RemoteControlPairingStatusParams,
-    RemoteControlStatusChangedNotification, ReviewDelivery as ProtocolReviewDelivery,
-    ReviewStartParams, ReviewTarget as ProtocolReviewTarget, SecretString,
-    SkillScope as ProtocolSkillScope, SkillsConfigWriteParams, SkillsListParams,
-    ThreadArchiveParams, ThreadBackgroundTerminal, ThreadBackgroundTerminalsCleanParams,
-    ThreadBackgroundTerminalsListParams, ThreadBackgroundTerminalsTerminateParams,
-    ThreadCompactStartParams, ThreadDeleteParams, ThreadForkParams, ThreadGoalClearParams,
-    ThreadGoalClearedNotification, ThreadGoalGetParams, ThreadGoalSetParams,
-    ThreadGoalStatus as ProtocolThreadGoalStatus, ThreadGoalUpdatedNotification,
-    ThreadItemsListParams, ThreadListParams, ThreadLoadedListParams, ThreadMemoryMode,
-    ThreadMemoryModeSetParams, ThreadReadParams, ThreadResumeInitialTurnsPageParams,
-    ThreadResumeParams, ThreadRollbackParams, ThreadSearchParams, ThreadSetNameParams,
-    ThreadSettingsUpdateParams, ThreadShellCommandParams, ThreadStartParams,
-    ThreadTokenUsageUpdatedNotification, ThreadTurnsListParams, ThreadUnarchiveParams,
-    ThreadUnsubscribeParams, ToolRequestUserInputAnswer, ToolRequestUserInputParams,
-    ToolRequestUserInputResponse, TurnDiffUpdatedNotification, TurnInterruptParams,
-    TurnStartParams, TurnSteerParams, UserInput,
+    McpServerStatusUpdatedNotification, ModelAvailabilityNux, ModelListParams,
+    ModelSafetyBufferingUpdatedNotification, ModelSummary, ModelUpgradeInfo, ModelVerification,
+    ModelVerificationNotification, NetworkApprovalProtocol, NetworkPolicyAmendment,
+    NetworkPolicyAmendmentDecision, NetworkPolicyRuleAction, PermissionGrantScope,
+    PermissionProfile, PermissionProfileListParams, PermissionsRequestApprovalParams,
+    PermissionsRequestApprovalResponse, PlanType, PluginInstallParams, PluginListMarketplaceKind,
+    PluginListParams, PluginReadParams, PluginUninstallParams, RemoteControlClient,
+    RemoteControlClientsListParams, RemoteControlClientsRevokeParams,
+    RemoteControlConnectionStatus, RemoteControlPairingStartParams,
+    RemoteControlPairingStatusParams, RemoteControlStatusChangedNotification,
+    ReviewDelivery as ProtocolReviewDelivery, ReviewStartParams,
+    ReviewTarget as ProtocolReviewTarget, SecretString, SkillScope as ProtocolSkillScope,
+    SkillsConfigWriteParams, SkillsListParams, ThreadArchiveParams, ThreadBackgroundTerminal,
+    ThreadBackgroundTerminalsCleanParams, ThreadBackgroundTerminalsListParams,
+    ThreadBackgroundTerminalsTerminateParams, ThreadCompactStartParams, ThreadDeleteParams,
+    ThreadForkParams, ThreadGoalClearParams, ThreadGoalClearedNotification, ThreadGoalGetParams,
+    ThreadGoalSetParams, ThreadGoalStatus as ProtocolThreadGoalStatus,
+    ThreadGoalUpdatedNotification, ThreadItemsListParams, ThreadListParams, ThreadLoadedListParams,
+    ThreadMemoryMode, ThreadMemoryModeSetParams, ThreadReadParams,
+    ThreadResumeInitialTurnsPageParams, ThreadResumeParams, ThreadRollbackParams,
+    ThreadSearchParams, ThreadSetNameParams, ThreadSettingsUpdateParams, ThreadShellCommandParams,
+    ThreadStartParams, ThreadTokenUsageUpdatedNotification, ThreadTurnsListParams,
+    ThreadUnarchiveParams, ThreadUnsubscribeParams, ToolRequestUserInputAnswer,
+    ToolRequestUserInputParams, ToolRequestUserInputResponse, TurnDiffUpdatedNotification,
+    TurnInterruptParams, TurnStartParams, TurnSteerParams, UserInput,
 };
 use codex_storage::{
     BrowserDownloadRecordStatus, MAX_BROWSER_DOWNLOAD_RECORDS, Store, StoredBrowserDownload,
@@ -1270,6 +1270,7 @@ const MAX_TASK_SEARCH_SNIPPET_BYTES: usize = 16 * 1024;
 const GOAL_CONTINUATION_DELAY: Duration = Duration::from_millis(250);
 const MAX_PENDING_GOAL_CONTINUATIONS: usize = 256;
 const PINNED_TASK_IDS_PREFERENCE: &str = "pinned_task_ids_v1";
+const SEEN_MODEL_UPGRADE_LIST_PREFERENCE: &str = "seen-model-upgrade-list";
 const APPEARANCE_THEME_PREFERENCE: &str = "appearance_theme";
 const APPEARANCE_PREFERENCES_V1: &str = "appearance_preferences_v1";
 const GIT_PREFERENCES_V1: &str = "git_preferences_v1";
@@ -2254,6 +2255,10 @@ fn open_storage(events: &Sender<Action>) -> Option<Store> {
             .preference(PINNED_TASK_IDS_PREFERENCE)?
             .and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
             .unwrap_or_default();
+        let seen_model_upgrade_ids = store
+            .preference(SEEN_MODEL_UPGRADE_LIST_PREFERENCE)?
+            .and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
+            .unwrap_or_default();
         let recent_workspaces = store.recent_workspaces(MAX_LOCAL_PROJECTS, 0)?.items;
         let recent_workspace = recent_workspaces
             .iter()
@@ -2283,6 +2288,7 @@ fn open_storage(events: &Sender<Action>) -> Option<Store> {
             terminal_right_width,
             git_include_unstaged,
             pinned_task_ids,
+            seen_model_upgrade_ids,
             recent_workspace,
             local_projects,
         ))
@@ -2302,6 +2308,7 @@ fn open_storage(events: &Sender<Action>) -> Option<Store> {
             terminal_right_width,
             git_include_unstaged,
             pinned_task_ids,
+            seen_model_upgrade_ids,
             recent_workspace,
             local_projects,
         )) => {
@@ -2325,6 +2332,7 @@ fn open_storage(events: &Sender<Action>) -> Option<Store> {
                         .as_deref()
                         .and_then(parse_bool_preference),
                     pinned_task_ids,
+                    seen_model_upgrade_ids,
                     recent_workspace,
                 },
             );
@@ -4003,6 +4011,22 @@ fn run_effect(
                 let encoded = serde_json::to_string(task_ids)
                     .map_err(|error| codex_storage::StoreError::Io(std::io::Error::other(error)))?;
                 store.set_preference(PINNED_TASK_IDS_PREFERENCE, &encoded, unix_timestamp())
+            });
+            if let Err(error) = result {
+                storage.take();
+                emit(events, Action::StorageFailed(error.to_string()));
+            }
+            return;
+        }
+        Effect::PersistSeenModelUpgradeIds { model_ids } => {
+            let result = storage.as_mut().map_or(Ok(()), |store| {
+                let encoded = serde_json::to_string(model_ids)
+                    .map_err(|error| codex_storage::StoreError::Io(std::io::Error::other(error)))?;
+                store.set_preference(
+                    SEEN_MODEL_UPGRADE_LIST_PREFERENCE,
+                    &encoded,
+                    unix_timestamp(),
+                )
             });
             if let Err(error) = result {
                 storage.take();
@@ -8148,6 +8172,7 @@ fn run_effect(
         | Effect::PersistIntegratedTerminalShell(_)
         | Effect::PersistGitIncludeUnstaged(_)
         | Effect::PersistPinnedTasks { .. }
+        | Effect::PersistSeenModelUpgradeIds { .. }
         | Effect::RememberWorkspace { .. }
         | Effect::RenameLocalProject { .. }
         | Effect::SetLocalProjectPinned { .. }
@@ -16196,6 +16221,7 @@ fn map_model_options(models: Vec<ModelSummary>) -> Vec<ModelOption> {
             display_name: model.display_name,
             description: bounded(model.description, MAX_MCP_SERVER_FIELD_BYTES),
             upgrade_notice: map_model_upgrade_notice(model.upgrade_info),
+            availability_nux: map_model_availability_nux(model.availability_nux),
             is_default: model.is_default,
             default_effort: model.default_reasoning_effort,
             supported_efforts: model
@@ -16232,6 +16258,11 @@ fn map_model_upgrade_notice(upgrade_info: Option<ModelUpgradeInfo>) -> Option<Mo
         .model_link
         .filter(|model_link| model_link.len() <= MAX_MODEL_UPGRADE_LINK_BYTES);
     Some(ModelUpgradeNotice { copy, model_link })
+}
+
+fn map_model_availability_nux(availability_nux: Option<ModelAvailabilityNux>) -> Option<String> {
+    let message = bounded(availability_nux?.message, MAX_MODEL_UPGRADE_COPY_BYTES);
+    (!message.trim().is_empty()).then_some(message)
 }
 
 fn remote_pairing_status_params(pairing: &RemotePairing) -> RemoteControlPairingStatusParams {
@@ -16342,8 +16373,8 @@ mod tests {
         Account as ProtocolAccount, AccountTokenUsageDailyBucket, AccountTokenUsageSummary,
         AppInfo, AppToolSummary, ConfigReadResponse, ConnectorMetadata, FuzzyFileSearchMatchType,
         FuzzyFileSearchResult as ProtocolFuzzyFileResult, GetAccountTokenUsageResponse,
-        LoginAccountResponse, McpServerStatus as ProtocolMcpServerStatus, ModelSummary,
-        ModelUpgradeInfo, PlanType, PluginListMarketplaceKind, RemoteControlClient,
+        LoginAccountResponse, McpServerStatus as ProtocolMcpServerStatus, ModelAvailabilityNux,
+        ModelSummary, ModelUpgradeInfo, PlanType, PluginListMarketplaceKind, RemoteControlClient,
         RemoteControlConnectionStatus, UserInput,
     };
     use crossbeam_channel::bounded;
@@ -16893,6 +16924,7 @@ mod tests {
             service_tiers: Vec::new(),
             default_service_tier: None,
             upgrade_info: None,
+            availability_nux: None,
         }]);
 
         assert_eq!(models.len(), 1);
@@ -16925,6 +16957,9 @@ mod tests {
                 model_link: Some("x".repeat(MAX_MODEL_UPGRADE_LINK_BYTES + 1)),
                 migration_markdown: Some("# Provider-only migration notes".to_owned()),
             }),
+            availability_nux: Some(ModelAvailabilityNux {
+                message: format!("{}é", "x".repeat(MAX_MODEL_UPGRADE_COPY_BYTES - 1)),
+            }),
         }]);
 
         assert_eq!(models.len(), 1);
@@ -16934,6 +16969,10 @@ mod tests {
                 copy: "x".repeat(MAX_MODEL_UPGRADE_COPY_BYTES - 1),
                 model_link: None,
             })
+        );
+        assert_eq!(
+            models[0].availability_nux,
+            Some("x".repeat(MAX_MODEL_UPGRADE_COPY_BYTES - 1))
         );
     }
 

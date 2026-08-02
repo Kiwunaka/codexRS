@@ -85,6 +85,8 @@ pub const MAX_TERMINAL_TABS: usize = 16;
 pub const MAX_TERMINAL_TABS_PER_TASK: usize = 8;
 pub const MAX_OUTPUT_ARTIFACTS: usize = 128;
 pub const MAX_COMPOSER_OPTIONS: usize = 64;
+pub const MAX_SEEN_MODEL_UPGRADE_IDS: usize = 64;
+pub const MAX_SEEN_MODEL_UPGRADE_ID_BYTES: usize = 512;
 pub const MAX_TASK_TITLE_BYTES: usize = 512;
 pub const MAX_TASK_SEARCH_QUERY_BYTES: usize = 1_024;
 pub const MAX_TASK_SEARCH_RESULTS: usize = 500;
@@ -3857,6 +3859,7 @@ pub struct ModelOption {
     pub display_name: String,
     pub description: String,
     pub upgrade_notice: Option<ModelUpgradeNotice>,
+    pub availability_nux: Option<String>,
     pub is_default: bool,
     pub default_effort: String,
     pub supported_efforts: Vec<ReasoningEffortOption>,
@@ -4162,6 +4165,7 @@ pub struct AppState {
     pub next_worktree_fork_request_id: u64,
     pub archived_tasks: ArchivedTasksState,
     pub pinned_task_ids: Vec<String>,
+    pub seen_model_upgrade_ids: Vec<String>,
     pub local_projects: Vec<LocalProjectSummary>,
     pub selected_task_id: Option<String>,
     pub new_chat_cwd: Option<PathBuf>,
@@ -4227,6 +4231,7 @@ impl Default for AppState {
             next_worktree_fork_request_id: 1,
             archived_tasks: ArchivedTasksState::default(),
             pinned_task_ids: Vec::new(),
+            seen_model_upgrade_ids: Vec::new(),
             local_projects: Vec::new(),
             selected_task_id: None,
             new_chat_cwd: None,
@@ -4300,6 +4305,7 @@ pub enum Action {
         terminal_right_width: Option<u32>,
         git_include_unstaged: Option<bool>,
         pinned_task_ids: Vec<String>,
+        seen_model_upgrade_ids: Vec<String>,
         recent_workspace: Option<PathBuf>,
     },
     LocalProjectsLoaded(Vec<LocalProjectSummary>),
@@ -4729,6 +4735,7 @@ pub enum Action {
         message: String,
     },
     SelectModel(String),
+    DismissModelAvailabilityNux(String),
     SelectReasoningEffort(String),
     SelectServiceTier(String),
     SelectPermissionMode(String),
@@ -6239,6 +6246,9 @@ pub enum Effect {
     PersistPinnedTasks {
         task_ids: Vec<String>,
     },
+    PersistSeenModelUpgradeIds {
+        model_ids: Vec<String>,
+    },
     RememberWorkspace {
         path: PathBuf,
     },
@@ -6494,6 +6504,24 @@ fn normalize_pinned_task_ids(task_ids: Vec<String>) -> Vec<String> {
         }
         normalized.push(task_id);
         if normalized.len() == MAX_PINNED_TASKS {
+            break;
+        }
+    }
+    normalized
+}
+
+fn normalize_seen_model_upgrade_ids(model_ids: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::with_capacity(model_ids.len().min(MAX_SEEN_MODEL_UPGRADE_IDS));
+    for model_id in model_ids {
+        if model_id.is_empty()
+            || model_id.len() > MAX_SEEN_MODEL_UPGRADE_ID_BYTES
+            || model_id.chars().any(char::is_control)
+            || normalized.iter().any(|existing| existing == &model_id)
+        {
+            continue;
+        }
+        normalized.push(model_id);
+        if normalized.len() == MAX_SEEN_MODEL_UPGRADE_IDS {
             break;
         }
     }
@@ -7679,6 +7707,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             terminal_right_width,
             git_include_unstaged,
             pinned_task_ids,
+            seen_model_upgrade_ids,
             recent_workspace,
         } => {
             state.storage = StorageState {
@@ -7687,6 +7716,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 error: None,
             };
             state.pinned_task_ids = normalize_pinned_task_ids(pinned_task_ids);
+            state.seen_model_upgrade_ids = normalize_seen_model_upgrade_ids(seen_model_upgrade_ids);
             state.new_chat_cwd = recent_workspace.filter(|path| path.is_absolute());
             if let Some(appearance_theme) = appearance_theme {
                 state.appearance_theme = appearance_theme;
@@ -10745,6 +10775,31 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 model: selected_model,
                 effort,
                 profile: state.composer_controls.active_profile.clone(),
+            }]
+        }
+        Action::DismissModelAvailabilityNux(model_id) => {
+            let available = state
+                .composer_controls
+                .models
+                .iter()
+                .any(|model| model.id == model_id && model.availability_nux.is_some());
+            if !available
+                || state
+                    .seen_model_upgrade_ids
+                    .iter()
+                    .any(|seen| seen == &model_id)
+                || model_id.is_empty()
+                || model_id.len() > MAX_SEEN_MODEL_UPGRADE_ID_BYTES
+                || model_id.chars().any(char::is_control)
+            {
+                return Vec::new();
+            }
+            if state.seen_model_upgrade_ids.len() == MAX_SEEN_MODEL_UPGRADE_IDS {
+                state.seen_model_upgrade_ids.remove(0);
+            }
+            state.seen_model_upgrade_ids.push(model_id);
+            vec![Effect::PersistSeenModelUpgradeIds {
+                model_ids: state.seen_model_upgrade_ids.clone(),
             }]
         }
         Action::SelectReasoningEffort(effort_id) => {
@@ -18013,6 +18068,7 @@ mod tests {
             display_name: id.to_owned(),
             description: String::new(),
             upgrade_notice: None,
+            availability_nux: None,
             is_default,
             default_effort: default_effort.to_owned(),
             supported_efforts: ["low", "medium", "high", "xhigh"]
@@ -19403,6 +19459,38 @@ mod tests {
             }]
         );
         assert_eq!(state.status_message.as_deref(), Some("settings rejected"));
+    }
+
+    #[test]
+    fn dismiss_model_availability_nux_persists_only_current_catalog_models_once() {
+        let mut state = AppState::default();
+        let mut available = model("gpt-new", true, "medium");
+        available.availability_nux = Some("Try GPT New.".to_owned());
+        reduce(&mut state, Action::ModelsLoaded(vec![available]));
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::DismissModelAvailabilityNux("gpt-new".to_owned())
+            ),
+            [Effect::PersistSeenModelUpgradeIds {
+                model_ids: vec!["gpt-new".to_owned()],
+            }]
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::DismissModelAvailabilityNux("gpt-new".to_owned())
+            )
+            .is_empty()
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::DismissModelAvailabilityNux("missing".to_owned())
+            )
+            .is_empty()
+        );
     }
 
     #[test]
@@ -22851,6 +22939,7 @@ mod tests {
                 terminal_right_width: Some(704),
                 git_include_unstaged: Some(false),
                 pinned_task_ids: Vec::new(),
+                seen_model_upgrade_ids: Vec::new(),
                 recent_workspace: None,
             },
         );
@@ -22901,6 +22990,7 @@ mod tests {
                 terminal_right_width: None,
                 git_include_unstaged: None,
                 pinned_task_ids: Vec::new(),
+                seen_model_upgrade_ids: Vec::new(),
                 recent_workspace: None,
             },
         );
@@ -23489,6 +23579,7 @@ mod tests {
                 terminal_right_width: None,
                 git_include_unstaged: None,
                 pinned_task_ids: Vec::new(),
+                seen_model_upgrade_ids: Vec::new(),
                 recent_workspace: Some(workspace.clone()),
             },
         );
@@ -23512,6 +23603,7 @@ mod tests {
                 terminal_right_width: None,
                 git_include_unstaged: None,
                 pinned_task_ids: Vec::new(),
+                seen_model_upgrade_ids: Vec::new(),
                 recent_workspace: None,
             },
         );
@@ -26729,6 +26821,7 @@ mod tests {
                     terminal_right_width: None,
                     git_include_unstaged: None,
                     pinned_task_ids: Vec::new(),
+                    seen_model_upgrade_ids: Vec::new(),
                     recent_workspace: None,
                 },
             )
@@ -27573,6 +27666,7 @@ mod tests {
                     terminal_right_width: None,
                     git_include_unstaged: None,
                     pinned_task_ids: vec!["pinned".to_owned(), "pinned".to_owned(), oversized_id,],
+                    seen_model_upgrade_ids: Vec::new(),
                     recent_workspace: None,
                 },
             )
