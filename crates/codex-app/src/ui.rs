@@ -37,7 +37,7 @@ use codex_core::{
     MAX_GIT_PULL_REQUEST_TITLE_CHARS, MAX_KEYBOARD_SHORTCUT_ACCELERATOR_BYTES,
     MAX_KEYBOARD_SHORTCUTS_PER_COMMAND, MAX_LOCAL_PROJECT_NAME_BYTES,
     MAX_MCP_FORM_IMAGE_DATA_URL_BYTES, MAX_MCP_FORM_VALUE_BYTES, MAX_PENDING_WORKTREE_FORKS,
-    MAX_TASK_SEARCH_RESULTS, MAX_TIMELINE_ITEMS, MAX_USER_INPUT_VALUE_BYTES,
+    MAX_TASK_SEARCH_RESULTS, MAX_TIMELINE_ITEMS, MAX_USER_INPUT_VALUE_BYTES, MAX_VISIBLE_THREADS,
     MAX_WORKTREE_ROOT_BYTES, MainRoute, MarketplaceManageTab, MarketplaceSectionFilter,
     MarketplaceTab, McpAuthStatus, McpBrowserOriginElicitation, McpBrowserResourceElicitation,
     McpElicitation, McpElicitationContent, McpElicitationDecision, McpElicitationValue,
@@ -106,6 +106,7 @@ const WINDOW_WIDTH: f32 = 1_278.0;
 const WINDOW_HEIGHT: f32 = 818.0;
 const WINDOW_MIN_WIDTH: f32 = 480.0;
 const WINDOW_MIN_HEIGHT: f32 = 600.0;
+const PRIMARY_WINDOW_TITLE: &str = "codexRS";
 const ABOUT_WINDOW_WIDTH: f32 = 380.0;
 const ABOUT_WINDOW_HEIGHT: f32 = 360.0;
 const WINDOW_PLACEMENT_PERSIST_DELAY: Duration = Duration::from_millis(400);
@@ -4718,6 +4719,7 @@ struct WorkspaceView {
     state: AppState,
     backend: Option<Backend>,
     window_handle: AnyWindowHandle,
+    last_window_title: Option<String>,
     composer: Entity<InputState>,
     api_key_login: Entity<InputState>,
     api_key_login_visible: bool,
@@ -5773,6 +5775,7 @@ impl WorkspaceView {
             state,
             backend,
             window_handle: window.window_handle(),
+            last_window_title: None,
             composer,
             api_key_login,
             api_key_login_visible: false,
@@ -6634,6 +6637,15 @@ impl WorkspaceView {
         if let Some(backend) = self.backend.as_ref() {
             let _ = backend.send(Effect::BrowserSurfaceState { task_id, visible });
         }
+    }
+
+    fn sync_window_title(&mut self, window: &mut Window) {
+        let title = background_chat_window_title(&self.state);
+        if self.last_window_title.as_deref() == Some(title.as_str()) {
+            return;
+        }
+        window.set_window_title(&title);
+        self.last_window_title = Some(title);
     }
 
     fn drain_backend(&mut self, cx: &mut Context<Self>) {
@@ -40481,6 +40493,7 @@ impl WorkspaceView {
 
 impl Render for WorkspaceView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.sync_window_title(window);
         let viewport = window.viewport_size();
         let viewport_width = f32::from(viewport.width);
         let viewport_height = f32::from(viewport.height);
@@ -40844,6 +40857,27 @@ impl Render for WorkspaceView {
             .bg(cx.theme().title_bar)
             .child(title_bar)
             .child(workspace)
+    }
+}
+
+fn background_chat_window_title(state: &AppState) -> String {
+    let running_count = state
+        .tasks
+        .iter()
+        .take(MAX_VISIBLE_THREADS)
+        .filter(|task| {
+            state.selected_task_id.as_deref() != Some(task.id.as_str())
+                && matches!(
+                    task.status,
+                    TaskRunStatus::Running | TaskRunStatus::WaitingForApproval
+                )
+        })
+        .count();
+
+    match running_count {
+        0 => PRIMARY_WINDOW_TITLE.to_owned(),
+        1 => format!("{PRIMARY_WINDOW_TITLE} · 1 chat running"),
+        count => format!("{PRIMARY_WINDOW_TITLE} · {count} chats running"),
     }
 }
 
@@ -44472,15 +44506,15 @@ mod tests {
         account_daily_usage_rows, account_device_code, adjacent_task_id, app_chatgpt_url,
         app_mention_prompt, appearance_color, appearance_color_value,
         appearance_theme_share_string, archived_chat_groups, archived_chat_projects,
-        archived_delete_confirmation_copy, background_terminal_summary,
-        bounded_keyboard_shortcut_search_query, bounded_settings_search_query,
-        bounded_thread_find_query, browser_display_url, browser_navigation_url,
-        browser_surface_coordinates, build_plugin_catalog_sections, case_insensitive_match_ranges,
-        command_task_slot, composer_app_commands, composer_at_skill_commands,
-        composer_desktop_app_commands, composer_file_query, composer_file_search_max_height,
-        composer_model_picker_items, composer_model_placeholder, composer_plugin_commands,
-        composer_service_tier_command_for_query, composer_service_tier_commands,
-        composer_skill_command_for_query, composer_skill_commands,
+        archived_delete_confirmation_copy, background_chat_window_title,
+        background_terminal_summary, bounded_keyboard_shortcut_search_query,
+        bounded_settings_search_query, bounded_thread_find_query, browser_display_url,
+        browser_navigation_url, browser_surface_coordinates, build_plugin_catalog_sections,
+        case_insensitive_match_ranges, command_task_slot, composer_app_commands,
+        composer_at_skill_commands, composer_desktop_app_commands, composer_file_query,
+        composer_file_search_max_height, composer_model_picker_items, composer_model_placeholder,
+        composer_plugin_commands, composer_service_tier_command_for_query,
+        composer_service_tier_commands, composer_skill_command_for_query, composer_skill_commands,
         composer_slash_command_for_prefix, connection_send_failure, decode_mcp_form_image_data_url,
         default_branch_name, diff_file_review_rows, diff_file_sections,
         extract_code_comment_findings, fetch_plugin_logo_blocking, find_timeline_matches,
@@ -44533,6 +44567,38 @@ mod tests {
             forked_from_id: None,
             status: TaskRunStatus::Idle,
         }
+    }
+
+    #[test]
+    fn background_chat_window_title_counts_only_non_selected_running_chats() {
+        let mut state = AppState::default();
+        assert_eq!(background_chat_window_title(&state), "codexRS");
+
+        let mut selected = task("selected", "C:/selected");
+        selected.status = TaskRunStatus::Running;
+        state.selected_task_id = Some(selected.id.clone());
+        state.tasks.push(selected);
+        assert_eq!(background_chat_window_title(&state), "codexRS");
+
+        let mut running = task("running", "C:/running");
+        running.status = TaskRunStatus::Running;
+        state.tasks.push(running);
+        assert_eq!(
+            background_chat_window_title(&state),
+            "codexRS · 1 chat running"
+        );
+
+        let mut waiting = task("waiting", "C:/waiting");
+        waiting.status = TaskRunStatus::WaitingForApproval;
+        state.tasks.push(waiting);
+        assert_eq!(
+            background_chat_window_title(&state),
+            "codexRS · 2 chats running"
+        );
+
+        state.tasks[1].status = TaskRunStatus::Completed;
+        state.tasks[2].status = TaskRunStatus::Idle;
+        assert_eq!(background_chat_window_title(&state), "codexRS");
     }
 
     #[test]
