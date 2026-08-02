@@ -11748,6 +11748,7 @@ impl WorkspaceView {
         self.begin_thread_find_history_load(cx);
         self.thread_find_input
             .update(cx, |input, cx| input.focus(window, cx));
+        self.maybe_open_model_availability_nux(cx);
     }
 
     fn close_thread_find(&mut self, cx: &mut Context<Self>) {
