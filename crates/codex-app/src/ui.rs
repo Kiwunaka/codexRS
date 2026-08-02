@@ -6672,6 +6672,19 @@ impl WorkspaceView {
         });
     }
 
+    fn sync_composer_input_in_window(&self, cx: &mut Context<Self>) {
+        let handle = self.window_handle;
+        let composer = self.composer.clone();
+        let value = self.state.composer.clone();
+        let _ = cx.update_window(handle, move |_, window, cx| {
+            composer.update(cx, |input, cx| {
+                if input.value() != value.as_str() {
+                    input.set_value(value.clone(), window, cx);
+                }
+            });
+        });
+    }
+
     fn focus_browser_address(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(value) = self.active_browser_url() {
             self.browser_address.update(cx, |input, cx| {
@@ -6867,7 +6880,21 @@ impl WorkspaceView {
             _ => {}
         }
         let previous_location = NavigationLocation::from_state(&self.state);
+        let previous_selected_task_id = self.state.selected_task_id.clone();
         let effects = reduce(&mut self.state, action);
+        if previous_selected_task_id != self.state.selected_task_id {
+            self.sync_composer_input_in_window(cx);
+            self.composer_file_search_selected = 0;
+            self.composer_file_search_dismissed_query = None;
+            self.composer_mcp_status_open = false;
+            self.composer_project_picker_open = false;
+            self.composer_project_picker_restore = None;
+            self.composer_fork_picker_open = false;
+            self.composer_review_submenu_open = false;
+            self.composer_review_submitting = false;
+            self.composer_status_open = false;
+            self.composer_status_session_copied = false;
+        }
         if leaves_login_surface {
             self.clear_login_forms_in_window(cx);
         }
