@@ -1056,6 +1056,7 @@ dependencies = [
  "win32job",
  "winsafe",
  "xcap",
+ "zbus",
 ]
 
 [[package]]

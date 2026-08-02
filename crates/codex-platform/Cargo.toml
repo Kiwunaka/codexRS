@@ -38,6 +38,7 @@ rustix = { version = "1.1.4", features = ["process"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 enigo = { version = "0.6.1", default-features = false, features = ["wayland", "x11rb"] }
 xcap = "0.9.7"
+zbus = { version = "=5.18.0", default-features = false, features = ["async-io", "blocking-api"] }
 
 [lints]
 workspace = true
