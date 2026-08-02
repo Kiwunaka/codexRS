@@ -16340,7 +16340,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 return Vec::new();
             }
             if let Some(error) = error {
+                state.git.refresh_generation = generation;
                 state.status_message = Some(bounded_string(error, 16 * 1024));
+                return Vec::new();
             }
             let previous_repository_root = state.git.repository_root.clone();
             let previous_scope = state.git.selected_scope;
@@ -21293,14 +21295,11 @@ mod tests {
             &mut state,
             Action::GitSnapshotLoaded {
                 generation: second_generation,
-                git: Box::new(GitState {
-                    repository_root: Some(second_root.clone()),
-                    ..GitState::default()
-                }),
+                git: Box::default(),
                 error: Some("current repository error".to_owned()),
             },
         );
-        assert_eq!(state.git.repository_root.as_ref(), Some(&second_root));
+        assert!(state.git.repository_root.is_none());
         assert_eq!(
             state.status_message.as_deref(),
             Some("current repository error")
@@ -25348,7 +25347,7 @@ mod tests {
     }
 
     #[test]
-    fn current_git_snapshot_preserves_branch_mutation_lifecycle() {
+    fn git_refreshes_preserve_branch_mutation_lifecycle() {
         let root = PathBuf::from("C:\\repo");
         let mut state = AppState::default();
         state.git.repository_root = Some(root.clone());
@@ -25362,13 +25361,11 @@ mod tests {
             &mut state,
             Action::GitSnapshotLoaded {
                 generation,
-                git: Box::new(GitState {
-                    repository_root: Some(root.clone()),
-                    ..GitState::default()
-                }),
-                error: None,
+                git: Box::default(),
+                error: Some("temporary Git failure".to_owned()),
             },
         );
+        assert_eq!(state.git.repository_root.as_ref(), Some(&root));
         assert_eq!(
             state.git.pending_branch_operation.as_deref(),
             Some("feature/one")
