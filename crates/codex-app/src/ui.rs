@@ -9420,6 +9420,12 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.workspace_modal.is_some() {
+            self.keyboard_shortcut_capture = None;
+            self.pending_keyboard_shortcut = None;
+            return false;
+        }
+
         if self.keyboard_shortcut_capture.is_some() {
             if keystroke.key.eq_ignore_ascii_case("escape") {
                 self.cancel_keyboard_shortcut_capture(cx);
