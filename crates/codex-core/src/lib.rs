@@ -24542,11 +24542,13 @@ mod tests {
 
     #[test]
     fn loading_more_tasks_stops_at_the_visible_chat_cap() {
-        let mut state = AppState::default();
-        state.tasks = (0..MAX_VISIBLE_THREADS)
-            .map(|index| task(&format!("task-{index}")))
-            .collect();
-        state.next_task_cursor = Some("more".to_owned());
+        let mut state = AppState {
+            tasks: (0..MAX_VISIBLE_THREADS)
+                .map(|index| task(&format!("task-{index}")))
+                .collect(),
+            next_task_cursor: Some("more".to_owned()),
+            ..AppState::default()
+        };
 
         assert!(reduce(&mut state, Action::LoadMoreTasks).is_empty());
         assert!(state.next_task_cursor.is_none());
@@ -24554,11 +24556,13 @@ mod tests {
 
     #[test]
     fn appended_task_page_at_visible_chat_cap_clears_next_cursor() {
-        let mut state = AppState::default();
-        state.task_generation = 7;
-        state.tasks = (0..MAX_VISIBLE_THREADS)
-            .map(|index| task(&format!("task-{index}")))
-            .collect();
+        let mut state = AppState {
+            task_generation: 7,
+            tasks: (0..MAX_VISIBLE_THREADS)
+                .map(|index| task(&format!("task-{index}")))
+                .collect(),
+            ..AppState::default()
+        };
 
         reduce(
             &mut state,
