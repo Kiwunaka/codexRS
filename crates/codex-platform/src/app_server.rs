@@ -7,7 +7,8 @@ use std::io::{self, BufReader, Read, Write};
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -66,6 +67,8 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+use crate::byte_budget::{ByteBudget, ByteLease};
+
 #[cfg(unix)]
 use rustix::process::{Pid, Signal, kill_process_group};
 #[cfg(unix)]
@@ -96,6 +99,7 @@ const REMOTE_CONTROL_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const ROUTER_TICK: Duration = Duration::from_millis(25);
 const EVENT_BACKPRESSURE_TIMEOUT: Duration = Duration::from_millis(100);
 const SHUTDOWN_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const DEFAULT_INGRESS_BYTE_BUDGET: usize = 128 * 1024 * 1024;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -632,13 +636,62 @@ pub enum AppServerEvent {
     Disconnected,
 }
 
+#[derive(Debug)]
+pub struct ReceivedAppServerEvent {
+    event: AppServerEvent,
+    frame_bytes: usize,
+    _lease: Option<ByteLease>,
+}
+
+#[must_use = "keep the guard alive until app-server event handling completes"]
+pub struct AppServerEventGuard {
+    _lease: Option<ByteLease>,
+}
+
+impl ReceivedAppServerEvent {
+    fn budgeted(event: AppServerEvent, frame_bytes: usize, lease: ByteLease) -> Self {
+        Self {
+            event,
+            frame_bytes,
+            _lease: Some(lease),
+        }
+    }
+
+    fn unbudgeted(event: AppServerEvent) -> Self {
+        Self {
+            event,
+            frame_bytes: 0,
+            _lease: None,
+        }
+    }
+
+    #[must_use]
+    pub fn event(&self) -> &AppServerEvent {
+        &self.event
+    }
+
+    #[must_use]
+    pub fn frame_bytes(&self) -> usize {
+        self.frame_bytes
+    }
+
+    pub fn into_parts(self) -> (AppServerEvent, AppServerEventGuard) {
+        let Self {
+            event,
+            frame_bytes: _,
+            _lease,
+        } = self;
+        (event, AppServerEventGuard { _lease })
+    }
+}
+
 enum RouterCommand {
     Request {
         id: u64,
         method: &'static str,
         frame: Vec<u8>,
         deadline: Instant,
-        reply: CrossbeamSender<Result<Value, AppServerError>>,
+        reply: CrossbeamSender<BudgetedReply>,
     },
     Frame(Vec<u8>),
     Shutdown(CrossbeamSender<Result<(), AppServerError>>),
@@ -647,12 +700,40 @@ enum RouterCommand {
 struct PendingRequest {
     method: &'static str,
     deadline: Instant,
-    reply: CrossbeamSender<Result<Value, AppServerError>>,
+    reply: CrossbeamSender<BudgetedReply>,
 }
 
 enum RoutedReaderEvent {
-    Message(Result<IncomingMessage, ProtocolError>),
+    Message(Result<BudgetedIncomingMessage, ProtocolError>),
+    Overloaded,
     Eof,
+}
+
+struct BudgetedIncomingMessage {
+    message: IncomingMessage,
+    frame_bytes: usize,
+    lease: ByteLease,
+}
+
+struct BudgetedReply {
+    result: Result<Value, AppServerError>,
+    _lease: Option<ByteLease>,
+}
+
+impl BudgetedReply {
+    fn success(result: Value, lease: ByteLease) -> Self {
+        Self {
+            result: Ok(result),
+            _lease: Some(lease),
+        }
+    }
+
+    fn failure(error: AppServerError, lease: Option<ByteLease>) -> Self {
+        Self {
+            result: Err(error),
+            _lease: lease,
+        }
+    }
 }
 
 /// Long-lived, multiplexed app-server connection suitable for a desktop UI.
@@ -663,7 +744,7 @@ enum RoutedReaderEvent {
 pub struct AppServerConnection {
     config: AppServerConfig,
     commands: CrossbeamSender<RouterCommand>,
-    events: CrossbeamReceiver<AppServerEvent>,
+    events: CrossbeamReceiver<ReceivedAppServerEvent>,
     next_request_id: AtomicU64,
     initialized: AtomicBool,
     closed: AtomicBool,
@@ -712,9 +793,21 @@ impl AppServerConnection {
         let (reader_sender, reader_receiver) =
             crossbeam_channel::bounded(DEFAULT_MESSAGE_CHANNEL_CAPACITY);
         let max_frame_bytes = config.max_frame_bytes;
+        let ingress_budget =
+            ByteBudget::new(DEFAULT_INGRESS_BYTE_BUDGET.max(max_frame_bytes.get()));
+        let reader_dropped_notifications = Arc::new(AtomicUsize::new(0));
+        let stdout_dropped_notifications = Arc::clone(&reader_dropped_notifications);
         let stdout_thread = thread::Builder::new()
             .name("codex-app-server-router-stdout".to_owned())
-            .spawn(move || routed_stdout_reader(stdout, reader_sender, max_frame_bytes))
+            .spawn(move || {
+                routed_stdout_reader(
+                    stdout,
+                    reader_sender,
+                    max_frame_bytes,
+                    ingress_budget,
+                    stdout_dropped_notifications,
+                )
+            })
             .map_err(AppServerError::BackgroundThread)?;
         let stderr_thread = thread::Builder::new()
             .name("codex-app-server-router-stderr".to_owned())
@@ -739,6 +832,7 @@ impl AppServerConnection {
                     stderr_thread,
                     max_frame_bytes,
                     shutdown_timeout,
+                    reader_dropped_notifications,
                 );
             })
             .map_err(AppServerError::BackgroundThread)?;
@@ -864,7 +958,7 @@ impl AppServerConnection {
                 }
             })?;
 
-        let result = reply_receiver
+        let reply = reply_receiver
             .recv_deadline(deadline + ROUTER_TICK)
             .map_err(|error| match error {
                 crossbeam_channel::RecvTimeoutError::Timeout => {
@@ -873,7 +967,8 @@ impl AppServerConnection {
                 crossbeam_channel::RecvTimeoutError::Disconnected => {
                     AppServerError::TransportClosed
                 }
-            })??;
+            })?;
+        let result = reply.result?;
         decode_result(result).map_err(AppServerError::from)
     }
 
@@ -904,7 +999,7 @@ impl AppServerConnection {
         self.send_frame_command(frame)
     }
 
-    pub fn try_recv_event(&self) -> Result<Option<AppServerEvent>, AppServerError> {
+    pub fn try_recv_event(&self) -> Result<Option<ReceivedAppServerEvent>, AppServerError> {
         match self.events.try_recv() {
             Ok(event) => Ok(Some(event)),
             Err(crossbeam_channel::TryRecvError::Empty) => Ok(None),
@@ -917,7 +1012,7 @@ impl AppServerConnection {
     pub fn recv_event_timeout(
         &self,
         timeout: Duration,
-    ) -> Result<Option<AppServerEvent>, AppServerError> {
+    ) -> Result<Option<ReceivedAppServerEvent>, AppServerError> {
         match self.events.recv_timeout(timeout) {
             Ok(event) => Ok(Some(event)),
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => Ok(None),
@@ -1780,11 +1875,12 @@ fn route_app_server(
     stdin: ChildStdin,
     commands: CrossbeamReceiver<RouterCommand>,
     incoming: CrossbeamReceiver<RoutedReaderEvent>,
-    events: CrossbeamSender<AppServerEvent>,
+    events: CrossbeamSender<ReceivedAppServerEvent>,
     stdout_thread: JoinHandle<()>,
     stderr_thread: JoinHandle<()>,
     max_frame_bytes: NonZeroUsize,
     shutdown_timeout: Duration,
+    reader_dropped_notifications: Arc<AtomicUsize>,
 ) {
     let mut stdin = Some(stdin);
     let mut pending = HashMap::<u64, PendingRequest>::new();
@@ -1793,19 +1889,27 @@ fn route_app_server(
 
     while running {
         expire_pending_requests(&mut pending);
+        dropped_notifications = dropped_notifications
+            .saturating_add(reader_dropped_notifications.swap(0, Ordering::AcqRel));
+        publish_drop_count(&events, &mut dropped_notifications);
 
         crossbeam_channel::select! {
             recv(commands) -> command => {
                 match command {
                     Ok(RouterCommand::Request { id, method, frame, deadline, reply }) => {
                         if pending.len() >= MAX_PENDING_REQUESTS {
-                            let _ = reply.try_send(Err(AppServerError::TooManyPendingRequests));
+                            let _ = reply.try_send(BudgetedReply::failure(
+                                AppServerError::TooManyPendingRequests,
+                                None,
+                            ));
                             continue;
                         }
                         pending.insert(id, PendingRequest { method, deadline, reply });
                         if let Err(error) = write_router_frame(&mut stdin, &frame) {
                             if let Some(request) = pending.remove(&id) {
-                                let _ = request.reply.try_send(Err(error));
+                                let _ = request
+                                    .reply
+                                    .try_send(BudgetedReply::failure(error, None));
                             }
                             fail_pending_requests(&mut pending);
                             running = false;
@@ -1825,7 +1929,9 @@ fn route_app_server(
                         let stderr_result = join_background_thread(Some(stderr_thread));
                         let result = result.and(stdout_result).and(stderr_result);
                         let _ = reply.try_send(result);
-                        let _ = events.try_send(AppServerEvent::Disconnected);
+                        let _ = events.try_send(ReceivedAppServerEvent::unbudgeted(
+                            AppServerEvent::Disconnected,
+                        ));
                         return;
                     }
                     Err(_) => {
@@ -1849,7 +1955,10 @@ fn route_app_server(
                             running = false;
                         }
                     }
-                    Ok(RoutedReaderEvent::Message(Err(_))) | Ok(RoutedReaderEvent::Eof) | Err(_) => {
+                    Ok(RoutedReaderEvent::Message(Err(_)))
+                    | Ok(RoutedReaderEvent::Overloaded)
+                    | Ok(RoutedReaderEvent::Eof)
+                    | Err(_) => {
                         fail_pending_requests(&mut pending);
                         running = false;
                     }
@@ -1863,24 +1972,33 @@ fn route_app_server(
     let _ = child.shutdown(shutdown_timeout);
     let _ = join_background_thread(Some(stdout_thread));
     let _ = join_background_thread(Some(stderr_thread));
-    let _ = events.try_send(AppServerEvent::Disconnected);
+    let _ = events.try_send(ReceivedAppServerEvent::unbudgeted(
+        AppServerEvent::Disconnected,
+    ));
 }
 
 fn handle_routed_message(
-    message: IncomingMessage,
+    message: BudgetedIncomingMessage,
     pending: &mut HashMap<u64, PendingRequest>,
-    events: &CrossbeamSender<AppServerEvent>,
+    events: &CrossbeamSender<ReceivedAppServerEvent>,
     stdin: &mut Option<ChildStdin>,
     max_frame_bytes: NonZeroUsize,
     dropped_notifications: &mut usize,
 ) -> Result<(), AppServerError> {
+    let BudgetedIncomingMessage {
+        message,
+        frame_bytes,
+        lease,
+    } = message;
     match message {
         IncomingMessage::Success { id, result } => {
             let Some(id) = id.as_u64() else {
                 return Err(AppServerError::UnexpectedResponseId);
             };
             if let Some(request) = pending.remove(&id) {
-                let _ = request.reply.try_send(Ok(result));
+                let _ = request
+                    .reply
+                    .try_send(BudgetedReply::success(result, lease));
             }
         }
         IncomingMessage::Failure { id, code } => {
@@ -1888,9 +2006,10 @@ fn handle_routed_message(
                 return Err(AppServerError::UnexpectedResponseId);
             };
             if let Some(request) = pending.remove(&id) {
-                let _ = request
-                    .reply
-                    .try_send(Err(AppServerError::RequestFailed { code }));
+                let _ = request.reply.try_send(BudgetedReply::failure(
+                    AppServerError::RequestFailed { code },
+                    Some(lease),
+                ));
             }
         }
         IncomingMessage::Request { id, method, params } => {
@@ -1900,7 +2019,10 @@ fn handle_routed_message(
                 params,
             };
             if events
-                .send_timeout(event, EVENT_BACKPRESSURE_TIMEOUT)
+                .send_timeout(
+                    ReceivedAppServerEvent::budgeted(event, frame_bytes, lease),
+                    EVENT_BACKPRESSURE_TIMEOUT,
+                )
                 .is_err()
             {
                 let frame = encode_error_response(
@@ -1914,7 +2036,14 @@ fn handle_routed_message(
         }
         IncomingMessage::Notification { method, params } => {
             publish_drop_count(events, dropped_notifications);
-            publish_notification(method, params, events, dropped_notifications)?;
+            publish_notification(
+                method,
+                params,
+                frame_bytes,
+                lease,
+                events,
+                dropped_notifications,
+            )?;
         }
     }
     Ok(())
@@ -1923,20 +2052,24 @@ fn handle_routed_message(
 fn publish_notification(
     method: String,
     params: Value,
-    events: &CrossbeamSender<AppServerEvent>,
+    frame_bytes: usize,
+    lease: ByteLease,
+    events: &CrossbeamSender<ReceivedAppServerEvent>,
     dropped_notifications: &mut usize,
 ) -> Result<(), AppServerError> {
     let event = AppServerEvent::Notification { method, params };
-    if notification_requires_resync(&event) {
+    let requires_resync = notification_requires_resync(&event);
+    let received = ReceivedAppServerEvent::budgeted(event, frame_bytes, lease);
+    if requires_resync {
         return events
-            .send_timeout(event, EVENT_BACKPRESSURE_TIMEOUT)
+            .send_timeout(received, EVENT_BACKPRESSURE_TIMEOUT)
             .map_err(|error| match error {
                 SendTimeoutError::Timeout(_) => AppServerError::EventQueueOverloaded,
                 SendTimeoutError::Disconnected(_) => AppServerError::TransportClosed,
             });
     }
 
-    match events.try_send(event) {
+    match events.try_send(received) {
         Ok(()) => Ok(()),
         Err(TrySendError::Full(_)) => {
             *dropped_notifications = dropped_notifications.saturating_add(1);
@@ -1950,31 +2083,40 @@ fn notification_requires_resync(event: &AppServerEvent) -> bool {
     matches!(
         event,
         AppServerEvent::Notification { method, .. }
-            if matches!(
-                method.as_str(),
-                "turn/started"
-                    | "item/started"
-                    | "item/agentMessage/delta"
-                    | "item/plan/delta"
-                    | "item/reasoning/summaryTextDelta"
-                    | "item/reasoning/textDelta"
-                    | "item/commandExecution/outputDelta"
-                    | "item/fileChange/outputDelta"
-                    | "item/completed"
-                    | "turn/completed"
-                    | "remoteControl/status/changed"
-            )
+            if notification_method_requires_resync(method)
     )
 }
 
-fn publish_drop_count(events: &CrossbeamSender<AppServerEvent>, dropped_notifications: &mut usize) {
+fn notification_method_requires_resync(method: &str) -> bool {
+    matches!(
+        method,
+        "turn/started"
+            | "item/started"
+            | "item/agentMessage/delta"
+            | "item/plan/delta"
+            | "item/reasoning/summaryTextDelta"
+            | "item/reasoning/textDelta"
+            | "item/commandExecution/outputDelta"
+            | "item/fileChange/outputDelta"
+            | "item/completed"
+            | "turn/completed"
+            | "remoteControl/status/changed"
+    )
+}
+
+fn publish_drop_count(
+    events: &CrossbeamSender<ReceivedAppServerEvent>,
+    dropped_notifications: &mut usize,
+) {
     if *dropped_notifications == 0 {
         return;
     }
     if events
-        .try_send(AppServerEvent::NotificationsDropped {
-            count: *dropped_notifications,
-        })
+        .try_send(ReceivedAppServerEvent::unbudgeted(
+            AppServerEvent::NotificationsDropped {
+                count: *dropped_notifications,
+            },
+        ))
         .is_ok()
     {
         *dropped_notifications = 0;
@@ -1995,16 +2137,20 @@ fn expire_pending_requests(pending: &mut HashMap<u64, PendingRequest>) {
         .collect::<Vec<_>>();
     for id in expired {
         if let Some(request) = pending.remove(&id) {
-            let _ = request
-                .reply
-                .try_send(Err(AppServerError::RequestTimedOut(request.method)));
+            let _ = request.reply.try_send(BudgetedReply::failure(
+                AppServerError::RequestTimedOut(request.method),
+                None,
+            ));
         }
     }
 }
 
 fn fail_pending_requests(pending: &mut HashMap<u64, PendingRequest>) {
     for (_, request) in pending.drain() {
-        let _ = request.reply.try_send(Err(AppServerError::TransportClosed));
+        let _ = request.reply.try_send(BudgetedReply::failure(
+            AppServerError::TransportClosed,
+            None,
+        ));
     }
 }
 
@@ -2012,17 +2158,57 @@ fn routed_stdout_reader(
     stdout: ChildStdout,
     sender: CrossbeamSender<RoutedReaderEvent>,
     max_frame_bytes: NonZeroUsize,
+    ingress_budget: ByteBudget,
+    dropped_notifications: Arc<AtomicUsize>,
 ) {
     let mut reader = BufReader::new(stdout);
     loop {
         match read_bounded_frame(&mut reader, max_frame_bytes) {
             Ok(Some(frame)) => {
+                let frame_bytes = frame.len();
                 let message = decode_incoming(&frame);
-                let terminal = message.is_err();
-                if !send_routed_reader_event(&sender, RoutedReaderEvent::Message(message))
-                    || terminal
-                {
-                    return;
+                drop(frame);
+                match message {
+                    Ok(message) => {
+                        let requires_delivery = incoming_message_requires_delivery(&message);
+                        let lease = if requires_delivery {
+                            ingress_budget.acquire_timeout(frame_bytes, EVENT_BACKPRESSURE_TIMEOUT)
+                        } else {
+                            ingress_budget.try_acquire(frame_bytes)
+                        };
+                        let Some(lease) = lease else {
+                            if requires_delivery {
+                                let _ = send_routed_reader_event(
+                                    &sender,
+                                    RoutedReaderEvent::Overloaded,
+                                );
+                                return;
+                            }
+                            let _ = dropped_notifications.fetch_update(
+                                Ordering::AcqRel,
+                                Ordering::Acquire,
+                                |count| Some(count.saturating_add(1)),
+                            );
+                            continue;
+                        };
+                        if !send_routed_reader_event(
+                            &sender,
+                            RoutedReaderEvent::Message(Ok(BudgetedIncomingMessage {
+                                message,
+                                frame_bytes,
+                                lease,
+                            })),
+                        ) {
+                            return;
+                        }
+                    }
+                    Err(error) => {
+                        let _ = send_routed_reader_event(
+                            &sender,
+                            RoutedReaderEvent::Message(Err(error)),
+                        );
+                        return;
+                    }
                 }
             }
             Ok(None) => {
@@ -2034,6 +2220,15 @@ fn routed_stdout_reader(
                 return;
             }
         }
+    }
+}
+
+fn incoming_message_requires_delivery(message: &IncomingMessage) -> bool {
+    match message {
+        IncomingMessage::Notification { method, .. } => notification_method_requires_resync(method),
+        IncomingMessage::Success { .. }
+        | IncomingMessage::Failure { .. }
+        | IncomingMessage::Request { .. } => true,
     }
 }
 
@@ -2235,14 +2430,16 @@ mod tests {
     #[cfg(unix)]
     use super::ManagedChild;
     use super::{
-        AppServerConfig, AppServerConnection, AppServerError, AppServerEvent, CodexHome,
-        CodexHomeKind, EVENT_BACKPRESSURE_TIMEOUT, MAX_REMOTE_CONTROL_CURSOR_BYTES,
+        AppServerConfig, AppServerConnection, AppServerError, AppServerEvent, BudgetedReply,
+        CodexHome, CodexHomeKind, EVENT_BACKPRESSURE_TIMEOUT, MAX_REMOTE_CONTROL_CURSOR_BYTES,
         MAX_REMOTE_CONTROL_IDENTIFIER_BYTES, MAX_REMOTE_CONTROL_PAIRING_CODE_BYTES,
-        MAX_THREAD_PAGE_LIMIT, RoutedReaderEvent, RouterCommand, notification_requires_resync,
-        publish_notification, send_routed_reader_event, validate_remote_control_clients_list,
-        validate_remote_control_clients_revoke, validate_remote_control_pairing_status,
-        validate_review_start_params, validate_review_start_response,
+        MAX_THREAD_PAGE_LIMIT, ReceivedAppServerEvent, RoutedReaderEvent, RouterCommand,
+        notification_requires_resync, publish_notification, send_routed_reader_event,
+        validate_remote_control_clients_list, validate_remote_control_clients_revoke,
+        validate_remote_control_pairing_status, validate_review_start_params,
+        validate_review_start_response,
     };
+    use crate::byte_budget::ByteBudget;
 
     #[test]
     fn configured_home_is_canonicalized_without_reading_its_contents() {
@@ -2331,7 +2528,14 @@ mod tests {
                     ..
                 } => {
                     assert!(observed_sender.send((method, frame)).is_ok());
-                    assert!(reply.send(Ok(json!({ "status": "unsubscribed" }))).is_ok());
+                    assert!(
+                        reply
+                            .send(BudgetedReply {
+                                result: Ok(json!({ "status": "unsubscribed" })),
+                                _lease: None,
+                            })
+                            .is_ok()
+                    );
                 }
                 RouterCommand::Frame(_) | RouterCommand::Shutdown(_) => {
                     panic!("expected an unsubscribe request")
@@ -2401,13 +2605,24 @@ mod tests {
     #[test]
     fn full_event_queue_disconnects_instead_of_dropping_a_semantic_notification() {
         let (events, _receiver) = bounded(1);
-        assert!(events.send(AppServerEvent::Disconnected).is_ok());
+        assert!(
+            events
+                .send(ReceivedAppServerEvent::unbudgeted(
+                    AppServerEvent::Disconnected
+                ))
+                .is_ok()
+        );
+        let Some(lease) = ByteBudget::new(1).try_acquire(1) else {
+            panic!("byte lease was not available");
+        };
         let mut dropped_notifications = 0;
         let started = Instant::now();
 
         let result = publish_notification(
             "item/completed".to_owned(),
             Value::Null,
+            1,
+            lease,
             &events,
             &mut dropped_notifications,
         );
@@ -2418,6 +2633,55 @@ mod tests {
             started.elapsed() < EVENT_BACKPRESSURE_TIMEOUT + Duration::from_secs(1),
             "bounded delivery must not wait indefinitely"
         );
+    }
+
+    #[test]
+    fn valid_large_notification_releases_its_budget_after_receive() {
+        const FRAME_BYTES: usize = 4 * 1024 * 1024;
+        const BUDGET_BYTES: usize = 16 * 1024 * 1024;
+        let budget = ByteBudget::new(BUDGET_BYTES);
+        let Some(lease) = budget.try_acquire(FRAME_BYTES) else {
+            panic!("valid large frame lease was not available");
+        };
+        let (events, receiver) = bounded(1);
+        let mut dropped_notifications = 0;
+
+        assert!(
+            publish_notification(
+                "turn/diff/updated".to_owned(),
+                Value::Null,
+                FRAME_BYTES,
+                lease,
+                &events,
+                &mut dropped_notifications,
+            )
+            .is_ok()
+        );
+        assert!(budget.try_acquire(BUDGET_BYTES - FRAME_BYTES + 1).is_none());
+
+        let Ok(received) = receiver.try_recv() else {
+            panic!("large notification was not queued");
+        };
+        assert_eq!(received.frame_bytes(), FRAME_BYTES);
+        drop(received);
+
+        assert!(budget.try_acquire(BUDGET_BYTES).is_some());
+    }
+
+    #[test]
+    fn pending_response_holds_its_ingress_budget_until_consumed() {
+        let budget = ByteBudget::new(4);
+        let Some(lease) = budget.try_acquire(4) else {
+            panic!("response lease was not available");
+        };
+
+        {
+            let reply = BudgetedReply::success(Value::Null, lease);
+            assert!(reply.result.is_ok());
+            assert!(budget.try_acquire(1).is_none());
+        }
+
+        assert!(budget.try_acquire(4).is_some());
     }
 
     #[test]

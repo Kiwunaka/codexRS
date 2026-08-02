@@ -20,6 +20,7 @@ mod app_server;
 mod artifacts;
 mod browser;
 mod browser_agent;
+mod byte_budget;
 #[cfg(windows)]
 mod computer_apps;
 mod computer_interruption;
@@ -36,7 +37,8 @@ mod terminal;
 
 pub use app_server::{
     AppServerClient, AppServerConfig, AppServerConnection, AppServerError, AppServerEvent,
-    CodexHome, CodexHomeKind, DEFAULT_THREAD_PAGE_LIMIT, MAX_THREAD_PAGE_LIMIT,
+    AppServerEventGuard, CodexHome, CodexHomeKind, DEFAULT_THREAD_PAGE_LIMIT,
+    MAX_THREAD_PAGE_LIMIT, ReceivedAppServerEvent,
 };
 pub use artifacts::{
     ArtifactError, ArtifactFileKind, ArtifactFilePreview, MAX_ARTIFACT_PATH_BYTES,
