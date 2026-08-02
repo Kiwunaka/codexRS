@@ -16289,7 +16289,7 @@ mod tests {
             ("ftp://example.test/plugins/plugin/share", None),
             ("", None),
         ] {
-            let detail = serde_json::from_value(json!({
+            let Ok(detail) = serde_json::from_value(json!({
                 "marketplaceName": "marketplace",
                 "marketplacePath": null,
                 "summary": {
@@ -16297,8 +16297,9 @@ mod tests {
                     "name": "plugin"
                 },
                 "shareUrl": share_url
-            }))
-            .expect("stable plugin detail");
+            })) else {
+                panic!("stable plugin detail must decode");
+            };
 
             assert_eq!(
                 map_plugin_detail("plugin@marketplace".to_owned(), detail)

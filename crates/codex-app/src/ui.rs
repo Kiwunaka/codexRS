@@ -27359,12 +27359,12 @@ impl WorkspaceView {
         detail: PluginDetailView,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let information = plugin
+            .installed
+            .then(|| self.render_plugin_information(&plugin, &detail, cx));
         let PluginDetailView {
             description,
             capabilities,
-            website_url,
-            privacy_policy_url,
-            terms_of_service_url,
             skills,
             apps,
             app_templates,
@@ -27438,20 +27438,10 @@ impl WorkspaceView {
             .developer
             .clone()
             .unwrap_or_else(|| plugin.marketplace.clone());
-        let (information, install_capabilities) = if plugin.installed {
-            (
-                Some(self.render_plugin_information(
-                    &plugin,
-                    capabilities,
-                    website_url,
-                    privacy_policy_url,
-                    terms_of_service_url,
-                    cx,
-                )),
-                Vec::new(),
-            )
+        let install_capabilities = if plugin.installed {
+            Vec::new()
         } else {
-            (None, capabilities)
+            capabilities
         };
         let detail_actions = self.render_plugin_detail_actions(&plugin, cx);
         v_flex()
@@ -27687,17 +27677,14 @@ impl WorkspaceView {
     fn render_plugin_information(
         &self,
         plugin: &PluginCard,
-        capabilities: Vec<String>,
-        website_url: Option<String>,
-        privacy_policy_url: Option<String>,
-        terms_of_service_url: Option<String>,
+        detail: &PluginDetailView,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let mut rows = Vec::new();
-        if !capabilities.is_empty() {
+        if !detail.capabilities.is_empty() {
             rows.push(self.render_plugin_information_value(
                 "Capabilities",
-                capabilities.join(", "),
+                detail.capabilities.join(", "),
                 cx,
             ));
         }
@@ -27713,24 +27700,33 @@ impl WorkspaceView {
         rows.push(self.render_plugin_information_link(
             "plugin-info-website",
             "Website",
-            website_url,
+            detail.website_url.clone(),
             true,
             cx,
         ));
-        if privacy_policy_url.is_some() {
+        if detail.privacy_policy_url.is_some() {
             rows.push(self.render_plugin_information_link(
                 "plugin-info-privacy",
                 "Privacy Policy",
-                privacy_policy_url,
+                detail.privacy_policy_url.clone(),
                 false,
                 cx,
             ));
         }
-        if terms_of_service_url.is_some() {
+        if detail.terms_of_service_url.is_some() {
             rows.push(self.render_plugin_information_link(
                 "plugin-info-terms",
                 "Terms of Service",
-                terms_of_service_url,
+                detail.terms_of_service_url.clone(),
+                false,
+                cx,
+            ));
+        }
+        if detail.share_url.is_some() {
+            rows.push(self.render_plugin_information_link(
+                "plugin-info-share",
+                "Share",
+                detail.share_url.clone(),
                 false,
                 cx,
             ));
