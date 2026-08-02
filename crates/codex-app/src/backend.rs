@@ -3192,13 +3192,13 @@ fn run_backend(
         if let Some(app_server) = connection.as_ref() {
             for _ in 0..64 {
                 match app_server.try_recv_event() {
-                    Ok(Some(AppServerEvent::Disconnected)) => {
-                        emit(&events, Action::ConnectionLost);
-                        disconnected = true;
-                        break;
-                    }
-                    Ok(Some(event)) => {
-                        if let Some(turn) = completed_turn_key(&event) {
+                    Ok(Some(received)) => {
+                        if matches!(received.event(), AppServerEvent::Disconnected) {
+                            emit(&events, Action::ConnectionLost);
+                            disconnected = true;
+                            break;
+                        }
+                        if let Some(turn) = completed_turn_key(received.event()) {
                             retryable_turns.remove(&(turn.thread_id.clone(), turn.turn_id.clone()));
                             if let Some(monitor) = computer_interruption.as_ref() {
                                 monitor.disarm_turn(&turn.thread_id, &turn.turn_id);
@@ -3210,7 +3210,7 @@ fn run_backend(
                             interrupted_computer_turns.remove(&(turn.thread_id, turn.turn_id));
                         }
                         let computer_request =
-                            computer_tool_request_meta(&event).filter(|request| {
+                            computer_tool_request_meta(received.event()).filter(|request| {
                                 computer_use_tool_supported_on_platform(&request.tool)
                             });
                         let computer_monitor_transition = computer_request
@@ -3283,7 +3283,12 @@ fn run_backend(
                                 continue;
                             }
                         }
-                        if !handle_fuzzy_file_search_event(&event, &fuzzy_file_search, &events) {
+                        if !handle_fuzzy_file_search_event(
+                            received.event(),
+                            &fuzzy_file_search,
+                            &events,
+                        ) {
+                            let (event, _event_guard) = received.into_parts();
                             filesystem_changed |= handle_app_server_event_with_browser_permissions(
                                 app_server,
                                 event,
@@ -8807,6 +8812,7 @@ fn generate_structured_git_output(
                 break Err(format!("lost the app-server connection: {error}"));
             }
         };
+        let (event, _event_guard) = event.into_parts();
         match event {
             AppServerEvent::Notification { method, params }
                 if string_field(&params, "threadId").as_deref() == Some(thread_id.as_str()) =>
