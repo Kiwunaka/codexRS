@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
@@ -86,18 +87,19 @@ use codex_platform::{
     AppServerConfig, AppServerConnection, AppServerError, AppServerEvent, ArtifactFileKind,
     BrowserConfig, BrowserDownloadStatus as PlatformBrowserDownloadStatus, BrowserEvent,
     BrowserKeyInput as PlatformBrowserKeyInput, BrowserMouseButton as PlatformBrowserMouseButton,
-    BrowserSession, CodexHome, CodexHomeKind, ComputerAccessibilityState, ComputerApplication,
-    ComputerButton, ComputerCapture, ComputerKey, ComputerUseAccessibilityClient,
-    ComputerUseInterruptionMonitor, ComputerUseOverlayTarget, ComputerUseSystemOverlay,
-    ComputerUseTurnKey, ComputerWindow, DEFAULT_THREAD_PAGE_LIMIT, GitBranchMutationOutcome,
-    GitError, GitFileKind as PlatformGitFileKind, GitHubCheckStatus, GitHubCiStatus,
-    GitHubCliAvailability, GitHubCreatePullRequest, GitHubError, GitHubPullRequestActivity,
-    GitHubPullRequestActivityKind, GitHubPullRequestCheck, GitHubPullRequestDetail,
-    GitHubPullRequestIdentity, GitHubPullRequestLifecycle, GitHubPullRequestMergeMethod,
-    GitHubPullRequestRelationship, GitHubPullRequestReviewEvent, GitHubPullRequestReviewState,
-    GitHubPullRequestSearchFilters, GitHubPullRequestState, GitHubPullRequestSummary, GitSnapshot,
-    RuntimePolicy, TerminalConfig, TerminalEvent, TerminalSession, available_terminal_shells,
-    browser_permission_for_url, capture_computer_window, click_computer_window, codexrs_data_dir,
+    BrowserSession, ByteBudget, ByteLease, CodexHome, CodexHomeKind, ComputerAccessibilityState,
+    ComputerApplication, ComputerButton, ComputerCapture, ComputerKey,
+    ComputerUseAccessibilityClient, ComputerUseInterruptionMonitor, ComputerUseOverlayTarget,
+    ComputerUseSystemOverlay, ComputerUseTurnKey, ComputerWindow, DEFAULT_THREAD_PAGE_LIMIT,
+    GitBranchMutationOutcome, GitError, GitFileKind as PlatformGitFileKind, GitHubCheckStatus,
+    GitHubCiStatus, GitHubCliAvailability, GitHubCreatePullRequest, GitHubError,
+    GitHubPullRequestActivity, GitHubPullRequestActivityKind, GitHubPullRequestCheck,
+    GitHubPullRequestDetail, GitHubPullRequestIdentity, GitHubPullRequestLifecycle,
+    GitHubPullRequestMergeMethod, GitHubPullRequestRelationship, GitHubPullRequestReviewEvent,
+    GitHubPullRequestReviewState, GitHubPullRequestSearchFilters, GitHubPullRequestState,
+    GitHubPullRequestSummary, GitSnapshot, RuntimePolicy, TerminalConfig, TerminalEvent,
+    TerminalSession, available_terminal_shells, browser_permission_for_url,
+    capture_computer_window, click_computer_window, codexrs_data_dir,
     commit_diff as git_commit_diff, computer_use_platform_available,
     computer_use_target_is_forbidden, create_branch as git_create_branch,
     create_managed_worktree_cancellable as git_create_managed_worktree,
@@ -182,7 +184,7 @@ use codex_protocol::{
 use codex_storage::{
     BrowserDownloadRecordStatus, MAX_BROWSER_DOWNLOAD_RECORDS, Store, StoredBrowserDownload,
 };
-use crossbeam_channel::{Receiver, Sender, TryRecvError};
+use crossbeam_channel::{Receiver, SendTimeoutError, Sender, TryRecvError, TrySendError};
 use serde_json::{Value, json};
 
 #[cfg(any(windows, target_os = "linux", test))]
@@ -195,6 +197,7 @@ const BACKEND_TICK: Duration = Duration::from_millis(25);
 const APP_SERVER_RECONNECT_INITIAL_DELAY: Duration = Duration::from_secs(1);
 const APP_SERVER_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(20);
 const UI_EVENT_TIMEOUT: Duration = Duration::from_millis(100);
+const UI_EVENT_BYTE_BUDGET: usize = 128 * 1024 * 1024;
 const HISTORY_PAGE_LIMIT: u32 = 100;
 const MAX_REVIEW_MODE_PAGES: usize = MAX_TIMELINE_ITEMS.div_ceil(HISTORY_PAGE_LIMIT as usize);
 const ARCHIVED_DELETE_PAGE_LIMIT: u32 = 200;
@@ -1688,7 +1691,7 @@ fn write_agent_config_value(
 }
 
 fn emit_agent_configuration_mutation(
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     kind: AgentConfigurationMutationKind,
     result: Result<ConfigWriteStatus, String>,
 ) {
@@ -2180,9 +2183,180 @@ struct PendingWorktreeRuntime {
     thread: JoinHandle<()>,
 }
 
+trait ActionEmitter {
+    fn emit(&self, action: Action);
+}
+
+impl ActionEmitter for Sender<Action> {
+    fn emit(&self, action: Action) {
+        let _ = self.send_timeout(action, UI_EVENT_TIMEOUT);
+    }
+}
+
+#[derive(Clone)]
+struct UiEventSender {
+    sender: Sender<QueuedAction>,
+    budget: ByteBudget,
+    backpressure: Arc<UiBackpressureSignals>,
+}
+
+#[derive(Default)]
+struct UiBackpressureSignals {
+    connection_lost_pending: AtomicBool,
+    disconnect_requested: AtomicBool,
+}
+
+impl ActionEmitter for UiEventSender {
+    fn emit(&self, action: Action) {
+        let _ = self
+            .sender
+            .send_timeout(QueuedAction::unbudgeted(action), UI_EVENT_TIMEOUT);
+    }
+}
+
+impl UiEventSender {
+    fn new(sender: Sender<QueuedAction>, budget: ByteBudget) -> Self {
+        Self {
+            sender,
+            budget,
+            backpressure: Arc::new(UiBackpressureSignals::default()),
+        }
+    }
+
+    fn signal_connection_lost(&self) {
+        self.backpressure
+            .connection_lost_pending
+            .store(true, Ordering::Release);
+        self.backpressure
+            .disconnect_requested
+            .store(true, Ordering::Release);
+    }
+
+    fn semantic_overload(&self) -> UiEventDelivery {
+        self.signal_connection_lost();
+        UiEventDelivery::Overloaded
+    }
+
+    fn take_disconnect_requested(&self) -> bool {
+        self.backpressure
+            .disconnect_requested
+            .swap(false, Ordering::AcqRel)
+    }
+
+    fn emit_budgeted(
+        &self,
+        action: Action,
+        frame_bytes: usize,
+        requires_delivery: bool,
+    ) -> UiEventDelivery {
+        let lease = if requires_delivery {
+            self.budget.acquire_timeout(frame_bytes, UI_EVENT_TIMEOUT)
+        } else {
+            self.budget.try_acquire(frame_bytes)
+        };
+        let Some(lease) = lease else {
+            return if requires_delivery {
+                self.semantic_overload()
+            } else {
+                UiEventDelivery::Dropped
+            };
+        };
+        let action = QueuedAction::budgeted(action, lease);
+        if requires_delivery {
+            match self.sender.send_timeout(action, UI_EVENT_TIMEOUT) {
+                Ok(()) => UiEventDelivery::Delivered,
+                Err(SendTimeoutError::Timeout(_) | SendTimeoutError::Disconnected(_)) => {
+                    self.semantic_overload()
+                }
+            }
+        } else {
+            match self.sender.try_send(action) {
+                Ok(()) => UiEventDelivery::Delivered,
+                Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {
+                    UiEventDelivery::Dropped
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UiEventDelivery {
+    Delivered,
+    Dropped,
+    Overloaded,
+}
+
+struct BudgetedActionEmitter<'a> {
+    events: &'a UiEventSender,
+    frame_bytes: usize,
+    requires_delivery: bool,
+    outcome: Cell<UiEventDelivery>,
+}
+
+impl<'a> BudgetedActionEmitter<'a> {
+    fn new(events: &'a UiEventSender, frame_bytes: usize, requires_delivery: bool) -> Self {
+        Self {
+            events,
+            frame_bytes,
+            requires_delivery,
+            outcome: Cell::new(UiEventDelivery::Delivered),
+        }
+    }
+
+    fn outcome(&self) -> UiEventDelivery {
+        self.outcome.get()
+    }
+}
+
+impl ActionEmitter for BudgetedActionEmitter<'_> {
+    fn emit(&self, action: Action) {
+        if self.outcome.get() != UiEventDelivery::Delivered {
+            return;
+        }
+        self.outcome.set(self.events.emit_budgeted(
+            action,
+            self.frame_bytes,
+            self.requires_delivery,
+        ));
+    }
+}
+
+pub(crate) struct QueuedAction {
+    action: Action,
+    _lease: Option<ByteLease>,
+}
+
+#[must_use = "keep the guard alive until action reduction completes"]
+pub(crate) struct QueuedActionGuard {
+    _lease: Option<ByteLease>,
+}
+
+impl QueuedAction {
+    pub(crate) fn unbudgeted(action: Action) -> Self {
+        Self {
+            action,
+            _lease: None,
+        }
+    }
+
+    fn budgeted(action: Action, lease: ByteLease) -> Self {
+        Self {
+            action,
+            _lease: Some(lease),
+        }
+    }
+
+    pub(crate) fn into_parts(self) -> (Action, QueuedActionGuard) {
+        let Self { action, _lease } = self;
+        (action, QueuedActionGuard { _lease })
+    }
+}
+
 pub struct Backend {
     commands: Sender<BackendCommand>,
-    events: Receiver<Action>,
+    events: Receiver<QueuedAction>,
+    backpressure: Arc<UiBackpressureSignals>,
     shutdown_requested: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -2203,6 +2377,8 @@ impl Backend {
         let (command_sender, command_receiver) =
             crossbeam_channel::bounded(BACKEND_COMMAND_CAPACITY);
         let (event_sender, event_receiver) = crossbeam_channel::bounded(BACKEND_EVENT_CAPACITY);
+        let event_sender = UiEventSender::new(event_sender, ByteBudget::new(UI_EVENT_BYTE_BUDGET));
+        let backpressure = Arc::clone(&event_sender.backpressure);
         let shutdown_requested = Arc::new(AtomicBool::new(false));
         let worker_shutdown_requested = Arc::clone(&shutdown_requested);
         let thread = thread::Builder::new()
@@ -2213,6 +2389,7 @@ impl Backend {
         Ok(Self {
             commands: command_sender,
             events: event_receiver,
+            backpressure,
             shutdown_requested,
             thread: Some(thread),
         })
@@ -2249,7 +2426,14 @@ impl Backend {
             })
     }
 
-    pub fn try_recv(&self) -> Result<Option<Action>, &'static str> {
+    pub fn try_recv(&self) -> Result<Option<QueuedAction>, &'static str> {
+        if self
+            .backpressure
+            .connection_lost_pending
+            .swap(false, Ordering::AcqRel)
+        {
+            return Ok(Some(QueuedAction::unbudgeted(Action::ConnectionLost)));
+        }
         match self.events.try_recv() {
             Ok(action) => Ok(Some(action)),
             Err(TryRecvError::Empty) => Ok(None),
@@ -2268,7 +2452,7 @@ impl Drop for Backend {
     }
 }
 
-fn open_storage(events: &Sender<Action>) -> Option<Store> {
+fn open_storage(events: &dyn ActionEmitter) -> Option<Store> {
     let path = match codexrs_data_dir() {
         Ok(directory) => directory.join("state.sqlite3"),
         Err(error) => {
@@ -3064,7 +3248,7 @@ fn unix_timestamp() -> i64 {
 
 fn run_backend(
     commands: Receiver<BackendCommand>,
-    events: Sender<Action>,
+    events: UiEventSender,
     shutdown_requested: Arc<AtomicBool>,
 ) {
     let runtime_policy = RuntimePolicy::default();
@@ -3165,36 +3349,43 @@ fn run_backend(
 
     loop {
         reap_pending_worktree_runtime(&mut pending_worktree_runtime);
-        if let Some(turn) = computer_interruption
-            .as_ref()
-            .and_then(ComputerUseInterruptionMonitor::try_recv)
-        {
-            if let Some(overlay) = computer_overlay.as_mut() {
-                let _ = overlay.complete_turn(&turn.thread_id, &turn.turn_id);
+        let mut disconnected = events.take_disconnect_requested();
+        if !disconnected {
+            if let Some(turn) = computer_interruption
+                .as_ref()
+                .and_then(ComputerUseInterruptionMonitor::try_recv)
+            {
+                if let Some(overlay) = computer_overlay.as_mut() {
+                    let _ = overlay.complete_turn(&turn.thread_id, &turn.turn_id);
+                }
+                handle_computer_use_interruption(
+                    turn,
+                    connection.as_ref(),
+                    &events,
+                    &mut pending_approvals,
+                    &mut interrupted_computer_turns,
+                );
             }
-            handle_computer_use_interruption(
-                turn,
-                connection.as_ref(),
-                &events,
-                &mut pending_approvals,
-                &mut interrupted_computer_turns,
-            );
+            if let Some(turn) = computer_interruption
+                .as_ref()
+                .and_then(ComputerUseInterruptionMonitor::try_recv_user_input)
+                && let Some(window_id) = turn.window_id
+            {
+                computer_accessibility.mark_user_input(&window_id);
+            }
         }
-        if let Some(turn) = computer_interruption
-            .as_ref()
-            .and_then(ComputerUseInterruptionMonitor::try_recv_user_input)
-            && let Some(window_id) = turn.window_id
-        {
-            computer_accessibility.mark_user_input(&window_id);
-        }
-        let mut disconnected = false;
         let mut filesystem_changed = false;
-        if let Some(app_server) = connection.as_ref() {
+        if !disconnected && let Some(app_server) = connection.as_ref() {
             for _ in 0..64 {
                 match app_server.try_recv_event() {
                     Ok(Some(received)) => {
+                        let app_server_events = BudgetedActionEmitter::new(
+                            &events,
+                            received.frame_bytes(),
+                            received.requires_delivery(),
+                        );
                         if matches!(received.event(), AppServerEvent::Disconnected) {
-                            emit(&events, Action::ConnectionLost);
+                            emit(&app_server_events, Action::ConnectionLost);
                             disconnected = true;
                             break;
                         }
@@ -3286,13 +3477,13 @@ fn run_backend(
                         if !handle_fuzzy_file_search_event(
                             received.event(),
                             &fuzzy_file_search,
-                            &events,
+                            &app_server_events,
                         ) {
                             let (event, _event_guard) = received.into_parts();
                             filesystem_changed |= handle_app_server_event_with_browser_permissions(
                                 app_server,
                                 event,
-                                &events,
+                                &app_server_events,
                                 &mut pending_approvals,
                                 &mut computer_permissions,
                                 &mut computer_allowed_app_ids,
@@ -3308,6 +3499,11 @@ fn run_backend(
                         {
                             monitor.arm(request.thread_id, request.turn_id, request.window_id);
                         }
+                        if app_server_events.outcome() == UiEventDelivery::Overloaded {
+                            let _ = events.take_disconnect_requested();
+                            disconnected = true;
+                            break;
+                        }
                     }
                     Ok(None) => break,
                     Err(_) => {
@@ -3315,7 +3511,8 @@ fn run_backend(
                             &events,
                             Action::SetStatus("app-server event channel closed".to_owned()),
                         );
-                        emit(&events, Action::ConnectionLost);
+                        events.signal_connection_lost();
+                        let _ = events.take_disconnect_requested();
                         disconnected = true;
                         break;
                     }
@@ -3666,7 +3863,7 @@ fn computer_tool_target_requires_refresh(
 fn handle_computer_use_interruption(
     turn: ComputerUseTurnKey,
     app_server: Option<&AppServerConnection>,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     pending_approvals: &mut HashMap<String, PendingApproval>,
     interrupted_turns: &mut HashSet<(String, String)>,
 ) {
@@ -3701,7 +3898,7 @@ fn handle_computer_use_interruption(
 fn cancel_pending_computer_use_approvals(
     app_server: &AppServerConnection,
     turn: &ComputerUseTurnKey,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     pending_approvals: &mut HashMap<String, PendingApproval>,
 ) {
     let request_ids = pending_approvals
@@ -3787,7 +3984,7 @@ fn archived_task_ids_for_delete(app_server: &AppServerConnection) -> Result<Vec<
 #[allow(clippy::too_many_arguments)]
 fn run_effect(
     effect: Effect,
-    events: &Sender<Action>,
+    events: &UiEventSender,
     connection: &mut Option<AppServerConnection>,
     pending_approvals: &mut HashMap<String, PendingApproval>,
     marketplaces: &mut HashMap<String, Option<PathBuf>>,
@@ -8358,7 +8555,7 @@ fn fork_app_server_task(
     cwd: Option<PathBuf>,
     source_title: &str,
     computer_capable_threads: &mut HashSet<String>,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
 ) -> Result<(), AppServerError> {
     let response = app_server.fork_thread(ThreadForkParams {
         thread_id: task_id.to_owned(),
@@ -8414,7 +8611,7 @@ fn retry_safety_buffered_turn(
     faster_model: String,
     mut submission: RetryableTurnSubmission,
     computer_capable_threads: &mut HashSet<String>,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     browser: &mut Option<BrowserRuntime>,
     browser_download_preferences: &BrowserDownloadPreferences,
     browser_permissions: &BrowserPermissionsState,
@@ -8570,7 +8767,7 @@ fn safety_retry_fork_point(turns: &[Value], turn_id: &str) -> Result<(), &'stati
 }
 
 fn emit_safety_buffered_retry_failure(
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     source_task_id: String,
     turn_id: String,
     restore_task_id: Option<String>,
@@ -8592,7 +8789,7 @@ fn emit_safety_buffered_retry_failure(
 fn start_turn(
     app_server: &AppServerConnection,
     request: StartTurnRequest,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     browser: &mut Option<BrowserRuntime>,
     browser_download_preferences: &BrowserDownloadPreferences,
     browser_permissions: &BrowserPermissionsState,
@@ -8693,7 +8890,7 @@ fn generate_commit_message(
     root: &Path,
     include_unstaged: bool,
     commit_instructions: &str,
-    events: &Sender<Action>,
+    events: &UiEventSender,
     pending_approvals: &mut HashMap<String, PendingApproval>,
     computer_permissions: &mut HashMap<String, ComputerUsePermission>,
     computer_allowed_app_ids: &mut HashSet<String>,
@@ -8725,7 +8922,7 @@ fn generate_structured_git_output(
     prompt: String,
     output_schema: Value,
     response_limit: usize,
-    events: &Sender<Action>,
+    events: &UiEventSender,
     pending_approvals: &mut HashMap<String, PendingApproval>,
     computer_permissions: &mut HashMap<String, ComputerUsePermission>,
     computer_allowed_app_ids: &mut HashSet<String>,
@@ -8812,6 +9009,8 @@ fn generate_structured_git_output(
                 break Err(format!("lost the app-server connection: {error}"));
             }
         };
+        let app_server_events =
+            BudgetedActionEmitter::new(events, event.frame_bytes(), event.requires_delivery());
         let (event, _event_guard) = event.into_parts();
         match event {
             AppServerEvent::Notification { method, params }
@@ -8880,27 +9079,37 @@ fn generate_structured_git_output(
                 handle_app_server_event(
                     app_server,
                     AppServerEvent::Disconnected,
-                    events,
+                    &app_server_events,
                     pending_approvals,
                     computer_permissions,
                     computer_allowed_app_ids,
                     computer_accessibility,
                     computer_url_policy,
                 );
+                if app_server_events.outcome() == UiEventDelivery::Overloaded {
+                    break Err(
+                        "UI event delivery overloaded while generating Git messages".to_owned()
+                    );
+                }
                 break Err("the app-server connection closed".to_owned());
             }
             event => {
                 if handle_app_server_event(
                     app_server,
                     event,
-                    events,
+                    &app_server_events,
                     pending_approvals,
                     computer_permissions,
                     computer_allowed_app_ids,
                     computer_accessibility,
                     computer_url_policy,
                 ) {
-                    emit(events, Action::RefreshGit);
+                    emit(&app_server_events, Action::RefreshGit);
+                }
+                if app_server_events.outcome() == UiEventDelivery::Overloaded {
+                    break Err(
+                        "UI event delivery overloaded while generating Git messages".to_owned()
+                    );
                 }
             }
         }
@@ -8996,7 +9205,7 @@ fn generate_pull_request_message(
     body: &str,
     include_uncommitted: bool,
     pull_request_instructions: &str,
-    events: &Sender<Action>,
+    events: &UiEventSender,
     pending_approvals: &mut HashMap<String, PendingApproval>,
     computer_permissions: &mut HashMap<String, ComputerUsePermission>,
     computer_allowed_app_ids: &mut HashSet<String>,
@@ -9044,7 +9253,7 @@ fn generate_commit_pull_request_messages(
     body: &str,
     commit_instructions: &str,
     pull_request_instructions: &str,
-    events: &Sender<Action>,
+    events: &UiEventSender,
     pending_approvals: &mut HashMap<String, PendingApproval>,
     computer_permissions: &mut HashMap<String, ComputerUsePermission>,
     computer_allowed_app_ids: &mut HashSet<String>,
@@ -9442,7 +9651,7 @@ fn start_terminal(
     cwd: PathBuf,
     shell: Option<IntegratedTerminalShell>,
     terminals: &mut HashMap<u64, TerminalRuntime>,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
 ) {
     if terminals.len() >= MAX_TERMINAL_TABS {
         emit(
@@ -9489,7 +9698,7 @@ fn start_terminal(
 
 fn handle_browser_effect(
     effect: &Effect,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     browser: &mut Option<BrowserRuntime>,
     browser_download_preferences: &mut BrowserDownloadPreferences,
     browser_permissions: &mut BrowserPermissionsState,
@@ -9716,7 +9925,7 @@ fn handle_browser_effect(
 fn ensure_browser_context(
     browser: &mut Option<BrowserRuntime>,
     task_id: &str,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     browser_download_preferences: &BrowserDownloadPreferences,
     browser_permissions: &BrowserPermissionsState,
 ) -> Result<(), String> {
@@ -9765,7 +9974,7 @@ fn ensure_browser_context(
 fn run_browser_command(
     browser: &mut Option<BrowserRuntime>,
     task_id: &str,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     command: impl FnOnce(&BrowserSession) -> Result<(), codex_platform::BrowserCommandError>,
 ) {
     let Some(runtime) = browser.as_ref() else {
@@ -9791,7 +10000,7 @@ fn run_browser_command(
 
 fn run_browser_download_command(
     browser: &mut Option<BrowserRuntime>,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     command: impl FnOnce(&BrowserSession) -> Result<(), codex_platform::BrowserCommandError>,
 ) {
     let Some(runtime) = browser.as_ref() else {
@@ -9809,7 +10018,7 @@ fn run_browser_download_command(
     }
 }
 
-fn drain_browser(browser: &mut Option<BrowserRuntime>, events: &Sender<Action>) -> bool {
+fn drain_browser(browser: &mut Option<BrowserRuntime>, events: &dyn ActionEmitter) -> bool {
     let Some(runtime) = browser.as_mut() else {
         return false;
     };
@@ -9954,7 +10163,7 @@ fn drain_browser(browser: &mut Option<BrowserRuntime>, events: &Sender<Action>) 
     false
 }
 
-fn drain_terminals(terminals: &mut HashMap<u64, TerminalRuntime>, events: &Sender<Action>) {
+fn drain_terminals(terminals: &mut HashMap<u64, TerminalRuntime>, events: &dyn ActionEmitter) {
     let tab_ids = terminals.keys().copied().collect::<Vec<_>>();
     for tab_id in tab_ids {
         let Some(runtime) = terminals.get_mut(&tab_id) else {
@@ -10233,7 +10442,7 @@ fn map_git_snapshot(snapshot: GitSnapshot) -> GitState {
 }
 
 fn connect(
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     connection: &mut Option<AppServerConnection>,
 ) -> Result<(), String> {
     if connection.is_some() {
@@ -10600,7 +10809,7 @@ fn handle_dynamic_tool_call(
     app_server: &AppServerConnection,
     id: &Value,
     params: Value,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     pending_approvals: &mut HashMap<String, PendingApproval>,
     permissions: &mut HashMap<String, ComputerUsePermission>,
     always_allowed_app_ids: &mut HashSet<String>,
@@ -10854,7 +11063,7 @@ fn handle_computer_launch_call(
     app_server: &AppServerConnection,
     id: &Value,
     params: DynamicToolCallParams,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     pending_approvals: &mut HashMap<String, PendingApproval>,
     permission: &ComputerUsePermission,
     always_allowed_app_ids: &mut HashSet<String>,
@@ -11037,7 +11246,7 @@ fn complete_computer_tool_call(
     id: &Value,
     params: &DynamicToolCallParams,
     window: &ComputerWindow,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     computer_accessibility: &mut ComputerUseAccessibilityClient,
     computer_overlay: Option<&mut ComputerUseSystemOverlay>,
 ) {
@@ -11072,7 +11281,7 @@ fn begin_computer_overlay(
     computer_overlay: Option<&mut ComputerUseSystemOverlay>,
     params: &DynamicToolCallParams,
     window: Option<&ComputerWindow>,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
 ) -> Result<(), String> {
     let Some(overlay) = computer_overlay else {
         return Err(COMPUTER_USE_OVERLAY_UNAVAILABLE_MESSAGE.to_owned());
@@ -11190,7 +11399,7 @@ fn computer_use_allowed_app_ids_value(app_ids: &[String]) -> Value {
 fn persist_computer_use_allowed_app(
     app_server: &AppServerConnection,
     application_id: &str,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     computer_allowed_app_ids: &mut HashSet<String>,
 ) -> bool {
     if computer_use_policy_contains(computer_allowed_app_ids, application_id) {
@@ -11253,7 +11462,7 @@ fn run_computer_tool(
     arguments: &Value,
     task_id: &str,
     window_id: &str,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     computer_accessibility: &mut ComputerUseAccessibilityClient,
 ) -> Result<Vec<DynamicToolCallOutputContentItem>, String> {
     #[cfg(target_os = "linux")]
@@ -11706,7 +11915,7 @@ fn computer_state_description(
 
 fn search_fuzzy_files(
     app_server: &AppServerConnection,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     runtime: &mut FuzzyFileSearchRuntime,
     session_id: String,
     roots: Vec<PathBuf>,
@@ -11828,7 +12037,7 @@ fn stop_fuzzy_file_search(
 
 fn run_legacy_fuzzy_file_search(
     app_server: &AppServerConnection,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     runtime: &mut FuzzyFileSearchRuntime,
     session_id: String,
     roots: Vec<PathBuf>,
@@ -11860,7 +12069,7 @@ fn run_legacy_fuzzy_file_search(
 }
 
 fn emit_fuzzy_file_search_error(
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     session_id: String,
     query: String,
     error: AppServerError,
@@ -11917,7 +12126,7 @@ fn should_restart_fuzzy_file_search_session(error: &AppServerError) -> bool {
 fn handle_fuzzy_file_search_event(
     event: &AppServerEvent,
     runtime: &FuzzyFileSearchRuntime,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
 ) -> bool {
     let AppServerEvent::Notification { method, params } = event else {
         return false;
@@ -12131,7 +12340,7 @@ fn browser_resource_auto_decision(
 fn handle_app_server_event(
     app_server: &AppServerConnection,
     event: AppServerEvent,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     pending_approvals: &mut HashMap<String, PendingApproval>,
     computer_permissions: &mut HashMap<String, ComputerUsePermission>,
     computer_allowed_app_ids: &mut HashSet<String>,
@@ -12156,7 +12365,7 @@ fn handle_app_server_event(
 fn handle_app_server_event_with_browser_permissions(
     app_server: &AppServerConnection,
     event: AppServerEvent,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     pending_approvals: &mut HashMap<String, PendingApproval>,
     computer_permissions: &mut HashMap<String, ComputerUsePermission>,
     computer_allowed_app_ids: &mut HashSet<String>,
@@ -12380,7 +12589,7 @@ fn handle_app_server_event_with_browser_permissions(
     }
 }
 
-fn handle_notification(method: &str, params: Value, events: &Sender<Action>) -> bool {
+fn handle_notification(method: &str, params: Value, events: &dyn ActionEmitter) -> bool {
     if method == "fs/changed" {
         return true;
     }
@@ -12704,7 +12913,7 @@ fn handle_notification(method: &str, params: Value, events: &Sender<Action>) -> 
     false
 }
 
-fn refresh_git(generation: u64, cwd: &std::path::Path, events: &Sender<Action>) {
+fn refresh_git(generation: u64, cwd: &std::path::Path, events: &dyn ActionEmitter) {
     match git_snapshot(cwd) {
         Ok(snapshot) => emit(
             events,
@@ -12745,7 +12954,7 @@ fn respond_to_approval(
     app_server: &AppServerConnection,
     request_id: String,
     decision: ApprovalDecision,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     pending_approvals: &mut HashMap<String, PendingApproval>,
     computer_permissions: &mut HashMap<String, ComputerUsePermission>,
     computer_allowed_app_ids: &mut HashSet<String>,
@@ -13100,7 +13309,7 @@ fn respond_to_user_input(
     app_server: &AppServerConnection,
     request_id: String,
     answers: UserInputAnswers,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     pending_approvals: &mut HashMap<String, PendingApproval>,
 ) {
     let response = match user_input_response(answers) {
@@ -13165,7 +13374,7 @@ fn respond_to_mcp_elicitation(
     request_id: String,
     decision: McpElicitationDecision,
     content: Option<McpElicitationContent>,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     pending_approvals: &mut HashMap<String, PendingApproval>,
 ) {
     let content = if decision == McpElicitationDecision::Accept {
@@ -13220,7 +13429,7 @@ fn respond_to_browser_origin_elicitation(
     app_server: &AppServerConnection,
     request_id: String,
     decision: BrowserOriginElicitationDecision,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     pending_approvals: &mut HashMap<String, PendingApproval>,
 ) {
     let Some(pending) = pending_approvals.remove(&request_id) else {
@@ -13243,7 +13452,7 @@ fn send_browser_origin_elicitation_response(
     app_server: &AppServerConnection,
     id: &Value,
     decision: BrowserOriginElicitationDecision,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
 ) {
     let response = browser_origin_elicitation_response(decision);
     if let Err(error) = app_server.respond_success(id, &response) {
@@ -13276,7 +13485,7 @@ fn respond_to_browser_resource_elicitation(
     app_server: &AppServerConnection,
     request_id: String,
     decision: BrowserResourceElicitationDecision,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
     pending_approvals: &mut HashMap<String, PendingApproval>,
 ) {
     let Some(pending) = pending_approvals.remove(&request_id) else {
@@ -13299,7 +13508,7 @@ fn send_browser_resource_elicitation_response(
     app_server: &AppServerConnection,
     id: &Value,
     decision: BrowserResourceElicitationDecision,
-    events: &Sender<Action>,
+    events: &dyn ActionEmitter,
 ) {
     let response = browser_resource_elicitation_response(decision);
     if let Err(error) = app_server.respond_success(id, &response) {
@@ -16470,8 +16679,8 @@ fn push_bounded(output: &mut String, value: &str, limit: usize) {
     output.push_str(&bounded(value.to_owned(), remaining));
 }
 
-fn emit(events: &Sender<Action>, action: Action) {
-    let _ = events.send_timeout(action, UI_EVENT_TIMEOUT);
+fn emit(events: &dyn ActionEmitter, action: Action) {
+    events.emit(action);
 }
 
 #[cfg(test)]
@@ -16504,7 +16713,9 @@ mod tests {
         ReviewDelivery, TimelineItem, TimelineKind, TimelineSource, UserInputAnswer,
         UserInputAnswers,
     };
-    use codex_platform::{AppServerEvent, ComputerApplication, ComputerKey, ComputerUseTurnKey};
+    use codex_platform::{
+        AppServerEvent, ByteBudget, ComputerApplication, ComputerKey, ComputerUseTurnKey,
+    };
     use codex_protocol::{
         Account as ProtocolAccount, AccountTokenUsageDailyBucket, AccountTokenUsageSummary,
         AppInfo, AppToolSummary, ConfigReadResponse, ConnectorMetadata, FuzzyFileSearchMatchType,
@@ -16517,14 +16728,15 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        AppLogo, AppServerReconnectScheduler, BackendCommand, BrowserPolicyTarget,
-        COMPUTER_USE_USER_INPUT_STALE_MESSAGE, ComputerUseAccessibilityClient,
-        ComputerUsePermission, GOAL_CONTINUATION_DELAY, GitRefreshDebouncer,
-        GoalContinuationScheduler, MAX_ITEM_TEXT_BYTES, MAX_MODEL_UPGRADE_COPY_BYTES,
-        MAX_MODEL_UPGRADE_LINK_BYTES, McpElicitationMapError, PendingApproval,
-        PendingWorktreeRuntime, STABLE_OPT_OUT_NOTIFICATION_METHODS, TASK_SEARCH_DEBOUNCE,
-        TRUSTED_ACCESS_FOR_CYBER_URL, TRUSTED_ACCESS_FOR_CYBER_WARNING, TaskSearchDebouncer,
-        TerminalParserCallbacks, account_supports_token_activity, agent_configuration_snapshot,
+        ActionEmitter, AppLogo, AppServerReconnectScheduler, Backend, BackendCommand,
+        BrowserPolicyTarget, BudgetedActionEmitter, COMPUTER_USE_USER_INPUT_STALE_MESSAGE,
+        ComputerUseAccessibilityClient, ComputerUsePermission, GOAL_CONTINUATION_DELAY,
+        GitRefreshDebouncer, GoalContinuationScheduler, MAX_ITEM_TEXT_BYTES,
+        MAX_MODEL_UPGRADE_COPY_BYTES, MAX_MODEL_UPGRADE_LINK_BYTES, McpElicitationMapError,
+        PendingApproval, PendingWorktreeRuntime, STABLE_OPT_OUT_NOTIFICATION_METHODS,
+        TASK_SEARCH_DEBOUNCE, TRUSTED_ACCESS_FOR_CYBER_URL, TRUSTED_ACCESS_FOR_CYBER_WARNING,
+        TaskSearchDebouncer, TerminalParserCallbacks, UiEventDelivery, UiEventSender,
+        account_supports_token_activity, agent_configuration_snapshot,
         api_key_account_login_started_action, appearance_theme_key, apps_list_params,
         bedrock_account_login_response_accepted, bedrock_login_region,
         bounded_marketplace_load_error_count, bounded_remote_identifier,
@@ -16585,6 +16797,68 @@ mod tests {
             Ok(BackendCommand::Shutdown)
         ));
         assert!(matches!(receiver.try_recv(), Ok(BackendCommand::Run(_))));
+    }
+
+    #[test]
+    fn queued_action_holds_its_byte_budget_until_reduction_finishes() {
+        let (sender, receiver) = bounded(2);
+        let events = UiEventSender::new(sender, ByteBudget::new(4));
+
+        assert_eq!(
+            events.emit_budgeted(Action::SetStatus("first".to_owned()), 4, true),
+            UiEventDelivery::Delivered
+        );
+        assert_eq!(
+            events.emit_budgeted(Action::SetStatus("second".to_owned()), 1, false),
+            UiEventDelivery::Dropped
+        );
+
+        let Ok(queued) = receiver.try_recv() else {
+            panic!("budgeted action was not queued");
+        };
+        let (action, guard) = queued.into_parts();
+        assert!(matches!(action, Action::SetStatus(message) if message == "first"));
+        assert!(events.budget.try_acquire(1).is_none());
+
+        drop(guard);
+
+        assert!(events.budget.try_acquire(4).is_some());
+    }
+
+    #[test]
+    fn semantic_ui_queue_overload_prioritizes_connection_loss() {
+        let (sender, receiver) = bounded(1);
+        let events = UiEventSender::new(sender, ByteBudget::new(4));
+        let (commands, _command_receiver) = bounded(1);
+        let backend = Backend {
+            commands,
+            events: receiver,
+            backpressure: Arc::clone(&events.backpressure),
+            shutdown_requested: Arc::new(AtomicBool::new(false)),
+            thread: None,
+        };
+        events.emit(Action::SetStatus("occupied".to_owned()));
+        let emitter = BudgetedActionEmitter::new(&events, 1, true);
+
+        emitter.emit(Action::SetStatus("semantic".to_owned()));
+
+        assert_eq!(emitter.outcome(), UiEventDelivery::Overloaded);
+        assert!(
+            events
+                .backpressure
+                .disconnect_requested
+                .load(Ordering::Acquire)
+        );
+        let Ok(Some(queued)) = backend.try_recv() else {
+            panic!("connection loss control action was not returned");
+        };
+        let (action, _guard) = queued.into_parts();
+        assert!(matches!(action, Action::ConnectionLost));
+        let Ok(Some(queued)) = backend.try_recv() else {
+            panic!("queued payload action was not returned");
+        };
+        let (action, _guard) = queued.into_parts();
+        assert!(matches!(action, Action::SetStatus(message) if message == "occupied"));
     }
 
     #[test]
