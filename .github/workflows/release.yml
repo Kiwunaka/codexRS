@@ -162,6 +162,9 @@ jobs:
       - name: Linux archive desktop startup smoke
         if: runner.os == 'Linux'
         shell: bash
+        env:
+          WAYLAND_DISPLAY: codexrs-ci-no-socket
+          ZED_HEADLESS: "1"
         run: |
           set -euo pipefail
           name="codexrs-${PACKAGE_LABEL}-linux-x86_64"
