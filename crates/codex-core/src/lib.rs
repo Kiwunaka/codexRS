@@ -14070,6 +14070,17 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             if login_id.as_deref() != Some(expected) {
                 return Vec::new();
             }
+            if state.account.auth_operation == AccountAuthOperation::CancelingLogin {
+                if success {
+                    state.account.auth_operation = AccountAuthOperation::LoggingOut;
+                    state.account.login_id = None;
+                    state.account.login_verification_url = None;
+                    state.account.login_user_code = None;
+                    state.account.auth_error = None;
+                    return vec![Effect::LogoutAccount];
+                }
+                return Vec::new();
+            }
             state.account.auth_operation = AccountAuthOperation::Idle;
             state.account.login_id = None;
             state.account.login_verification_url = None;
@@ -26096,6 +26107,51 @@ mod tests {
             state.account.auth_operation,
             AccountAuthOperation::LoggingOut
         );
+
+        assert_eq!(
+            reduce(&mut state, Action::AccountLoggedOut),
+            [Effect::LoadAccount]
+        );
+        assert_eq!(state.account.auth_operation, AccountAuthOperation::Idle);
+        assert!(state.account.profile.is_none());
+    }
+
+    #[test]
+    fn successful_login_completion_after_cancel_is_logged_out() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::StartAccountLogin);
+        reduce(
+            &mut state,
+            Action::AccountLoginStarted {
+                login_id: "login-1".to_owned(),
+                authorization_url: "https://auth.openai.com/".to_owned(),
+                user_code: Some("ABCD-EFGH".to_owned()),
+            },
+        );
+        assert_eq!(
+            reduce(&mut state, Action::CancelAccountLogin),
+            [Effect::CancelAccountLogin {
+                login_id: "login-1".to_owned(),
+            }]
+        );
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::AccountLoginCompleted {
+                    login_id: Some("login-1".to_owned()),
+                    success: true,
+                },
+            ),
+            [Effect::LogoutAccount]
+        );
+        assert_eq!(
+            state.account.auth_operation,
+            AccountAuthOperation::LoggingOut
+        );
+        assert!(state.account.login_id.is_none());
+        assert!(state.account.login_verification_url.is_none());
+        assert!(state.account.login_user_code.is_none());
 
         assert_eq!(
             reduce(&mut state, Action::AccountLoggedOut),
