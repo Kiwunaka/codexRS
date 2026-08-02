@@ -19292,6 +19292,13 @@ mod tests {
         assert_eq!(apps[1].id, "discoverable");
         assert!(!apps[1].is_accessible);
 
+        let default_enabled = serde_json::from_value::<AppInfo>(json!({
+            "id": "default-enabled",
+            "name": "Default enabled"
+        }))
+        .unwrap_or_else(|error| panic!("app without isEnabled should decode: {error}"));
+        assert!(map_apps(vec![default_enabled])[0].enabled);
+
         let thread_id = Some("thread-1".to_owned());
         let first_page = apps_list_params(None, false, &thread_id);
         let second_page = apps_list_params(Some("cursor-1".to_owned()), true, &thread_id);

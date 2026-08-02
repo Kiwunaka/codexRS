@@ -11577,6 +11577,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             effects
         }
         Action::TurnStarted { task_id, turn_id } => {
+            if state.background_completion_task_id.as_deref() == Some(task_id.as_str()) {
+                state.background_completion_task_id = None;
+            }
             let timeline = state.timelines.entry(task_id.clone()).or_default();
             if timeline.active_turn_id.as_deref() != Some(turn_id.as_str()) {
                 timeline.retryable_turn = None;
@@ -13738,6 +13741,13 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.account.login_verification_url = None;
                 state.account.login_user_code = None;
                 state.account.auth_error = None;
+            } else if state.account.auth_operation == AccountAuthOperation::SubmittingApiKey {
+                state.account.auth_operation = AccountAuthOperation::Idle;
+                state.account.login_id = None;
+                state.account.login_verification_url = None;
+                state.account.login_user_code = None;
+                state.account.auth_error =
+                    Some("API key sign-in failed. Please try again.".to_owned());
             }
             Vec::new()
         }
@@ -15382,6 +15392,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }]
         }
         Action::SkillsInvalidated => {
+            if state.marketplace.skills_status == Some(LoadStatus::Loading) {
+                return Vec::new();
+            }
             state.marketplace.skills_status = Some(LoadStatus::Loading);
             vec![Effect::RefreshSkills {
                 cwds: composer_workspace_roots(state),
@@ -20068,6 +20081,28 @@ mod tests {
         );
         assert_eq!(state.status_message, None);
 
+        reduce(
+            &mut state,
+            Action::TurnStarted {
+                task_id: "background".to_owned(),
+                turn_id: "background-second-success".to_owned(),
+            },
+        );
+        assert_eq!(state.background_completion_task_id, None);
+        reduce(
+            &mut state,
+            Action::TurnCompleted {
+                task_id: "background".to_owned(),
+                turn_id: "background-second-success".to_owned(),
+                completed: true,
+                failed: false,
+            },
+        );
+        assert_eq!(
+            state.background_completion_task_id.as_deref(),
+            Some("background")
+        );
+
         reduce(&mut state, Action::SetStatus("Unrelated status".to_owned()));
         reduce(&mut state, Action::ClearStatus);
         assert_eq!(
@@ -20291,6 +20326,20 @@ mod tests {
         );
         assert!(state.composer.is_empty());
         assert!(state.composer_attachments.is_empty());
+    }
+
+    #[test]
+    fn skills_invalidation_coalesces_while_loading() {
+        let mut state = AppState::default();
+        assert_eq!(
+            reduce(&mut state, Action::SkillsInvalidated),
+            [Effect::RefreshSkills {
+                cwds: Vec::new(),
+                force_reload: false,
+            }]
+        );
+        assert_eq!(state.marketplace.skills_status, Some(LoadStatus::Loading));
+        assert!(reduce(&mut state, Action::SkillsInvalidated).is_empty());
     }
 
     #[test]
@@ -25826,6 +25875,33 @@ mod tests {
         );
         assert_eq!(state.account.auth_operation, AccountAuthOperation::Idle);
         assert!(state.account.auth_error.is_none());
+
+        state.account.profile = None;
+        reduce(&mut state, Action::StartApiKeyLogin);
+        state.account.login_id = Some("stale".to_owned());
+        state.account.login_verification_url = Some("https://example.com".to_owned());
+        state.account.login_user_code = Some("stale-code".to_owned());
+        reduce(
+            &mut state,
+            Action::AccountLoaded {
+                profile: None,
+                requires_openai_auth: false,
+                usage_limits: Vec::new(),
+                credits: None,
+                rate_limit_reset_credits_available: None,
+                usage_error: None,
+                token_activity: None,
+                token_activity_error: None,
+            },
+        );
+        assert_eq!(state.account.auth_operation, AccountAuthOperation::Idle);
+        assert!(state.account.login_id.is_none());
+        assert!(state.account.login_verification_url.is_none());
+        assert!(state.account.login_user_code.is_none());
+        assert_eq!(
+            state.account.auth_error.as_deref(),
+            Some("API key sign-in failed. Please try again.")
+        );
 
         state.account.auth_operation = AccountAuthOperation::SubmittingApiKey;
         state.account.login_id = Some("stale".to_owned());
