@@ -20279,7 +20279,7 @@ impl WorkspaceView {
         let new_worktree = self.render_fork_slash_destination(
             "fork-new-worktree",
             "Continue in new worktree",
-            "Create a new chat in an isolated worktree",
+            "Create a copy of your local project to work in parallel",
             IconName::FolderOpen,
             true,
             cx,
