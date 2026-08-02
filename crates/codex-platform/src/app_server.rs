@@ -2119,6 +2119,8 @@ fn notification_method_requires_resync(method: &str) -> bool {
             | "item/fileChange/outputDelta"
             | "item/completed"
             | "turn/completed"
+            | "thread/goal/updated"
+            | "thread/goal/cleared"
             | "remoteControl/status/changed"
     )
 }
@@ -2604,6 +2606,8 @@ mod tests {
             "item/fileChange/outputDelta",
             "item/completed",
             "turn/completed",
+            "thread/goal/updated",
+            "thread/goal/cleared",
             "remoteControl/status/changed",
         ] {
             assert!(notification_requires_resync(

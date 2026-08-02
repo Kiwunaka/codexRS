@@ -7718,6 +7718,10 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             if let Some(task_id) = state.selected_task_id.clone() {
                 effects.push(resume_task_effect(state, task_id.clone()));
+                state.goals.entry(task_id.clone()).or_default().status = LoadStatus::Loading;
+                effects.push(Effect::LoadGoal {
+                    task_id: task_id.clone(),
+                });
                 let timeline = state.timelines.entry(task_id.clone()).or_default();
                 timeline.generation = timeline.generation.saturating_add(1);
                 timeline.status = LoadStatus::Loading;
@@ -29315,6 +29319,23 @@ mod tests {
     fn reconnect_reloads_the_selected_timeline_authoritatively() {
         let mut state = AppState::default();
         reduce(&mut state, Action::TaskCreated(task("t1")));
+        state.goals.insert(
+            "t1".to_owned(),
+            ThreadGoalState {
+                status: LoadStatus::Ready,
+                goal: Some(ThreadGoal {
+                    task_id: "t1".to_owned(),
+                    objective: "finish parity".to_owned(),
+                    status: ThreadGoalStatus::Active,
+                    tokens_used: 10,
+                    token_budget: None,
+                    time_used_seconds: 1,
+                    created_at: 1,
+                    updated_at: 1,
+                }),
+                ..ThreadGoalState::default()
+            },
+        );
         let partial = TimelineItem {
             id: "partial".to_owned(),
             turn_id: "turn-1".to_owned(),
@@ -29334,6 +29355,7 @@ mod tests {
         timeline.generation = 7;
         timeline.next_cursor = Some("stale-page".to_owned());
         timeline.items = vec![partial.clone()];
+        timeline.goal_continuation_pending = true;
         timeline.rebuild_item_indices();
         state.connection = ConnectionStatus::Recovering {
             attempt: 1,
@@ -29352,6 +29374,10 @@ mod tests {
             generation: 8,
             cursor: None,
         }));
+        assert!(effects.contains(&Effect::LoadGoal {
+            task_id: "t1".to_owned(),
+        }));
+        assert_eq!(state.goals["t1"].status, LoadStatus::Loading);
         let timeline = &state.timelines["t1"];
         assert_eq!(timeline.status, LoadStatus::Loading);
         assert!(timeline.next_cursor.is_none());
@@ -29384,6 +29410,27 @@ mod tests {
         );
         assert!(state.timelines["t1"].items().is_empty());
         assert_eq!(state.timelines["t1"].status, LoadStatus::Ready);
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::GoalLoaded {
+                    task_id: "t1".to_owned(),
+                    goal: None,
+                },
+            )
+            .is_empty()
+        );
+        assert!(state.goals["t1"].goal.is_none());
+        assert!(
+            reduce(
+                &mut state,
+                Action::GoalContinuationDue {
+                    task_id: "t1".to_owned(),
+                },
+            )
+            .is_empty()
+        );
     }
 
     fn remote_requirements(managed_allow_remote_control: Option<bool>) -> PermissionRequirements {
