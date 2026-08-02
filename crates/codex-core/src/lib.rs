@@ -2503,6 +2503,7 @@ pub struct MarketplaceState {
     pub selected_section: Option<MarketplaceSectionFilter>,
     pub plugins: Vec<PluginCard>,
     pub composer_plugins: Vec<PluginCard>,
+    pub composer_plugins_generation: u64,
     pub marketplace_sources: Vec<MarketplaceSourceCard>,
     pub apps: Vec<AppCard>,
     pub installed_apps: Vec<InstalledAppRuntime>,
@@ -5135,7 +5136,10 @@ pub enum Action {
         marketplace_load_error_count: usize,
     },
     MarketplaceFailed(String),
-    ComposerPluginsLoaded(Vec<PluginCard>),
+    ComposerPluginsLoaded {
+        generation: u64,
+        plugins: Vec<PluginCard>,
+    },
     ComposerDesktopAppsLoaded(Vec<ComputerApplicationState>),
     SetMarketplaceManageMode(bool),
     SelectMarketplaceManageTab(MarketplaceManageTab),
@@ -5863,6 +5867,7 @@ pub enum Effect {
         include_all_marketplaces: bool,
     },
     RefreshComposerPlugins {
+        generation: u64,
         cwds: Vec<PathBuf>,
         force_refetch: bool,
     },
@@ -6835,10 +6840,11 @@ fn prepare_new_chat(state: &mut AppState, cwd: Option<PathBuf>) -> Vec<Effect> {
         cwds: composer_workspace_roots(state),
         force_reload: false,
     });
-    effects.push(Effect::RefreshComposerPlugins {
-        cwds: composer_workspace_roots(state),
-        force_refetch: false,
-    });
+    effects.push(refresh_composer_plugins_effect(
+        state,
+        composer_workspace_roots(state),
+        false,
+    ));
     state.marketplace.apps_status = Some(LoadStatus::Loading);
     effects.push(refresh_apps_effect(state, false));
     effects.push(Effect::PersistUiState {
@@ -7561,6 +7567,22 @@ fn refresh_apps_effect(state: &AppState, force_refetch: bool) -> Effect {
     }
 }
 
+fn refresh_composer_plugins_effect(
+    state: &mut AppState,
+    cwds: Vec<PathBuf>,
+    force_refetch: bool,
+) -> Effect {
+    state.marketplace.composer_plugins_generation = state
+        .marketplace
+        .composer_plugins_generation
+        .saturating_add(1);
+    Effect::RefreshComposerPlugins {
+        generation: state.marketplace.composer_plugins_generation,
+        cwds,
+        force_refetch,
+    }
+}
+
 fn refresh_installed_apps_effect(state: &AppState, force_refresh: bool) -> Effect {
     Effect::RefreshInstalledApps {
         force_refresh,
@@ -7632,10 +7654,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     cwds: composer_workspace_roots(state),
                     force_reload: false,
                 },
-                Effect::RefreshComposerPlugins {
-                    cwds: composer_workspace_roots(state),
-                    force_refetch: false,
-                },
+                refresh_composer_plugins_effect(state, composer_workspace_roots(state), false),
                 refresh_apps_effect(state, false),
                 Effect::LoadComposerDesktopApps,
                 Effect::LoadComputerUsePolicy,
@@ -8556,10 +8575,11 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     cwds: composer_workspace_roots(state),
                     force_reload: false,
                 });
-                effects.push(Effect::RefreshComposerPlugins {
-                    cwds: composer_workspace_roots(state),
-                    force_refetch: false,
-                });
+                effects.push(refresh_composer_plugins_effect(
+                    state,
+                    composer_workspace_roots(state),
+                    false,
+                ));
                 effects.push(Effect::PersistUiState {
                     route: state.route,
                     inspector: state.inspector,
@@ -8632,10 +8652,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     cwds: Vec::new(),
                     force_reload: false,
                 });
-                effects.push(Effect::RefreshComposerPlugins {
-                    cwds: Vec::new(),
-                    force_refetch: false,
-                });
+                effects.push(refresh_composer_plugins_effect(state, Vec::new(), false));
             }
             state.status_message = Some("Project removed".to_owned());
             effects.push(Effect::RemoveLocalProject { path });
@@ -9317,10 +9334,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     cwds: selected_cwds.clone(),
                     force_reload: false,
                 });
-                effects.push(Effect::RefreshComposerPlugins {
-                    cwds: selected_cwds,
-                    force_refetch: false,
-                });
+                effects.push(refresh_composer_plugins_effect(state, selected_cwds, false));
             }
             if task_changed {
                 state.marketplace.apps_status = Some(LoadStatus::Loading);
@@ -14169,7 +14183,13 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.marketplace.errors = vec![message];
             Vec::new()
         }
-        Action::ComposerPluginsLoaded(mut plugins) => {
+        Action::ComposerPluginsLoaded {
+            generation,
+            mut plugins,
+        } => {
+            if generation != state.marketplace.composer_plugins_generation {
+                return Vec::new();
+            }
             plugins.truncate(MAX_MARKETPLACE_ITEMS);
             for plugin in &mut plugins {
                 plugin.id = bounded_string(plugin.id.trim().to_owned(), 512);
@@ -15686,10 +15706,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     force_refetch: false,
                     include_all_marketplaces: state.marketplace.manage_mode,
                 },
-                Effect::RefreshComposerPlugins {
-                    cwds,
-                    force_refetch: false,
-                },
+                refresh_composer_plugins_effect(state, cwds, false),
             ];
             effects.extend(reduce(state, Action::AppsInvalidated));
             effects
@@ -15748,10 +15765,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     force_refetch: false,
                     include_all_marketplaces: state.marketplace.manage_mode,
                 },
-                Effect::RefreshComposerPlugins {
-                    cwds,
-                    force_refetch: false,
-                },
+                refresh_composer_plugins_effect(state, cwds, false),
             ]
         }
         Action::SetPluginSkillEnabled {
@@ -18870,6 +18884,7 @@ mod tests {
                     force_reload: false,
                 },
                 Effect::RefreshComposerPlugins {
+                    generation: 1,
                     cwds: Vec::new(),
                     force_refetch: false,
                 },
@@ -20270,6 +20285,7 @@ mod tests {
                     force_reload: false,
                 },
                 Effect::RefreshComposerPlugins {
+                    generation: 1,
                     cwds: vec![repository.clone()],
                     force_refetch: false,
                 },
@@ -20434,27 +20450,30 @@ mod tests {
         );
         reduce(
             &mut state,
-            Action::ComposerPluginsLoaded(vec![PluginCard {
-                id: "computer-use@openai".to_owned(),
-                install_name: "computer-use".to_owned(),
-                marketplace: "openai-curated".to_owned(),
-                name: "Computer Use".to_owned(),
-                description: "Control desktop applications".to_owned(),
-                category: None,
-                developer: None,
-                logo_url: None,
-                logo_url_dark: None,
-                default_prompt: None,
-                version: None,
-                keywords: Vec::new(),
-                installed: true,
-                enabled: true,
-                installable: true,
-                disabled_by_admin: false,
-                requires_install_confirmation: false,
-                featured: false,
-                featured_rank: None,
-            }]),
+            Action::ComposerPluginsLoaded {
+                generation: 0,
+                plugins: vec![PluginCard {
+                    id: "computer-use@openai".to_owned(),
+                    install_name: "computer-use".to_owned(),
+                    marketplace: "openai-curated".to_owned(),
+                    name: "Computer Use".to_owned(),
+                    description: "Control desktop applications".to_owned(),
+                    category: None,
+                    developer: None,
+                    logo_url: None,
+                    logo_url_dark: None,
+                    default_prompt: None,
+                    version: None,
+                    keywords: Vec::new(),
+                    installed: true,
+                    enabled: true,
+                    installable: true,
+                    disabled_by_admin: false,
+                    requires_install_confirmation: false,
+                    featured: false,
+                    featured_rank: None,
+                }],
+            },
         );
         reduce(
             &mut state,
@@ -20523,6 +20542,7 @@ mod tests {
                     force_reload: false,
                 },
                 Effect::RefreshComposerPlugins {
+                    generation: 1,
                     cwds: Vec::new(),
                     force_refetch: false,
                 },
@@ -20730,6 +20750,7 @@ mod tests {
             force_reload: false,
         }));
         assert!(effects.contains(&Effect::RefreshComposerPlugins {
+            generation: 1,
             cwds: vec![workspace.clone()],
             force_refetch: false,
         }));
@@ -20773,6 +20794,7 @@ mod tests {
                     force_reload: false,
                 },
                 Effect::RefreshComposerPlugins {
+                    generation: 1,
                     cwds: vec![worktree.clone()],
                     force_refetch: false,
                 },
@@ -21067,6 +21089,7 @@ mod tests {
                     force_reload: false,
                 },
                 Effect::RefreshComposerPlugins {
+                    generation: 1,
                     cwds: vec![repository],
                     force_refetch: false,
                 },
@@ -21154,6 +21177,78 @@ mod tests {
             state.status_message.as_deref(),
             Some("current repository error")
         );
+    }
+
+    #[test]
+    fn stale_composer_plugin_catalog_is_ignored_after_workspace_change() {
+        let mut state = AppState::default();
+        let first_root = repository_path();
+        let second_root = first_root.with_file_name("repo-second");
+        let mut first = task_in_repository("first");
+        first.cwd = first_root;
+        let mut second = task_in_repository("second");
+        second.cwd = second_root;
+        state.tasks = vec![first, second];
+        let plugin = |id: &str| PluginCard {
+            id: id.to_owned(),
+            install_name: id.to_owned(),
+            marketplace: "openai".to_owned(),
+            name: id.to_owned(),
+            description: String::new(),
+            category: None,
+            developer: None,
+            logo_url: None,
+            logo_url_dark: None,
+            default_prompt: None,
+            version: None,
+            keywords: Vec::new(),
+            installed: true,
+            enabled: true,
+            installable: true,
+            disabled_by_admin: false,
+            requires_install_confirmation: false,
+            featured: false,
+            featured_rank: None,
+        };
+
+        reduce(&mut state, Action::SelectTask("first".to_owned()));
+        let first_generation = state.marketplace.composer_plugins_generation;
+        reduce(&mut state, Action::SelectTask("second".to_owned()));
+        let second_generation = state.marketplace.composer_plugins_generation;
+
+        reduce(
+            &mut state,
+            Action::ComposerPluginsLoaded {
+                generation: first_generation,
+                plugins: vec![plugin("first-only")],
+            },
+        );
+        assert!(state.marketplace.composer_plugins.is_empty());
+        assert!(
+            reduce(
+                &mut state,
+                Action::AddComposerPlugin("first-only".to_owned())
+            )
+            .is_empty()
+        );
+        reduce(
+            &mut state,
+            Action::ComposerPluginsLoaded {
+                generation: second_generation,
+                plugins: vec![plugin("second-only")],
+            },
+        );
+
+        assert_eq!(
+            state
+                .marketplace
+                .composer_plugins
+                .iter()
+                .map(|plugin| plugin.id.as_str())
+                .collect::<Vec<_>>(),
+            ["second-only"]
+        );
+        assert!(state.composer_attachments.is_empty());
     }
 
     #[test]
@@ -21656,6 +21751,7 @@ mod tests {
                     force_reload: false,
                 },
                 Effect::RefreshComposerPlugins {
+                    generation: 1,
                     cwds: vec![repository],
                     force_refetch: false,
                 },
@@ -27854,6 +27950,7 @@ mod tests {
                     include_all_marketplaces: false,
                 },
                 Effect::RefreshComposerPlugins {
+                    generation: 1,
                     cwds: Vec::new(),
                     force_refetch: false,
                 },

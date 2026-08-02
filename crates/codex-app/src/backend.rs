@@ -2183,6 +2183,7 @@ struct PendingWorktreeRuntime {
 pub struct Backend {
     commands: Sender<BackendCommand>,
     events: Receiver<Action>,
+    shutdown_requested: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -2202,14 +2203,17 @@ impl Backend {
         let (command_sender, command_receiver) =
             crossbeam_channel::bounded(BACKEND_COMMAND_CAPACITY);
         let (event_sender, event_receiver) = crossbeam_channel::bounded(BACKEND_EVENT_CAPACITY);
+        let shutdown_requested = Arc::new(AtomicBool::new(false));
+        let worker_shutdown_requested = Arc::clone(&shutdown_requested);
         let thread = thread::Builder::new()
             .name("codex-rs-backend".to_owned())
-            .spawn(move || run_backend(command_receiver, event_sender))
+            .spawn(move || run_backend(command_receiver, event_sender, worker_shutdown_requested))
             .map_err(|error| format!("failed to start backend: {error}"))?;
 
         Ok(Self {
             commands: command_sender,
             events: event_receiver,
+            shutdown_requested,
             thread: Some(thread),
         })
     }
@@ -2256,6 +2260,7 @@ impl Backend {
 
 impl Drop for Backend {
     fn drop(&mut self) {
+        self.shutdown_requested.store(true, Ordering::Release);
         let _ = self.commands.try_send(BackendCommand::Shutdown);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -3057,7 +3062,11 @@ fn unix_timestamp() -> i64 {
         .unwrap_or_default()
 }
 
-fn run_backend(commands: Receiver<BackendCommand>, events: Sender<Action>) {
+fn run_backend(
+    commands: Receiver<BackendCommand>,
+    events: Sender<Action>,
+    shutdown_requested: Arc<AtomicBool>,
+) {
     let runtime_policy = RuntimePolicy::default();
     let mut storage = open_storage(&events);
     if let Some(store) = storage.as_ref() {
@@ -3317,7 +3326,7 @@ fn run_backend(commands: Receiver<BackendCommand>, events: Sender<Action>) {
             browser.take();
         }
 
-        match commands.recv_timeout(BACKEND_TICK) {
+        match next_backend_command(&shutdown_requested, &commands) {
             Ok(BackendCommand::StartBedrockLogin { api_key, region }) => {
                 let accepted = match bedrock_login_region(region) {
                     Some(region) => match connection.as_ref() {
@@ -3686,6 +3695,17 @@ fn cancel_pending_computer_use_approvals(
                 decision: ApprovalDecision::Decline,
             },
         );
+    }
+}
+
+fn next_backend_command(
+    shutdown_requested: &AtomicBool,
+    commands: &Receiver<BackendCommand>,
+) -> Result<BackendCommand, crossbeam_channel::RecvTimeoutError> {
+    if shutdown_requested.load(Ordering::Acquire) {
+        Ok(BackendCommand::Shutdown)
+    } else {
+        commands.recv_timeout(BACKEND_TICK)
     }
 }
 
@@ -7411,10 +7431,17 @@ fn run_effect(
             }
         }
         Effect::RefreshComposerPlugins {
+            generation,
             cwds,
             force_refetch,
         } => match load_composer_plugins(app_server, cwds, force_refetch, marketplaces) {
-            Ok(plugins) => emit(events, Action::ComposerPluginsLoaded(plugins)),
+            Ok(plugins) => emit(
+                events,
+                Action::ComposerPluginsLoaded {
+                    generation,
+                    plugins,
+                },
+            ),
             Err(error) => emit(
                 events,
                 Action::SetStatus(format!("failed to load composer plugins: {error}")),
@@ -16409,7 +16436,7 @@ mod tests {
         BrowserApprovalMode, BrowserDownloadPreferences, BrowserDownloadState,
         BrowserDownloadStatus, BrowserOriginElicitationDecision, BrowserPermissionResource,
         BrowserPermissionValue, BrowserPermissionsState, BrowserResourceElicitationDecision,
-        BrowserSitePermission, ComposerAttachment, ComposerAttachmentKind, DiffMarkerStyle,
+        BrowserSitePermission, ComposerAttachment, ComposerAttachmentKind, DiffMarkerStyle, Effect,
         FuzzyFileMatchType, GitPreferences, GitReviewMode, ImportItemType,
         KeyboardShortcutPreferences, MAX_ACCOUNT_DAILY_USAGE_BUCKETS, MAX_MARKETPLACE_SOURCES,
         MAX_MCP_SERVER_FIELD_BYTES, McpBrowserOriginElicitation, McpBrowserResourceElicitation,
@@ -16435,7 +16462,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        AppLogo, AppServerReconnectScheduler, BrowserPolicyTarget,
+        AppLogo, AppServerReconnectScheduler, BackendCommand, BrowserPolicyTarget,
         COMPUTER_USE_USER_INPUT_STALE_MESSAGE, ComputerUseAccessibilityClient,
         ComputerUsePermission, GOAL_CONTINUATION_DELAY, GitRefreshDebouncer,
         GoalContinuationScheduler, MAX_ITEM_TEXT_BYTES, MAX_MODEL_UPGRADE_COPY_BYTES,
@@ -16466,10 +16493,11 @@ mod tests {
         map_plugin_detail, map_rate_limit_reset_credit_count, map_remote_control_snapshot,
         map_remote_devices_page, map_timeline_item, map_user_input_request,
         mcp_elicitation_content_json, mcp_server_config_value, newest_review_mode_from_items,
-        parse_appearance_preferences, parse_appearance_theme, parse_browser_download_preferences,
-        parse_browser_permissions, parse_computer_key_chord, parse_generated_commit_message,
-        parse_generated_commit_pull_request_messages, parse_generated_pull_request_message,
-        parse_git_preferences, parse_keyboard_shortcut_preferences, parse_primary_window_placement,
+        next_backend_command, parse_appearance_preferences, parse_appearance_theme,
+        parse_browser_download_preferences, parse_browser_permissions, parse_computer_key_chord,
+        parse_generated_commit_message, parse_generated_commit_pull_request_messages,
+        parse_generated_pull_request_message, parse_git_preferences,
+        parse_keyboard_shortcut_preferences, parse_primary_window_placement,
         personalization_snapshot, plugin_directory_includes_marketplace,
         plugin_directory_marketplace_kinds, plugin_installability,
         plugin_requires_install_confirmation, pull_request_generation_prompt,
@@ -16485,6 +16513,24 @@ mod tests {
         computer_use_dynamic_tools_for_platform_with_available,
         computer_use_tool_supported_on_platform,
     };
+
+    #[test]
+    fn shutdown_request_outranks_a_full_backend_command_queue() {
+        let (sender, receiver) = bounded(1);
+        assert!(
+            sender
+                .try_send(BackendCommand::Run(Box::new(Effect::ConnectAppServer)))
+                .is_ok()
+        );
+        let shutdown_requested = AtomicBool::new(false);
+        shutdown_requested.store(true, Ordering::Release);
+
+        assert!(matches!(
+            next_backend_command(&shutdown_requested, &receiver),
+            Ok(BackendCommand::Shutdown)
+        ));
+        assert!(matches!(receiver.try_recv(), Ok(BackendCommand::Run(_))));
+    }
 
     #[test]
     fn cancelling_worktree_runtime_joins_it_before_acknowledgement() {
