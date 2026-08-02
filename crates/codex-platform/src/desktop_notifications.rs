@@ -2,6 +2,8 @@
 pub struct BackgroundCompletionNotifier {
     #[cfg(windows)]
     inner: Option<windows::WindowsBackgroundCompletionNotifier>,
+    #[cfg(target_os = "linux")]
+    inner: Option<linux::LinuxBackgroundCompletionNotifier>,
 }
 
 impl BackgroundCompletionNotifier {
@@ -10,12 +12,18 @@ impl BackgroundCompletionNotifier {
         Self {
             #[cfg(windows)]
             inner: windows::WindowsBackgroundCompletionNotifier::new(),
+            #[cfg(target_os = "linux")]
+            inner: linux::LinuxBackgroundCompletionNotifier::new(),
         }
     }
 
     /// Queues one completion alert without blocking the UI thread.
     pub fn notify_completed(&self) {
         #[cfg(windows)]
+        if let Some(inner) = &self.inner {
+            inner.notify_completed();
+        }
+        #[cfg(target_os = "linux")]
         if let Some(inner) = &self.inner {
             inner.notify_completed();
         }
@@ -29,6 +37,111 @@ impl BackgroundCompletionNotifier {
         }
         #[cfg(not(windows))]
         let _ = count;
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod linux {
+    use std::{
+        collections::HashMap,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        thread,
+    };
+
+    use crossbeam_channel::{Sender, bounded};
+    use zbus::{
+        blocking::{Connection, Proxy},
+        zvariant::OwnedValue,
+    };
+
+    const COMMAND_CHANNEL_CAPACITY: usize = 1;
+    const NOTIFICATION_DESTINATION: &str = "org.freedesktop.Notifications";
+    const NOTIFICATION_PATH: &str = "/org/freedesktop/Notifications";
+    const NOTIFICATION_INTERFACE: &str = "org.freedesktop.Notifications";
+    const NOTIFICATION_TITLE: &str = "codexRS";
+    const NOTIFICATION_BODY: &str = "A background chat completed.";
+
+    pub(super) struct LinuxBackgroundCompletionNotifier {
+        commands: Sender<()>,
+        shutdown: Arc<AtomicBool>,
+    }
+
+    impl LinuxBackgroundCompletionNotifier {
+        pub(super) fn new() -> Option<Self> {
+            let (commands, receiver) = bounded(COMMAND_CHANNEL_CAPACITY);
+            let shutdown = Arc::new(AtomicBool::new(false));
+            let worker_shutdown = Arc::clone(&shutdown);
+            thread::Builder::new()
+                .name("codex-background-completion-notification".to_owned())
+                .spawn(move || {
+                    let Ok(connection) = Connection::session() else {
+                        return;
+                    };
+                    let Ok(proxy) = Proxy::new(
+                        &connection,
+                        NOTIFICATION_DESTINATION,
+                        NOTIFICATION_PATH,
+                        NOTIFICATION_INTERFACE,
+                    ) else {
+                        return;
+                    };
+                    while receiver.recv().is_ok() {
+                        if worker_shutdown.load(Ordering::Acquire) {
+                            return;
+                        }
+                        let _ = show_notification(&proxy);
+                    }
+                })
+                .ok()?;
+            Some(Self { commands, shutdown })
+        }
+
+        pub(super) fn notify_completed(&self) {
+            let _ = self.commands.try_send(());
+        }
+    }
+
+    impl Drop for LinuxBackgroundCompletionNotifier {
+        fn drop(&mut self) {
+            self.shutdown.store(true, Ordering::Release);
+        }
+    }
+
+    fn show_notification(proxy: &Proxy<'_>) -> zbus::Result<()> {
+        proxy.call_noreply(
+            "Notify",
+            &(
+                NOTIFICATION_TITLE,
+                0_u32,
+                "",
+                NOTIFICATION_TITLE,
+                NOTIFICATION_BODY,
+                Vec::<&str>::new(),
+                HashMap::<&str, OwnedValue>::new(),
+                -1_i32,
+            ),
+        )
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{
+            COMMAND_CHANNEL_CAPACITY, NOTIFICATION_BODY, NOTIFICATION_DESTINATION,
+            NOTIFICATION_INTERFACE, NOTIFICATION_PATH, NOTIFICATION_TITLE,
+        };
+
+        #[test]
+        fn completion_notification_uses_the_freedesktop_contract() {
+            assert_eq!(COMMAND_CHANNEL_CAPACITY, 1);
+            assert_eq!(NOTIFICATION_DESTINATION, "org.freedesktop.Notifications");
+            assert_eq!(NOTIFICATION_PATH, "/org/freedesktop/Notifications");
+            assert_eq!(NOTIFICATION_INTERFACE, "org.freedesktop.Notifications");
+            assert_eq!(NOTIFICATION_TITLE, "codexRS");
+            assert_eq!(NOTIFICATION_BODY, "A background chat completed.");
+        }
     }
 }
 
