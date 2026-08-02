@@ -42692,6 +42692,10 @@ fn plugin_matches_query(plugin: &PluginCard, raw_query: &str) -> bool {
             .developer
             .as_deref()
             .is_some_and(|developer| developer.to_lowercase().contains(&query))
+        || plugin
+            .keywords
+            .iter()
+            .any(|keyword| keyword.to_lowercase().contains(&query))
 }
 
 const fn skill_scope_label(scope: SkillScope) -> &'static str {
@@ -44587,6 +44591,7 @@ mod tests {
             logo_url_dark: None,
             default_prompt: None,
             version: None,
+            keywords: Vec::new(),
             installed: false,
             enabled: false,
             installable: true,
@@ -47042,7 +47047,7 @@ mod tests {
 
     #[test]
     fn plugin_catalog_keeps_featured_order_and_category_membership() {
-        let plugins = vec![
+        let mut plugins = vec![
             plugin("alpha", "Alpha", Some("Coding"), Some(1)),
             plugin("beta", "Beta", Some("Productivity"), Some(0)),
             plugin("gamma", "Gamma", Some("Coding"), None),
@@ -47064,6 +47069,12 @@ mod tests {
         assert_eq!(searched.len(), 1);
         assert_eq!(searched[0].title, "Coding");
         assert_eq!(searched[0].plugin_indices, [2]);
+
+        plugins[3].keywords = vec!["hidden discovery term".to_owned()];
+        let keyword_searched = build_plugin_catalog_sections(&plugins, "DISCOVERY");
+        assert_eq!(keyword_searched.len(), 1);
+        assert_eq!(keyword_searched[0].title, "Other");
+        assert_eq!(keyword_searched[0].plugin_indices, [3]);
     }
 
     #[test]
