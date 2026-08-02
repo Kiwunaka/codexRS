@@ -13738,6 +13738,13 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.account.login_verification_url = None;
                 state.account.login_user_code = None;
                 state.account.auth_error = None;
+            } else if state.account.auth_operation == AccountAuthOperation::SubmittingApiKey {
+                state.account.auth_operation = AccountAuthOperation::Idle;
+                state.account.login_id = None;
+                state.account.login_verification_url = None;
+                state.account.login_user_code = None;
+                state.account.auth_error =
+                    Some("API key sign-in failed. Please try again.".to_owned());
             }
             Vec::new()
         }
@@ -25831,6 +25838,33 @@ mod tests {
         );
         assert_eq!(state.account.auth_operation, AccountAuthOperation::Idle);
         assert!(state.account.auth_error.is_none());
+
+        state.account.profile = None;
+        reduce(&mut state, Action::StartApiKeyLogin);
+        state.account.login_id = Some("stale".to_owned());
+        state.account.login_verification_url = Some("https://example.com".to_owned());
+        state.account.login_user_code = Some("stale-code".to_owned());
+        reduce(
+            &mut state,
+            Action::AccountLoaded {
+                profile: None,
+                requires_openai_auth: false,
+                usage_limits: Vec::new(),
+                credits: None,
+                rate_limit_reset_credits_available: None,
+                usage_error: None,
+                token_activity: None,
+                token_activity_error: None,
+            },
+        );
+        assert_eq!(state.account.auth_operation, AccountAuthOperation::Idle);
+        assert!(state.account.login_id.is_none());
+        assert!(state.account.login_verification_url.is_none());
+        assert!(state.account.login_user_code.is_none());
+        assert_eq!(
+            state.account.auth_error.as_deref(),
+            Some("API key sign-in failed. Please try again.")
+        );
 
         state.account.auth_operation = AccountAuthOperation::SubmittingApiKey;
         state.account.login_id = Some("stale".to_owned());
