@@ -59,7 +59,7 @@ use codex_core::{
     TimelineCitation, TimelineItem, TimelineKind, UsageLimitWindow, UserInputAnswer,
     UserInputAnswers, UserInputRequest, appearance_code_theme_supports_variant,
     composer_plugin_display_name, composer_plugin_is_mentionable, is_appearance_code_theme_id,
-    reduce, validate_mcp_form_content,
+    reduce, selected_thread_runtime_ready, validate_mcp_form_content,
 };
 use codex_platform::{
     BackgroundCompletionNotifier, computer_use_platform_available, default_browser_download_dir,
@@ -5751,7 +5751,9 @@ impl WorkspaceView {
                 &model_picker,
                 window,
                 |this, _, event: &SelectEvent<SearchableVec<ModelPickerItem>>, _, cx| {
-                    if let SelectEvent::Confirm(Some(model_id)) = event {
+                    if let SelectEvent::Confirm(Some(model_id)) = event
+                        && this.composer_settings_shortcuts_available()
+                    {
                         this.dispatch(Action::SelectModel(model_id.clone()), cx);
                     }
                 },
@@ -5760,7 +5762,9 @@ impl WorkspaceView {
                 &effort_picker,
                 window,
                 |this, _, event: &SelectEvent<SearchableVec<PickerItem>>, _, cx| {
-                    if let SelectEvent::Confirm(Some(effort_id)) = event {
+                    if let SelectEvent::Confirm(Some(effort_id)) = event
+                        && this.composer_settings_shortcuts_available()
+                    {
                         this.dispatch(Action::SelectReasoningEffort(effort_id.clone()), cx);
                     }
                 },
@@ -5769,7 +5773,9 @@ impl WorkspaceView {
                 &service_tier_picker,
                 window,
                 |this, _, event: &SelectEvent<SearchableVec<PickerItem>>, _, cx| {
-                    if let SelectEvent::Confirm(Some(service_tier_id)) = event {
+                    if let SelectEvent::Confirm(Some(service_tier_id)) = event
+                        && this.composer_settings_shortcuts_available()
+                    {
                         this.dispatch(Action::SelectServiceTier(service_tier_id.clone()), cx);
                     }
                 },
@@ -5778,7 +5784,9 @@ impl WorkspaceView {
                 &permission_picker,
                 window,
                 |this, _, event: &SelectEvent<SearchableVec<PermissionPickerItem>>, _, cx| {
-                    if let SelectEvent::Confirm(Some(mode_id)) = event {
+                    if let SelectEvent::Confirm(Some(mode_id)) = event
+                        && this.composer_settings_shortcuts_available()
+                    {
                         this.dispatch(Action::SelectPermissionMode(mode_id.clone()), cx);
                     }
                 },
@@ -7673,8 +7681,12 @@ impl WorkspaceView {
             && self.command_palette.is_none()
     }
 
+    fn composer_settings_shortcuts_available(&self) -> bool {
+        self.composer_shortcuts_available() && selected_thread_runtime_ready(&self.state)
+    }
+
     fn open_model_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.composer_shortcuts_available() || self.synced_model_items.is_empty() {
+        if !self.composer_settings_shortcuts_available() || self.synced_model_items.is_empty() {
             return;
         }
         let Ok(open_keystroke) = Keystroke::parse("down") else {
@@ -7690,7 +7702,7 @@ impl WorkspaceView {
     }
 
     fn open_reasoning_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.composer_shortcuts_available() || self.synced_effort_items.is_empty() {
+        if !self.composer_settings_shortcuts_available() || self.synced_effort_items.is_empty() {
             return;
         }
         let Ok(open_keystroke) = Keystroke::parse("down") else {
@@ -7724,7 +7736,7 @@ impl WorkspaceView {
     }
 
     fn toggle_composer_fast_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.composer_shortcuts_available() {
+        if !self.composer_settings_shortcuts_available() {
             return;
         }
         let Some(next_service_tier) = self
@@ -7773,6 +7785,9 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.composer_settings_shortcuts_available() {
+            return;
+        }
         let target = if self
             .state
             .composer_controls
@@ -7820,7 +7835,7 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.composer_shortcuts_available() {
+        if !self.composer_settings_shortcuts_available() {
             return;
         }
         let Some(next_effort) = self
@@ -7853,7 +7868,7 @@ impl WorkspaceView {
     }
 
     fn toggle_composer_plan_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.composer_shortcuts_available()
+        if !self.composer_settings_shortcuts_available()
             || self.state.composer_controls.selected_model.is_none()
         {
             return;
@@ -10534,6 +10549,7 @@ impl WorkspaceView {
         view: WeakEntity<Self>,
         plan_mode: bool,
         goal_mode: bool,
+        thread_runtime_ready: bool,
     ) -> PopupMenu {
         let attach_view = view.clone();
         let goal_view = view.clone();
@@ -10550,8 +10566,12 @@ impl WorkspaceView {
             PopupMenuItem::new("Goal")
                 .icon(IconName::Asterisk)
                 .checked(goal_mode)
+                .disabled(!thread_runtime_ready)
                 .on_click(move |_, window, cx| {
                     let _ = goal_view.update(cx, |this, cx| {
+                        if !this.composer_settings_shortcuts_available() {
+                            return;
+                        }
                         this.dispatch(Action::ToggleGoalMode, cx);
                         this.sync_composer_placeholder(window, cx);
                     });
@@ -10561,8 +10581,12 @@ impl WorkspaceView {
             PopupMenuItem::new("Plan mode")
                 .icon(IconName::Map)
                 .checked(plan_mode)
+                .disabled(!thread_runtime_ready)
                 .on_click(move |_, window, cx| {
                     let _ = view.update(cx, |this, cx| {
+                        if !this.composer_settings_shortcuts_available() {
+                            return;
+                        }
                         this.dispatch(Action::TogglePlanMode, cx);
                         this.sync_composer_placeholder(window, cx);
                     });
@@ -22161,6 +22185,7 @@ impl WorkspaceView {
                     && self.state.terminal.location == TerminalDockLocation::Right));
         let narrow_composer =
             self.shell_width_class != Some(ShellWidthClass::Wide) || inline_right_panel_open;
+        let thread_runtime_ready = selected_thread_runtime_ready(&self.state);
         let (permission_width, model_width, effort_width, service_tier_width) =
             if inline_right_panel_open {
                 (130.0, 120.0, 70.0, 70.0)
@@ -22200,6 +22225,7 @@ impl WorkspaceView {
                 });
         let can_submit = has_input
             && self.state.composer_error.is_none()
+            && thread_runtime_ready
             && !active_review
             && !pending_inline_review
             && (!shell_command_mode
@@ -22786,6 +22812,7 @@ impl WorkspaceView {
                                                     add_menu_view.clone(),
                                                     plan_mode,
                                                     goal_mode,
+                                                    thread_runtime_ready,
                                                 )
                                             }),
                                     )
@@ -22797,7 +22824,8 @@ impl WorkspaceView {
                                             .placeholder("Permissions")
                                             .disabled(
                                                 shell_command_mode
-                                                    || self.synced_permission_items.is_empty(),
+                                                    || self.synced_permission_items.is_empty()
+                                                    || !thread_runtime_ready,
                                             ),
                                     )
                                     .when(plan_mode || show_goal_indicator, |controls| {
@@ -22816,7 +22844,7 @@ impl WorkspaceView {
                                                  .label("Plan")
                                                  .small()
                                                  .ghost()
-                                                 .disabled(shell_command_mode)
+                                                 .disabled(shell_command_mode || !thread_runtime_ready)
                                                  .on_click(cx.listener(|this, _, window, cx| {
                                                     this.dispatch(Action::TogglePlanMode, cx);
                                                     this.sync_composer_placeholder(window, cx);
@@ -22830,7 +22858,7 @@ impl WorkspaceView {
                                                  .label("Goal")
                                                  .small()
                                                  .ghost()
-                                                 .disabled(shell_command_mode)
+                                                 .disabled(shell_command_mode || !thread_runtime_ready)
                                                  .on_click(cx.listener(
                                                     move |this, _, window, cx| {
                                                         if has_thread_goal {
@@ -22863,7 +22891,11 @@ impl WorkspaceView {
                                                  has_model_items,
                                              ))
                                              .search_placeholder("Search models…")
-                                             .disabled(shell_command_mode || !has_model_items),
+                                             .disabled(
+                                                 shell_command_mode
+                                                     || !has_model_items
+                                                     || !thread_runtime_ready,
+                                             ),
                                     )
                                     .child(
                                         Select::new(&self.effort_picker)
@@ -22873,7 +22905,8 @@ impl WorkspaceView {
                                              .placeholder("Effort")
                                              .disabled(
                                                  shell_command_mode
-                                                     || self.synced_effort_items.is_empty(),
+                                                     || self.synced_effort_items.is_empty()
+                                                     || !thread_runtime_ready,
                                              ),
                                     )
                                     .when(!self.synced_service_tier_items.is_empty(), |row| {
@@ -22883,7 +22916,7 @@ impl WorkspaceView {
                                                 .w(px(service_tier_width))
                                                  .menu_width(px(250.0))
                                                  .placeholder("Speed")
-                                                 .disabled(shell_command_mode),
+                                                 .disabled(shell_command_mode || !thread_runtime_ready),
                                         )
                                     })
                                     .child(if active_turn && !has_input {
