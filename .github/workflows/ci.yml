@@ -104,6 +104,9 @@ jobs:
       - name: Linux desktop startup smoke
         if: runner.os == 'Linux'
         shell: bash
+        env:
+          WAYLAND_DISPLAY: codexrs-ci-no-socket
+          ZED_HEADLESS: "1"
         run: bash scripts/linux_desktop_smoke.sh target/release/codexrs
 
       - name: Save Cargo build cache
