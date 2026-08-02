@@ -72,7 +72,10 @@ jobs:
             libxcb1-dev \
             libxkbcommon-dev \
             libxkbcommon-x11-dev \
-            pkg-config
+            mesa-vulkan-drivers \
+            pkg-config \
+            xauth \
+            xvfb
 
       - name: Toolchain
         run: rustup show active-toolchain
@@ -97,6 +100,11 @@ jobs:
 
       - name: Release build
         run: cargo build --locked --release -p codex-app
+
+      - name: Linux desktop startup smoke
+        if: runner.os == 'Linux'
+        shell: bash
+        run: bash scripts/linux_desktop_smoke.sh target/release/codexrs
 
       - name: Save Cargo build cache
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
