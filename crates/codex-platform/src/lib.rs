@@ -26,6 +26,7 @@ mod computer_interruption;
 mod computer_overlay;
 mod computer_use;
 mod computer_use_helper;
+mod desktop_notifications;
 mod git;
 mod github;
 #[cfg(target_os = "linux")]
@@ -67,6 +68,7 @@ pub use computer_use_helper::{
     MAX_COMPUTER_ACCESSIBILITY_ELEMENTS, MAX_COMPUTER_ACCESSIBILITY_TREE_BYTES,
     run_computer_use_helper,
 };
+pub use desktop_notifications::BackgroundCompletionNotifier;
 pub use git::{
     GitBranch, GitBranchDiff, GitBranchMutationOutcome, GitDiff, GitError, GitFile, GitFileKind,
     GitReviewCommit, GitSnapshot, GitWorktree, MAX_GIT_BRANCH_BYTES, MAX_GIT_BRANCHES,
