@@ -1510,7 +1510,9 @@ gpui::actions!(
         ToggleTerminalShortcut,
         OpenSettingsShortcut,
         ShowKeyboardShortcutsShortcut,
-        ToggleFullscreenShortcut
+        ToggleFullscreenShortcut,
+        RemoveLocalProjectFocusNext,
+        RemoveLocalProjectFocusPrev
     ]
 );
 
@@ -4356,6 +4358,16 @@ pub fn run() {
                 KeyBinding::new("escape", Escape, Some("AboutDialog")),
                 KeyBinding::new("escape", Escape, Some("McpElicitation")),
                 KeyBinding::new("escape", Escape, Some("StructuredUserInput")),
+                KeyBinding::new(
+                    "tab",
+                    RemoveLocalProjectFocusNext,
+                    Some("RemoveLocalProjectModal"),
+                ),
+                KeyBinding::new(
+                    "shift-tab",
+                    RemoveLocalProjectFocusPrev,
+                    Some("RemoveLocalProjectModal"),
+                ),
             ]);
             let default_bounds =
                 Bounds::centered(None, size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)), cx);
@@ -4806,6 +4818,8 @@ struct WorkspaceView {
     remote_pairing_focus_requested: bool,
     remote_confirmation_focus: FocusHandle,
     remote_confirmation_focus_requested: bool,
+    remove_local_project_focus: FocusHandle,
+    remove_local_project_focus_requested: bool,
     account_logout_focus: FocusHandle,
     account_logout_focus_requested: bool,
     plugin_install_confirmation_focus: FocusHandle,
@@ -4877,6 +4891,7 @@ impl WorkspaceView {
         let browser_focus = cx.focus_handle();
         let remote_pairing_focus = cx.focus_handle();
         let remote_confirmation_focus = cx.focus_handle();
+        let remove_local_project_focus = cx.focus_handle();
         let account_logout_focus = cx.focus_handle();
         let plugin_install_confirmation_focus = cx.focus_handle();
         let initial_appearance_preferences = AppearancePreferences::default();
@@ -5850,6 +5865,8 @@ impl WorkspaceView {
             remote_pairing_focus_requested: false,
             remote_confirmation_focus,
             remote_confirmation_focus_requested: false,
+            remove_local_project_focus,
+            remove_local_project_focus_requested: false,
             account_logout_focus,
             account_logout_focus_requested: false,
             plugin_install_confirmation_focus,
@@ -7890,6 +7907,31 @@ impl WorkspaceView {
     fn remove_local_project_from_modal(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         self.workspace_modal = None;
         self.dispatch(Action::RemoveLocalProject(path), cx);
+    }
+
+    fn cycle_remove_local_project_focus(
+        &mut self,
+        backwards: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if backwards {
+            window.focus_prev();
+            if self.remove_local_project_focus.is_focused(window)
+                || !self.remove_local_project_focus.contains_focused(window, cx)
+            {
+                self.remove_local_project_focus.focus(window);
+                window.focus_next();
+                window.focus_next();
+            }
+        } else {
+            window.focus_next();
+            if !self.remove_local_project_focus.contains_focused(window, cx) {
+                self.remove_local_project_focus.focus(window);
+                window.focus_next();
+            }
+        }
+        cx.stop_propagation();
     }
 
     fn prompt_for_workspace(&mut self, cx: &mut Context<Self>) {
@@ -38975,6 +39017,16 @@ impl WorkspaceView {
                     .bg(cx.theme().popover)
                     .shadow_xl()
                     .occlude()
+                    .track_focus(&self.remove_local_project_focus)
+                    .tab_group()
+                    .tab_stop(true)
+                    .key_context("RemoveLocalProjectModal")
+                    .on_action(cx.listener(|this, _: &RemoveLocalProjectFocusNext, window, cx| {
+                        this.cycle_remove_local_project_focus(false, window, cx);
+                    }))
+                    .on_action(cx.listener(|this, _: &RemoveLocalProjectFocusPrev, window, cx| {
+                        this.cycle_remove_local_project_focus(true, window, cx);
+                    }))
                     .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
                     .child(
                         div()
@@ -40245,6 +40297,17 @@ impl Render for WorkspaceView {
             }
         } else {
             self.remote_confirmation_focus_requested = false;
+        }
+        if matches!(
+            self.workspace_modal,
+            Some(WorkspaceModal::RemoveLocalProject { .. })
+        ) {
+            if !self.remove_local_project_focus_requested {
+                self.remove_local_project_focus.focus(window);
+                self.remove_local_project_focus_requested = true;
+            }
+        } else {
+            self.remove_local_project_focus_requested = false;
         }
         if matches!(self.workspace_modal, Some(WorkspaceModal::LogOutAccount)) {
             if !self.account_logout_focus_requested {
