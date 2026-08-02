@@ -8,6 +8,7 @@ mod icon;
 mod index_path;
 #[cfg(any(feature = "inspector", debug_assertions))]
 mod inspector;
+pub mod motion;
 mod root;
 mod styled;
 mod time;
@@ -97,6 +98,7 @@ rust_i18n::i18n!("locales", fallback = "en");
 pub fn init(cx: &mut App) {
     theme::init(cx);
     global_state::init(cx);
+    motion::init(cx);
     #[cfg(any(feature = "inspector", debug_assertions))]
     inspector::init(cx);
     root::init(cx);

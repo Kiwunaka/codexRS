@@ -1,13 +1,13 @@
 use std::{rc::Rc, time::Duration};
 
 use crate::{
-    icon::IconNamed, text::Text, v_flex, ActiveTheme, Disableable, FocusableExt, IconName,
-    Selectable, Sizable, Size, StyledExt as _,
+    ActiveTheme, Disableable, FocusableExt, IconName, Selectable, Sizable, Size, StyledExt as _,
+    icon::IconNamed, motion::is_reduced_motion, text::Text, v_flex,
 };
 use gpui::{
-    div, prelude::FluentBuilder as _, px, relative, rems, svg, Animation, AnimationExt, AnyElement,
-    App, Div, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
-    StatefulInteractiveElement, StyleRefinement, Styled, Window,
+    Animation, AnimationExt, AnyElement, App, Div, ElementId, InteractiveElement, IntoElement,
+    ParentElement, RenderOnce, StatefulInteractiveElement, StyleRefinement, Styled, Window, div,
+    prelude::FluentBuilder as _, px, relative, rems, svg,
 };
 
 /// A Checkbox element.
@@ -164,7 +164,11 @@ pub(crate) fn checkbox_check_icon(
             _ => this,
         })
         .map(|this| {
-            if !disabled && checked != *toggle_state.read(cx) {
+            let changed = checked != *toggle_state.read(cx);
+            if !disabled && changed && is_reduced_motion(cx) {
+                _ = toggle_state.update(cx, |this, _| *this = checked);
+                this.into_any_element()
+            } else if !disabled && changed {
                 let duration = Duration::from_secs_f64(0.25);
                 cx.spawn({
                     let toggle_state = toggle_state.clone();

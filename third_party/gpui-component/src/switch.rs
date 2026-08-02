@@ -1,6 +1,6 @@
 use crate::{
     ActiveTheme, Disableable, FocusableExt as _, Side, Sizable, Size, StyledExt, h_flex,
-    text::Text, tooltip::Tooltip,
+    motion::is_reduced_motion, text::Text, tooltip::Tooltip,
 };
 use gpui::{
     Animation, AnimationExt as _, App, ClickEvent, ElementId, InteractiveElement, IntoElement,
@@ -163,8 +163,13 @@ impl RenderOnce for Switch {
                                 .shadow_md()
                                 .size(bar_width)
                                 .map(|this| {
-                                    let prev_checked = toggle_state.read(cx);
-                                    if !self.disabled && *prev_checked != checked {
+                                    let changed = *toggle_state.read(cx) != checked;
+                                    if !self.disabled && changed && is_reduced_motion(cx) {
+                                        _ = toggle_state.update(cx, |this, _| *this = checked);
+                                        let max_x = bg_width - bar_width - inset * 2;
+                                        let x = if checked { max_x } else { px(0.) };
+                                        this.left(x).into_any_element()
+                                    } else if !self.disabled && changed {
                                         let duration = Duration::from_secs_f64(0.15);
                                         cx.spawn({
                                             let toggle_state = toggle_state.clone();
