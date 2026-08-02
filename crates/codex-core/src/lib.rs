@@ -95,6 +95,7 @@ pub const MAX_PENDING_WORKTREE_FORKS: usize = 3;
 pub const MAX_GOAL_OBJECTIVE_BYTES: usize = 16 * 1024;
 pub const MAX_ACCOUNT_FIELD_BYTES: usize = 512;
 pub const MAX_USAGE_LIMIT_WINDOWS: usize = 2;
+pub const MAX_ACCOUNT_DAILY_USAGE_BUCKETS: usize = 31;
 pub const MAX_FEEDBACK_DETAILS_BYTES: usize = 16 * 1024;
 pub const MAX_IMPORT_MIGRATION_ITEMS: usize = 500;
 pub const MAX_IMPORT_HISTORY_ENTRIES: usize = 50;
@@ -3721,6 +3722,13 @@ pub struct AccountTokenActivitySummary {
     pub longest_running_turn_sec: Option<i64>,
     pub current_streak_days: Option<i64>,
     pub longest_streak_days: Option<i64>,
+    pub daily_usage_buckets: Vec<AccountDailyUsageBucket>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountDailyUsageBucket {
+    pub start_date: String,
+    pub tokens: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -13513,7 +13521,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             mut credits,
             rate_limit_reset_credits_available,
             usage_error,
-            token_activity,
+            mut token_activity,
             token_activity_error,
         } => {
             if let Some(profile) = &mut profile {
@@ -13532,6 +13540,14 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     let balance =
                         bounded_string(balance.trim().to_owned(), MAX_ACCOUNT_FIELD_BYTES);
                     (!balance.is_empty()).then_some(balance)
+                });
+            }
+            if let Some(token_activity) = &mut token_activity {
+                token_activity
+                    .daily_usage_buckets
+                    .truncate(MAX_ACCOUNT_DAILY_USAGE_BUCKETS);
+                token_activity.daily_usage_buckets.retain(|bucket| {
+                    bucket.tokens >= 0 && is_valid_account_daily_usage_date(&bucket.start_date)
                 });
             }
             let connected = profile.is_some();
@@ -16870,6 +16886,35 @@ fn bounded_string(mut value: String, limit: usize) -> String {
     value
 }
 
+pub fn is_valid_account_daily_usage_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+        return false;
+    }
+    if bytes
+        .iter()
+        .enumerate()
+        .any(|(index, byte)| index != 4 && index != 7 && !byte.is_ascii_digit())
+    {
+        return false;
+    }
+
+    let year = u16::from(bytes[0] - b'0') * 1_000
+        + u16::from(bytes[1] - b'0') * 100
+        + u16::from(bytes[2] - b'0') * 10
+        + u16::from(bytes[3] - b'0');
+    let month = (bytes[5] - b'0') * 10 + (bytes[6] - b'0');
+    let day = (bytes[8] - b'0') * 10 + (bytes[9] - b'0');
+    let days_in_month = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 400 == 0 || (year % 4 == 0 && year % 100 != 0) => 29,
+        2 => 28,
+        _ => return false,
+    };
+    year > 0 && day > 0 && day <= days_in_month
+}
+
 fn normalize_retryable_user_message(message: &mut RetryableUserMessage) {
     message.text = bounded_string(std::mem::take(&mut message.text), MAX_COMPOSER_BYTES);
     message.attachments.truncate(MAX_COMPOSER_ATTACHMENTS);
@@ -17690,10 +17735,10 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        APPEARANCE_CODE_THEMES, AccountAuthOperation, AccountCredits, AccountKind, AccountProfile,
-        AccountTokenActivitySummary, Action, AgentConfigScope, AgentConfigScopeKind,
-        AgentConfigurationMutationKind, AppCard, AppDetailView, AppState, AppToolCard,
-        AppearancePalette, AppearancePreferences, AppearanceTheme, AppearanceVariant,
+        APPEARANCE_CODE_THEMES, AccountAuthOperation, AccountCredits, AccountDailyUsageBucket,
+        AccountKind, AccountProfile, AccountTokenActivitySummary, Action, AgentConfigScope,
+        AgentConfigScopeKind, AgentConfigurationMutationKind, AppCard, AppDetailView, AppState,
+        AppToolCard, AppearancePalette, AppearancePreferences, AppearanceTheme, AppearanceVariant,
         ApprovalContext, ApprovalDecision, ApprovalKind, ApprovalRequest, ApprovalsReviewer,
         ArchivedTaskDeleteKind, ArtifactPreview, ArtifactPreviewKind, ArtifactState,
         BackgroundTerminal, BrowserApprovalMode, BrowserDownloadPreferences, BrowserDownloadState,
@@ -17710,15 +17755,15 @@ mod tests {
         ImportItemSuccess, ImportItemType, ImportMigrationDetails, ImportMigrationItem,
         ImportProvider, ImportProviderItems, ImportTypeResult, InspectorPane,
         IntegratedTerminalShell, KeyboardShortcutPreferences, KeyboardShortcutUpdateTarget,
-        LoadStatus, LocalProjectSummary, MAX_ACCOUNT_FIELD_BYTES, MAX_BROWSER_DOWNLOADS,
-        MAX_COMPOSER_BYTES, MAX_GIT_BRANCH_BYTES, MAX_GIT_DIFF_BYTES, MAX_GIT_INSTRUCTIONS_BYTES,
-        MAX_GIT_SHA_BYTES, MAX_PINNED_TASK_ID_BYTES, MAX_PLUGIN_DETAIL_ITEMS,
-        MAX_REVIEW_START_ERROR_BYTES, MAX_TIMELINE_ITEMS, MAX_TURN_DIFF_BYTES, MAX_VISIBLE_THREADS,
-        MainRoute, MarketplaceManageTab, MarketplaceSectionFilter, MarketplaceSourceCard,
-        MarketplaceTab, MarketplaceUpgradeFailure, McpAuthStatus, McpBrowserOriginElicitation,
-        McpBrowserResourceElicitation, McpElicitation, McpElicitationContent,
-        McpElicitationDecision, McpElicitationValue, McpFormElicitation, McpFormField,
-        McpFormFieldKind, McpFormImagePickerItem, McpFormOption, McpFormStringFormat,
+        LoadStatus, LocalProjectSummary, MAX_ACCOUNT_DAILY_USAGE_BUCKETS, MAX_ACCOUNT_FIELD_BYTES,
+        MAX_BROWSER_DOWNLOADS, MAX_COMPOSER_BYTES, MAX_GIT_BRANCH_BYTES, MAX_GIT_DIFF_BYTES,
+        MAX_GIT_INSTRUCTIONS_BYTES, MAX_GIT_SHA_BYTES, MAX_PINNED_TASK_ID_BYTES,
+        MAX_PLUGIN_DETAIL_ITEMS, MAX_REVIEW_START_ERROR_BYTES, MAX_TIMELINE_ITEMS,
+        MAX_TURN_DIFF_BYTES, MAX_VISIBLE_THREADS, MainRoute, MarketplaceManageTab,
+        MarketplaceSectionFilter, MarketplaceSourceCard, MarketplaceTab, MarketplaceUpgradeFailure,
+        McpAuthStatus, McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
+        McpElicitationContent, McpElicitationDecision, McpElicitationValue, McpFormElicitation,
+        McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpFormOption, McpFormStringFormat,
         McpResourceCard, McpResourceContentCard, McpServerCard, McpServerDraft,
         McpServerStartupFailureReason, McpServerStartupState, McpTransportKind, McpUrlElicitation,
         ModelOption, OutputArtifact, OutputArtifactKind, PendingWorktreeForkPhase,
@@ -25043,6 +25088,12 @@ mod tests {
                     longest_running_turn_sec: Some(5_400),
                     current_streak_days: Some(7),
                     longest_streak_days: Some(21),
+                    daily_usage_buckets: (0..MAX_ACCOUNT_DAILY_USAGE_BUCKETS + 1)
+                        .map(|tokens| AccountDailyUsageBucket {
+                            start_date: "2026-07-01".to_owned(),
+                            tokens: i64::try_from(tokens).unwrap_or(i64::MAX),
+                        })
+                        .collect(),
                 }),
                 token_activity_error: None,
             },
@@ -25082,6 +25133,24 @@ mod tests {
                 .as_ref()
                 .and_then(|summary| summary.lifetime_tokens),
             Some(1_250_000)
+        );
+        assert_eq!(
+            state
+                .account
+                .token_activity
+                .as_ref()
+                .map(|summary| summary.daily_usage_buckets.len()),
+            Some(MAX_ACCOUNT_DAILY_USAGE_BUCKETS)
+        );
+        assert!(
+            state
+                .account
+                .token_activity
+                .as_ref()
+                .is_some_and(|summary| summary
+                    .daily_usage_buckets
+                    .iter()
+                    .all(|bucket| { bucket.start_date == "2026-07-01" && bucket.tokens >= 0 }))
         );
     }
 
