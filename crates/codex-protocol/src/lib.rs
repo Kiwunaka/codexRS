@@ -347,6 +347,19 @@ pub struct SecretString {
 
 impl SecretString {
     #[must_use]
+    pub fn new(value: String) -> Option<Self> {
+        if value.is_empty() || value.len() > 512 {
+            let mut bytes = value.into_bytes();
+            bytes.fill(0);
+            return None;
+        }
+
+        Some(Self {
+            bytes: value.into_bytes(),
+        })
+    }
+
+    #[must_use]
     pub fn expose(&self) -> &str {
         str::from_utf8(&self.bytes).unwrap_or_default()
     }
@@ -355,6 +368,15 @@ impl SecretString {
 impl fmt::Debug for SecretString {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("[REDACTED]")
+    }
+}
+
+impl Serialize for SecretString {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.expose())
     }
 }
 
@@ -384,9 +406,14 @@ pub struct GetAuthStatusResponse {
     pub requires_openai_auth: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Serialize)]
 #[serde(tag = "type")]
 pub enum LoginAccountParams {
+    #[serde(rename = "apiKey")]
+    ApiKey {
+        #[serde(rename = "apiKey")]
+        api_key: SecretString,
+    },
     #[serde(rename = "chatgpt")]
     ChatGpt {
         #[serde(
@@ -3552,7 +3579,7 @@ mod tests {
         RemoteControlPairingStartResponse, RemoteControlPairingStatusParams,
         RemoteControlPairingStatusResponse, RemoteControlStatusChangedNotification,
         RemoteControlStatusReadResponse, ReviewDelivery, ReviewStartParams, ReviewStartResponse,
-        ReviewTarget, SkillScope, SkillsConfigWriteParams, SkillsConfigWriteResponse,
+        ReviewTarget, SecretString, SkillScope, SkillsConfigWriteParams, SkillsConfigWriteResponse,
         SkillsListParams, SkillsListResponse, ThreadArchiveParams,
         ThreadBackgroundTerminalsCleanResponse, ThreadBackgroundTerminalsListParams,
         ThreadBackgroundTerminalsListResponse, ThreadBackgroundTerminalsTerminateParams,
@@ -3790,7 +3817,22 @@ mod tests {
     }
 
     #[test]
-    fn account_login_types_match_the_stable_schema_without_credentials() {
+    fn account_login_types_match_the_stable_schema() {
+        let api_key = SecretString::new("sk-test-key".to_owned());
+        assert!(api_key.is_some());
+        let Some(api_key) = api_key else {
+            return;
+        };
+        assert_eq!(format!("{api_key:?}"), "[REDACTED]");
+        assert!(!format!("{api_key:?}").contains("sk-test-key"));
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "account/login/start",
+                id: 1,
+                params: Some(LoginAccountParams::ApiKey { api_key }),
+            }),
+            b"{\"method\":\"account/login/start\",\"id\":1,\"params\":{\"type\":\"apiKey\",\"apiKey\":\"sk-test-key\"}}\n"
+        );
         assert_eq!(
             encoded(&ClientRequest {
                 method: "account/login/start",
@@ -3811,6 +3853,10 @@ mod tests {
             }),
             b"{\"method\":\"account/login/start\",\"id\":3,\"params\":{\"type\":\"chatgptDeviceCode\"}}\n"
         );
+        assert!(matches!(
+            serde_json::from_value::<LoginAccountResponse>(json!({ "type": "apiKey" })),
+            Ok(LoginAccountResponse::ApiKey)
+        ));
         assert!(matches!(
             serde_json::from_value::<LoginAccountResponse>(json!({
                 "type": "chatgpt",
@@ -3865,6 +3911,12 @@ mod tests {
                 error: Some(_),
             }) if login_id == "login-1"
         ));
+    }
+
+    #[test]
+    fn secret_string_rejects_empty_and_oversize_owned_values() {
+        assert!(SecretString::new(String::new()).is_none());
+        assert!(SecretString::new("x".repeat(513)).is_none());
     }
 
     #[test]

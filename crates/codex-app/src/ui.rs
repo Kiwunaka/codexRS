@@ -64,6 +64,7 @@ use codex_platform::{
     computer_use_platform_available, default_browser_download_dir, desktop_work_areas,
     normalize_browser_origin, read_artifact_image,
 };
+use codex_protocol::SecretString;
 use gpui::{
     AnyElement, AnyWindowHandle, App, Application, Asset, Bounds, ClipboardItem, Context,
     DragMoveEvent, Entity, FocusHandle, Focusable, Global, HighlightStyle, Hsla, Image,
@@ -4718,6 +4719,8 @@ struct WorkspaceView {
     backend: Option<Backend>,
     window_handle: AnyWindowHandle,
     composer: Entity<InputState>,
+    api_key_login: Entity<InputState>,
+    api_key_login_visible: bool,
     message_edit: Entity<InputState>,
     goal_input: Entity<InputState>,
     feedback_details: Entity<InputState>,
@@ -4905,6 +4908,8 @@ impl WorkspaceView {
                 .auto_grow(3, 10)
                 .placeholder("Ask Codex to change, inspect, or explain…")
         });
+        let api_key_login =
+            cx.new(|cx| InputState::new(window, cx).masked(true).placeholder("sk-…"));
         let message_edit = cx.new(|cx| {
             InputState::new(window, cx)
                 .auto_grow(2, 6)
@@ -5652,10 +5657,14 @@ impl WorkspaceView {
                 }
             });
         }));
-        subscriptions.push(cx.observe_keystrokes(|this, event, _window, cx| {
+        subscriptions.push(cx.observe_keystrokes(|this, event, window, cx| {
             let keystroke = &event.keystroke;
             let key = keystroke.key.as_str();
             let modifiers = keystroke.modifiers;
+            if key.eq_ignore_ascii_case("escape") && this.api_key_login_visible {
+                this.clear_api_key_login(window, cx);
+                return;
+            }
             if key.eq_ignore_ascii_case("escape")
                 && this
                     .state
@@ -5765,6 +5774,8 @@ impl WorkspaceView {
             backend,
             window_handle: window.window_handle(),
             composer,
+            api_key_login,
+            api_key_login_visible: false,
             message_edit,
             goal_input,
             feedback_details,
@@ -5928,6 +5939,85 @@ impl WorkspaceView {
             mcp_form_invalid_fields: HashMap::new(),
             _subscriptions: subscriptions,
             _poll_task: poll_task,
+        }
+    }
+
+    fn show_api_key_login(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.api_key_login_visible = true;
+        self.api_key_login.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+            input.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    fn clear_api_key_login(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let was_visible = self.api_key_login_visible;
+        self.api_key_login_visible = false;
+        self.api_key_login.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+        });
+        if was_visible {
+            if self.state.route == MainRoute::Settings {
+                self.settings_search.update(cx, |input, cx| {
+                    input.focus(window, cx);
+                });
+            } else {
+                self.composer.update(cx, |input, cx| {
+                    input.focus(window, cx);
+                });
+            }
+        }
+        cx.notify();
+    }
+
+    fn clear_api_key_login_in_window(&mut self, cx: &mut Context<Self>) {
+        let was_visible = self.api_key_login_visible;
+        self.api_key_login_visible = false;
+        let handle = self.window_handle;
+        let input = self.api_key_login.clone();
+        let focus_target = (was_visible).then(|| {
+            if self.state.route == MainRoute::Settings {
+                self.settings_search.clone()
+            } else {
+                self.composer.clone()
+            }
+        });
+        let _ = cx.update_window(handle, move |_, window, cx| {
+            input.update(cx, |input, cx| {
+                input.set_value("", window, cx);
+            });
+            if let Some(focus_target) = focus_target {
+                focus_target.update(cx, |input, cx| {
+                    input.focus(window, cx);
+                });
+            }
+        });
+        cx.notify();
+    }
+
+    fn submit_api_key_login(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let value = self.api_key_login.read(cx).value().to_string();
+        self.clear_api_key_login(window, cx);
+
+        let Some(api_key) = SecretString::new(value) else {
+            self.dispatch(Action::StartApiKeyLogin, cx);
+            self.dispatch(Action::AccountApiKeyLoginStartFailed, cx);
+            return;
+        };
+
+        self.dispatch(Action::StartApiKeyLogin, cx);
+        if self.state.account.auth_operation != AccountAuthOperation::SubmittingApiKey {
+            return;
+        }
+
+        let result = self
+            .backend
+            .as_ref()
+            .ok_or("backend is unavailable")
+            .and_then(|backend| backend.start_api_key_login(api_key));
+        if result.is_err() {
+            self.dispatch(Action::AccountApiKeyLoginStartFailed, cx);
         }
     }
 
@@ -6294,6 +6384,36 @@ impl WorkspaceView {
     }
 
     fn dispatch(&mut self, action: Action, cx: &mut Context<Self>) {
+        let leaves_api_key_login_surface = self.api_key_login_visible
+            && match &action {
+                Action::Navigate(route) => match route {
+                    MainRoute::Settings => {
+                        self.state.route != MainRoute::Settings
+                            || self.settings_section != SettingsSection::Profile
+                    }
+                    MainRoute::Tasks => {
+                        self.state.route != MainRoute::Tasks
+                            || self.state.selected_task_id.is_some()
+                    }
+                    _ => true,
+                },
+                Action::SelectTask(_)
+                | Action::BeginNewChat
+                | Action::AccountLoadFailed(_)
+                | Action::ConnectionLost
+                | Action::ConnectionFailed(_) => true,
+                Action::AccountLoaded {
+                    profile,
+                    requires_openai_auth,
+                    ..
+                } => {
+                    profile.is_some()
+                        || (self.state.route == MainRoute::Tasks
+                            && self.state.selected_task_id.is_none()
+                            && !requires_openai_auth)
+                }
+                _ => false,
+            };
         let reset_diff_file_sections = match &action {
             Action::SelectTask(_) | Action::SelectGitDiffScope(_) => true,
             Action::TurnDiffUpdated {
@@ -6406,6 +6526,9 @@ impl WorkspaceView {
         }
         let previous_location = NavigationLocation::from_state(&self.state);
         let effects = reduce(&mut self.state, action);
+        if leaves_api_key_login_surface {
+            self.clear_api_key_login_in_window(cx);
+        }
         if reset_diff_file_sections {
             self.collapsed_diff_file_sections.clear();
         }
@@ -6562,6 +6685,18 @@ impl WorkspaceView {
                 } => Some(authorization_url.clone()),
                 _ => None,
             };
+            let api_key_login_terminal = self.state.account.auth_operation
+                == AccountAuthOperation::SubmittingApiKey
+                && matches!(
+                    &action,
+                    Action::AccountApiKeyLoginStartFailed
+                        | Action::AccountLoginCompleted { .. }
+                        | Action::AccountLoaded { .. }
+                        | Action::AccountLoadFailed(_)
+                        | Action::AccountLoggedOut
+                        | Action::ConnectionLost
+                        | Action::ConnectionFailed(_)
+                );
             let account_logged_out = matches!(&action, Action::AccountLoggedOut);
             let feedback_submitted = matches!(&action, Action::FeedbackSubmitted { .. });
             let keyboard_shortcut_persistence = match &action {
@@ -6592,6 +6727,9 @@ impl WorkspaceView {
                 _ => None,
             };
             self.dispatch(action, cx);
+            if api_key_login_terminal {
+                self.clear_api_key_login_in_window(cx);
+            }
             if let Some(request) = browser_download_save_request {
                 self.enqueue_browser_download_save_request(request, cx);
             }
@@ -15400,6 +15538,9 @@ impl WorkspaceView {
             let account_auth_operation = self.state.account.auth_operation;
             let account_auth_error = self.state.account.auth_error.clone();
             let account_device_code = account_device_code(&self.state.account);
+            let api_key_login_form = (self.api_key_login_visible
+                && account_auth_operation == AccountAuthOperation::Idle)
+                .then(|| self.render_api_key_login_form(cx));
             let awaiting_device_code = account_device_code.is_some();
             let first_run_account_error =
                 first_run_account_load_error(&self.state).map(str::to_owned);
@@ -15483,7 +15624,7 @@ impl WorkspaceView {
                         .when(first_run_sign_in, |empty| {
                             let (instruction, action) = match account_auth_operation {
                                 AccountAuthOperation::Idle => (
-                                    "Sign in with your ChatGPT account to start using Codex.",
+                                    "Sign in to start using Codex.",
                                     v_flex()
                                         .gap_2()
                                         .items_start()
@@ -15491,7 +15632,8 @@ impl WorkspaceView {
                                             Button::new("first-run-account-login")
                                                 .label("Sign in with ChatGPT")
                                                 .small()
-                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.clear_api_key_login(window, cx);
                                                     this.dispatch(Action::StartAccountLogin, cx);
                                                 })),
                                         )
@@ -15499,13 +15641,25 @@ impl WorkspaceView {
                                             Button::new("first-run-account-device-code")
                                                 .label("Use device code")
                                                 .small()
-                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.clear_api_key_login(window, cx);
                                                     this.dispatch(
                                                         Action::StartAccountDeviceCodeLogin,
                                                         cx,
                                                     );
                                                 })),
                                         )
+                                        .child(
+                                            Button::new("first-run-api-key-login")
+                                                .label("Use API key")
+                                                .small()
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.show_api_key_login(window, cx);
+                                                })),
+                                        )
+                                        .when_some(api_key_login_form, |actions, form| {
+                                            actions.child(form)
+                                        })
                                         .into_any_element(),
                                 ),
                                 AccountAuthOperation::LoggingOut => (
@@ -15522,6 +15676,14 @@ impl WorkspaceView {
                                     "Opening ChatGPT sign-in…",
                                     Button::new("first-run-account-login-starting")
                                         .label("Starting…")
+                                        .small()
+                                        .disabled(true)
+                                        .into_any_element(),
+                                ),
+                                AccountAuthOperation::SubmittingApiKey => (
+                                    "Signing in with your API key…",
+                                    Button::new("first-run-api-key-login-submitting")
+                                        .label("Signing in…")
                                         .small()
                                         .disabled(true)
                                         .into_any_element(),
@@ -34896,6 +35058,35 @@ impl WorkspaceView {
             .into_any_element()
     }
 
+    fn render_api_key_login_form(&self, cx: &mut Context<Self>) -> AnyElement {
+        v_flex()
+            .w(px(280.0))
+            .gap_2()
+            .items_start()
+            .child(Input::new(&self.api_key_login).small())
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(
+                        Button::new("api-key-login-submit")
+                            .label("Sign in with API key")
+                            .small()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.submit_api_key_login(window, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("api-key-login-cancel")
+                            .label("Cancel")
+                            .small()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.clear_api_key_login(window, cx);
+                            })),
+                    ),
+            )
+            .into_any_element()
+    }
+
     fn render_profile_settings(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let account = self.state.account.clone();
         let loading = account.status == LoadStatus::Loading;
@@ -34964,6 +35155,10 @@ impl WorkspaceView {
                         .map_or(identity.clone(), |plan| format!("{plan} plan\n{identity}"))
                 },
             );
+            let api_key_login_form = (!profile_connected
+                && self.api_key_login_visible
+                && account.auth_operation == AccountAuthOperation::Idle)
+                .then(|| self.render_api_key_login_form(cx));
             let auth_control = if profile_connected {
                 Button::new("account-logout")
                     .label(
@@ -34988,7 +35183,8 @@ impl WorkspaceView {
                             Button::new("account-login")
                                 .label("Sign in with ChatGPT")
                                 .small()
-                                .on_click(cx.listener(|this, _, _, cx| {
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.clear_api_key_login(window, cx);
                                     this.dispatch(Action::StartAccountLogin, cx);
                                 })),
                         )
@@ -34996,10 +35192,20 @@ impl WorkspaceView {
                             Button::new("account-device-code")
                                 .label("Use device code")
                                 .small()
-                                .on_click(cx.listener(|this, _, _, cx| {
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.clear_api_key_login(window, cx);
                                     this.dispatch(Action::StartAccountDeviceCodeLogin, cx);
                                 })),
                         )
+                        .child(
+                            Button::new("account-api-key-login")
+                                .label("Use API key")
+                                .small()
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.show_api_key_login(window, cx);
+                                })),
+                        )
+                        .when_some(api_key_login_form, |controls, form| controls.child(form))
                         .into_any_element(),
                     AccountAuthOperation::LoggingOut => Button::new("account-login")
                         .label("Sign in with ChatGPT")
@@ -35013,6 +35219,13 @@ impl WorkspaceView {
                         .small()
                         .disabled(true)
                         .into_any_element(),
+                    AccountAuthOperation::SubmittingApiKey => {
+                        Button::new("account-api-key-login-submitting")
+                            .label("Signing in…")
+                            .small()
+                            .disabled(true)
+                            .into_any_element()
+                    }
                     AccountAuthOperation::AwaitingLogin => device_code.clone().map_or_else(
                         || {
                             Button::new("account-login-cancel")

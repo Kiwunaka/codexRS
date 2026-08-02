@@ -163,20 +163,21 @@ use codex_protocol::{
     RemoteControlClientsRevokeParams, RemoteControlConnectionStatus,
     RemoteControlPairingStartParams, RemoteControlPairingStatusParams,
     RemoteControlStatusChangedNotification, ReviewDelivery as ProtocolReviewDelivery,
-    ReviewStartParams, ReviewTarget as ProtocolReviewTarget, SkillScope as ProtocolSkillScope,
-    SkillsConfigWriteParams, SkillsListParams, ThreadArchiveParams, ThreadBackgroundTerminal,
-    ThreadBackgroundTerminalsCleanParams, ThreadBackgroundTerminalsListParams,
-    ThreadBackgroundTerminalsTerminateParams, ThreadCompactStartParams, ThreadDeleteParams,
-    ThreadForkParams, ThreadGoalClearParams, ThreadGoalClearedNotification, ThreadGoalGetParams,
-    ThreadGoalSetParams, ThreadGoalStatus as ProtocolThreadGoalStatus,
-    ThreadGoalUpdatedNotification, ThreadItemsListParams, ThreadListParams, ThreadLoadedListParams,
-    ThreadMemoryMode, ThreadMemoryModeSetParams, ThreadReadParams,
-    ThreadResumeInitialTurnsPageParams, ThreadResumeParams, ThreadRollbackParams,
-    ThreadSearchParams, ThreadSetNameParams, ThreadSettingsUpdateParams, ThreadShellCommandParams,
-    ThreadStartParams, ThreadTokenUsageUpdatedNotification, ThreadTurnsListParams,
-    ThreadUnarchiveParams, ThreadUnsubscribeParams, ToolRequestUserInputAnswer,
-    ToolRequestUserInputParams, ToolRequestUserInputResponse, TurnDiffUpdatedNotification,
-    TurnInterruptParams, TurnStartParams, TurnSteerParams, UserInput,
+    ReviewStartParams, ReviewTarget as ProtocolReviewTarget, SecretString,
+    SkillScope as ProtocolSkillScope, SkillsConfigWriteParams, SkillsListParams,
+    ThreadArchiveParams, ThreadBackgroundTerminal, ThreadBackgroundTerminalsCleanParams,
+    ThreadBackgroundTerminalsListParams, ThreadBackgroundTerminalsTerminateParams,
+    ThreadCompactStartParams, ThreadDeleteParams, ThreadForkParams, ThreadGoalClearParams,
+    ThreadGoalClearedNotification, ThreadGoalGetParams, ThreadGoalSetParams,
+    ThreadGoalStatus as ProtocolThreadGoalStatus, ThreadGoalUpdatedNotification,
+    ThreadItemsListParams, ThreadListParams, ThreadLoadedListParams, ThreadMemoryMode,
+    ThreadMemoryModeSetParams, ThreadReadParams, ThreadResumeInitialTurnsPageParams,
+    ThreadResumeParams, ThreadRollbackParams, ThreadSearchParams, ThreadSetNameParams,
+    ThreadSettingsUpdateParams, ThreadShellCommandParams, ThreadStartParams,
+    ThreadTokenUsageUpdatedNotification, ThreadTurnsListParams, ThreadUnarchiveParams,
+    ThreadUnsubscribeParams, ToolRequestUserInputAnswer, ToolRequestUserInputParams,
+    ToolRequestUserInputResponse, TurnDiffUpdatedNotification, TurnInterruptParams,
+    TurnStartParams, TurnSteerParams, UserInput,
 };
 use codex_storage::{
     BrowserDownloadRecordStatus, MAX_BROWSER_DOWNLOAD_RECORDS, Store, StoredBrowserDownload,
@@ -1281,6 +1282,7 @@ const GIT_INCLUDE_UNSTAGED_PREFERENCE: &str = "git_action_include_unstaged_chang
 
 enum BackendCommand {
     Run(Box<Effect>),
+    StartApiKeyLogin(SecretString),
     Shutdown,
 }
 
@@ -2168,6 +2170,15 @@ impl Backend {
     pub fn send(&self, effect: Effect) -> Result<(), &'static str> {
         self.commands
             .try_send(BackendCommand::Run(Box::new(effect)))
+            .map_err(|error| match error {
+                crossbeam_channel::TrySendError::Full(_) => "backend command queue is full",
+                crossbeam_channel::TrySendError::Disconnected(_) => "backend is disconnected",
+            })
+    }
+
+    pub fn start_api_key_login(&self, api_key: SecretString) -> Result<(), &'static str> {
+        self.commands
+            .try_send(BackendCommand::StartApiKeyLogin(api_key))
             .map_err(|error| match error {
                 crossbeam_channel::TrySendError::Full(_) => "backend command queue is full",
                 crossbeam_channel::TrySendError::Disconnected(_) => "backend is disconnected",
@@ -3236,6 +3247,21 @@ fn run_backend(commands: Receiver<BackendCommand>, events: Sender<Action>) {
         }
 
         match commands.recv_timeout(BACKEND_TICK) {
+            Ok(BackendCommand::StartApiKeyLogin(api_key)) => match connection.as_ref() {
+                Some(app_server) => {
+                    match app_server.start_account_login(LoginAccountParams::ApiKey { api_key }) {
+                        Ok(response) => {
+                            if let Some(action) = api_key_account_login_started_action(response) {
+                                emit(&events, action);
+                            } else {
+                                emit(&events, Action::AccountApiKeyLoginStartFailed);
+                            }
+                        }
+                        Err(_) => emit(&events, Action::AccountApiKeyLoginStartFailed),
+                    }
+                }
+                None => emit(&events, Action::AccountApiKeyLoginStartFailed),
+            },
             Ok(BackendCommand::Run(effect)) => match *effect {
                 Effect::ConnectAppServer => {
                     app_server_reconnect.reset();
@@ -14371,6 +14397,10 @@ fn device_code_account_login_started_action(response: LoginAccountResponse) -> O
     }
 }
 
+fn api_key_account_login_started_action(response: LoginAccountResponse) -> Option<Action> {
+    matches!(response, LoginAccountResponse::ApiKey).then_some(Action::RefreshAccount)
+}
+
 fn account_login_started_action(
     login_id: String,
     authorization_url: String,
@@ -16244,21 +16274,22 @@ mod tests {
         PendingWorktreeRuntime, STABLE_OPT_OUT_NOTIFICATION_METHODS, TASK_SEARCH_DEBOUNCE,
         TRUSTED_ACCESS_FOR_CYBER_URL, TRUSTED_ACCESS_FOR_CYBER_WARNING, TaskSearchDebouncer,
         TerminalParserCallbacks, account_supports_token_activity, agent_configuration_snapshot,
-        appearance_theme_key, apps_list_params, bounded_marketplace_load_error_count,
-        bounded_remote_identifier, browser_account_login_started_action,
-        browser_origin_auto_decision, browser_origin_elicitation_response, browser_policy_target,
-        browser_resource_auto_decision, browser_resource_elicitation_response,
-        cancel_pending_worktree_runtime, combined_git_generation_prompt,
-        combined_git_output_schema, commit_generation_prompt, commit_message_output_schema,
-        composer_config_key, composer_inputs, computer_application_value,
-        computer_tool_request_meta, computer_tool_requires_interruption_monitor,
-        computer_use_allowed_app_ids, computer_use_allowed_app_ids_value,
-        computer_use_app_authorized, computer_use_dynamic_tools, computer_window_argument,
-        computer_window_schema, device_code_account_login_started_action, drag_coordinates,
-        encode_appearance_preferences, encode_browser_download_preferences,
-        encode_browser_permissions, encode_git_preferences, encode_keyboard_shortcut_preferences,
-        encode_primary_window_placement, forbidden_computer_target_message, handle_notification,
-        hook_state_config_value, index_app_logos, initialize_capabilities, is_hidden_timeline_item,
+        api_key_account_login_started_action, appearance_theme_key, apps_list_params,
+        bounded_marketplace_load_error_count, bounded_remote_identifier,
+        browser_account_login_started_action, browser_origin_auto_decision,
+        browser_origin_elicitation_response, browser_policy_target, browser_resource_auto_decision,
+        browser_resource_elicitation_response, cancel_pending_worktree_runtime,
+        combined_git_generation_prompt, combined_git_output_schema, commit_generation_prompt,
+        commit_message_output_schema, composer_config_key, composer_inputs,
+        computer_application_value, computer_tool_request_meta,
+        computer_tool_requires_interruption_monitor, computer_use_allowed_app_ids,
+        computer_use_allowed_app_ids_value, computer_use_app_authorized,
+        computer_use_dynamic_tools, computer_window_argument, computer_window_schema,
+        device_code_account_login_started_action, drag_coordinates, encode_appearance_preferences,
+        encode_browser_download_preferences, encode_browser_permissions, encode_git_preferences,
+        encode_keyboard_shortcut_preferences, encode_primary_window_placement,
+        forbidden_computer_target_message, handle_notification, hook_state_config_value,
+        index_app_logos, initialize_capabilities, is_hidden_timeline_item,
         linux_computer_use_dynamic_tools, map_account_token_activity, map_app_detail,
         map_app_server_approval, map_apps, map_fuzzy_file_search_results, map_mcp_elicitation,
         map_mcp_resource_contents, map_mcp_runtime_catalog, map_model_options, map_plugin_detail,
@@ -18289,6 +18320,17 @@ mod tests {
                 && authorization_url == "https://auth.openai.com/device"
                 && user_code == "ABCD-EFGH"
         ));
+        assert!(matches!(
+            api_key_account_login_started_action(LoginAccountResponse::ApiKey),
+            Some(Action::RefreshAccount)
+        ));
+        assert!(
+            api_key_account_login_started_action(LoginAccountResponse::ChatGpt {
+                login_id: "login-1".to_owned(),
+                auth_url: "https://auth.openai.com/".to_owned(),
+            })
+            .is_none()
+        );
         assert!(
             device_code_account_login_started_action(LoginAccountResponse::ChatGpt {
                 login_id: "login-1".to_owned(),

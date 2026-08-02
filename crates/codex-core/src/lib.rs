@@ -3739,6 +3739,7 @@ pub enum AccountAuthOperation {
     #[default]
     Idle,
     StartingLogin,
+    SubmittingApiKey,
     AwaitingLogin,
     CancelingLogin,
     LoggingOut,
@@ -5070,12 +5071,14 @@ pub enum Action {
     AccountLoadFailed(String),
     StartAccountLogin,
     StartAccountDeviceCodeLogin,
+    StartApiKeyLogin,
     AccountLoginStarted {
         login_id: String,
         authorization_url: String,
         user_code: Option<String>,
     },
     AccountLoginStartFailed(String),
+    AccountApiKeyLoginStartFailed,
     AccountLoginAuthorizationUrlRejected,
     CancelAccountLogin,
     AccountLoginCanceled {
@@ -13585,8 +13588,22 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::AccountLoadFailed(message) => {
+            let submitting_api_key =
+                state.account.auth_operation == AccountAuthOperation::SubmittingApiKey;
             state.account.status = LoadStatus::Failed;
-            state.account.error = Some(bounded_string(message, MAX_ACCOUNT_FIELD_BYTES));
+            state.account.error = Some(if submitting_api_key {
+                "Could not load account details.".to_owned()
+            } else {
+                bounded_string(message, MAX_ACCOUNT_FIELD_BYTES)
+            });
+            if submitting_api_key {
+                state.account.auth_operation = AccountAuthOperation::Idle;
+                state.account.login_id = None;
+                state.account.login_verification_url = None;
+                state.account.login_user_code = None;
+                state.account.auth_error =
+                    Some("API key sign-in failed. Please try again.".to_owned());
+            }
             Vec::new()
         }
         Action::StartAccountLogin => {
@@ -13614,6 +13631,19 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.account.login_user_code = None;
             state.account.auth_error = None;
             vec![Effect::StartAccountDeviceCodeLogin]
+        }
+        Action::StartApiKeyLogin => {
+            if state.account.profile.is_some()
+                || state.account.auth_operation != AccountAuthOperation::Idle
+            {
+                return Vec::new();
+            }
+            state.account.auth_operation = AccountAuthOperation::SubmittingApiKey;
+            state.account.login_id = None;
+            state.account.login_verification_url = None;
+            state.account.login_user_code = None;
+            state.account.auth_error = None;
+            Vec::new()
         }
         Action::AccountLoginStarted {
             login_id,
@@ -13653,6 +13683,17 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.account.login_verification_url = None;
                 state.account.login_user_code = None;
                 state.account.auth_error = Some(bounded_string(message, MAX_ACCOUNT_FIELD_BYTES));
+            }
+            Vec::new()
+        }
+        Action::AccountApiKeyLoginStartFailed => {
+            if state.account.auth_operation == AccountAuthOperation::SubmittingApiKey {
+                state.account.auth_operation = AccountAuthOperation::Idle;
+                state.account.login_id = None;
+                state.account.login_verification_url = None;
+                state.account.login_user_code = None;
+                state.account.auth_error =
+                    Some("API key sign-in failed. Please try again.".to_owned());
             }
             Vec::new()
         }
@@ -13700,6 +13741,23 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::AccountLoginCompleted { login_id, success } => {
             if state.account.auth_operation == AccountAuthOperation::Idle {
+                return Vec::new();
+            }
+            if state.account.auth_operation == AccountAuthOperation::SubmittingApiKey {
+                if login_id.is_some() {
+                    return Vec::new();
+                }
+                state.account.auth_operation = AccountAuthOperation::Idle;
+                state.account.login_id = None;
+                state.account.login_verification_url = None;
+                state.account.login_user_code = None;
+                if success {
+                    state.account.auth_error = None;
+                    state.account.status = LoadStatus::Loading;
+                    return vec![Effect::LoadAccount];
+                }
+                state.account.auth_error =
+                    Some("API key sign-in failed. Please try again.".to_owned());
                 return Vec::new();
             }
             let Some(expected) = state.account.login_id.as_deref() else {
@@ -25253,6 +25311,130 @@ mod tests {
             [Effect::LoadAccount]
         );
         assert!(state.account.profile.is_none());
+    }
+
+    #[test]
+    fn api_key_login_is_single_flight_and_loads_after_anonymous_completion() {
+        let mut state = AppState::default();
+
+        assert!(reduce(&mut state, Action::StartApiKeyLogin).is_empty());
+        assert_eq!(
+            state.account.auth_operation,
+            AccountAuthOperation::SubmittingApiKey
+        );
+        assert!(reduce(&mut state, Action::StartApiKeyLogin).is_empty());
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::AccountLoginCompleted {
+                    login_id: Some("unexpected-login".to_owned()),
+                    success: true,
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.account.auth_operation,
+            AccountAuthOperation::SubmittingApiKey
+        );
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::AccountLoginCompleted {
+                    login_id: None,
+                    success: true,
+                },
+            ),
+            [Effect::LoadAccount]
+        );
+        assert_eq!(state.account.auth_operation, AccountAuthOperation::Idle);
+        assert_eq!(state.account.status, LoadStatus::Loading);
+    }
+
+    #[test]
+    fn api_key_login_failures_are_generic_and_clear_the_submission() {
+        let mut state = AppState::default();
+
+        reduce(&mut state, Action::StartApiKeyLogin);
+        reduce(
+            &mut state,
+            Action::AccountLoginCompleted {
+                login_id: None,
+                success: false,
+            },
+        );
+        assert_eq!(state.account.auth_operation, AccountAuthOperation::Idle);
+        assert_eq!(
+            state.account.auth_error.as_deref(),
+            Some("API key sign-in failed. Please try again.")
+        );
+        reduce(&mut state, Action::StartApiKeyLogin);
+        reduce(&mut state, Action::AccountApiKeyLoginStartFailed);
+        assert_eq!(state.account.auth_operation, AccountAuthOperation::Idle);
+        assert_eq!(
+            state.account.auth_error.as_deref(),
+            Some("API key sign-in failed. Please try again.")
+        );
+        reduce(&mut state, Action::StartApiKeyLogin);
+        reduce(
+            &mut state,
+            Action::AccountLoadFailed("provider detail".to_owned()),
+        );
+        assert_eq!(state.account.auth_operation, AccountAuthOperation::Idle);
+        assert_eq!(
+            state.account.auth_error.as_deref(),
+            Some("API key sign-in failed. Please try again.")
+        );
+        assert_eq!(
+            state.account.error.as_deref(),
+            Some("Could not load account details.")
+        );
+    }
+
+    #[test]
+    fn api_key_login_transients_clear_after_account_load_disconnect_or_logout() {
+        let mut state = AppState::default();
+
+        reduce(&mut state, Action::StartApiKeyLogin);
+        reduce(
+            &mut state,
+            Action::AccountLoaded {
+                profile: Some(AccountProfile {
+                    kind: AccountKind::ApiKey,
+                    email: None,
+                    plan: None,
+                }),
+                requires_openai_auth: false,
+                usage_limits: Vec::new(),
+                credits: None,
+                rate_limit_reset_credits_available: None,
+                usage_error: None,
+                token_activity: None,
+                token_activity_error: None,
+            },
+        );
+        assert_eq!(state.account.auth_operation, AccountAuthOperation::Idle);
+        assert!(state.account.auth_error.is_none());
+
+        state.account.auth_operation = AccountAuthOperation::SubmittingApiKey;
+        state.account.login_id = Some("stale".to_owned());
+        state.account.auth_error = Some("stale error".to_owned());
+        state.connection = ConnectionStatus::Online;
+        reduce(&mut state, Action::ConnectionLost);
+        assert_eq!(state.account.auth_operation, AccountAuthOperation::Idle);
+        assert!(state.account.login_id.is_none());
+        assert!(state.account.auth_error.is_none());
+
+        state.account.auth_operation = AccountAuthOperation::SubmittingApiKey;
+        state.account.auth_error = Some("stale error".to_owned());
+        assert_eq!(
+            reduce(&mut state, Action::AccountLoggedOut),
+            [Effect::LoadAccount]
+        );
+        assert_eq!(state.account.auth_operation, AccountAuthOperation::Idle);
+        assert!(state.account.auth_error.is_none());
     }
 
     #[test]
