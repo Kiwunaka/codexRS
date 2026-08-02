@@ -2178,19 +2178,20 @@ impl ManagedChild {
         {
             drop(self.job.take());
         }
-        #[cfg(not(windows))]
+        #[cfg(unix)]
         {
-            #[cfg(unix)]
             let killed_group = i32::try_from(self.child.id())
                 .ok()
                 .and_then(Pid::from_raw)
                 .is_some_and(|pid| kill_process_group(pid, Signal::KILL).is_ok());
-            #[cfg(not(unix))]
-            let killed_group = false;
-
             if !killed_group {
                 let _ = self.child.kill();
             }
+            let _ = self.child.wait();
+        }
+        #[cfg(not(any(windows, unix)))]
+        {
+            let _ = self.child.kill();
         }
     }
 }
@@ -2208,6 +2209,8 @@ mod tests {
     use std::env;
     use std::fs;
     use std::path::PathBuf;
+    #[cfg(unix)]
+    use std::process::Command;
     use std::time::{Duration, Instant};
 
     use codex_protocol::{
@@ -2218,6 +2221,8 @@ mod tests {
     use crossbeam_channel::bounded;
     use serde_json::{Value, json};
 
+    #[cfg(unix)]
+    use super::ManagedChild;
     use super::{
         AppServerConfig, AppServerConnection, AppServerError, AppServerEvent, CodexHome,
         CodexHomeKind, EVENT_BACKPRESSURE_TIMEOUT, MAX_REMOTE_CONTROL_CURSOR_BYTES,
@@ -2248,6 +2253,19 @@ mod tests {
         assert!(home.path().is_absolute());
         assert_eq!(home.kind(), CodexHomeKind::Configured);
         assert_eq!(MAX_THREAD_PAGE_LIMIT, 100);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn forced_shutdown_reaps_the_unix_app_server_child() -> Result<(), Box<dyn std::error::Error>> {
+        let mut command = Command::new("sleep");
+        command.arg("60");
+        let mut child = ManagedChild::spawn(&mut command)?;
+
+        child.shutdown(Duration::ZERO)?;
+
+        assert!(child.child.try_wait()?.is_some());
+        Ok(())
     }
 
     #[test]
