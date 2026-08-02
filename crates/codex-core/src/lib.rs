@@ -15382,6 +15382,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }]
         }
         Action::SkillsInvalidated => {
+            if state.marketplace.skills_status == Some(LoadStatus::Loading) {
+                return Vec::new();
+            }
             state.marketplace.skills_status = Some(LoadStatus::Loading);
             vec![Effect::RefreshSkills {
                 cwds: composer_workspace_roots(state),
@@ -20291,6 +20294,20 @@ mod tests {
         );
         assert!(state.composer.is_empty());
         assert!(state.composer_attachments.is_empty());
+    }
+
+    #[test]
+    fn skills_invalidation_coalesces_while_loading() {
+        let mut state = AppState::default();
+        assert_eq!(
+            reduce(&mut state, Action::SkillsInvalidated),
+            [Effect::RefreshSkills {
+                cwds: Vec::new(),
+                force_reload: false,
+            }]
+        );
+        assert_eq!(state.marketplace.skills_status, Some(LoadStatus::Loading));
+        assert!(reduce(&mut state, Action::SkillsInvalidated).is_empty());
     }
 
     #[test]
