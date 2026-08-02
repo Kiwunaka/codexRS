@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{ActiveTheme, AxisExt};
+use crate::{ActiveTheme, AxisExt, motion::is_reduced_motion};
 use gpui::{
     App, Axis, BorderStyle, Bounds, ContentMask, Corner, CursorStyle, Edges, Element, ElementId,
     GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId, IntoElement, IsZero,
@@ -628,6 +628,8 @@ impl Element for Scrollbar {
                     } else {
                         Self::style_for_hovered_bar(cx)
                     }
+                } else if is_reduced_motion(cx) {
+                    self.style_for_idle(cx)
                 } else {
                     let mut idle_state = self.style_for_idle(cx);
                     // Delay 2s to fade out the scrollbar thumb (in 1s)
