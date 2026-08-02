@@ -62,8 +62,8 @@ use codex_core::{
     reduce, validate_mcp_form_content,
 };
 use codex_platform::{
-    computer_use_platform_available, default_browser_download_dir, desktop_work_areas,
-    normalize_browser_origin, read_artifact_image,
+    BackgroundCompletionNotifier, computer_use_platform_available, default_browser_download_dir,
+    desktop_work_areas, normalize_browser_origin, read_artifact_image,
 };
 use codex_protocol::SecretString;
 use gpui::{
@@ -4809,6 +4809,7 @@ struct WorkspaceView {
     backend: Option<Backend>,
     window_handle: AnyWindowHandle,
     last_window_title: Option<String>,
+    background_completion_notifier: BackgroundCompletionNotifier,
     composer: Entity<InputState>,
     api_key_login: Entity<InputState>,
     api_key_login_visible: bool,
@@ -5880,6 +5881,7 @@ impl WorkspaceView {
             backend,
             window_handle: window.window_handle(),
             last_window_title: None,
+            background_completion_notifier: BackgroundCompletionNotifier::default(),
             composer,
             api_key_login,
             api_key_login_visible: false,
@@ -6962,7 +6964,15 @@ impl WorkspaceView {
                 }),
                 _ => None,
             };
+            let previous_background_completion_task_id =
+                self.state.background_completion_task_id.clone();
             self.dispatch(action, cx);
+            if background_completion_notification_transition(
+                previous_background_completion_task_id.as_deref(),
+                self.state.background_completion_task_id.as_deref(),
+            ) {
+                self.background_completion_notifier.notify_completed();
+            }
             if login_form_terminal {
                 self.clear_login_forms_in_window(cx);
             }
@@ -41401,6 +41411,13 @@ fn background_chat_window_title(state: &AppState) -> String {
     }
 }
 
+fn background_completion_notification_transition(
+    previous: Option<&str>,
+    current: Option<&str>,
+) -> bool {
+    current.is_some_and(|task_id| previous != Some(task_id))
+}
+
 fn task_status_icon(status: TaskRunStatus, cx: &App) -> (IconName, gpui::Hsla) {
     match status {
         TaskRunStatus::Idle => (IconName::LoaderCircle, cx.theme().muted_foreground),
@@ -45049,14 +45066,15 @@ mod tests {
         app_mention_prompt, appearance_color, appearance_color_value,
         appearance_theme_share_string, archived_chat_groups, archived_chat_projects,
         archived_delete_confirmation_copy, background_chat_window_title,
-        background_terminal_summary, bounded_keyboard_shortcut_search_query,
-        bounded_settings_search_query, bounded_thread_find_query, browser_display_url,
-        browser_navigation_url, browser_surface_coordinates, build_plugin_catalog_sections,
-        case_insensitive_match_ranges, command_task_slot, composer_app_commands,
-        composer_at_skill_commands, composer_desktop_app_commands, composer_file_query,
-        composer_file_search_max_height, composer_model_picker_items, composer_model_placeholder,
-        composer_plugin_commands, composer_service_tier_command_for_query,
-        composer_service_tier_commands, composer_skill_command_for_query, composer_skill_commands,
+        background_completion_notification_transition, background_terminal_summary,
+        bounded_keyboard_shortcut_search_query, bounded_settings_search_query,
+        bounded_thread_find_query, browser_display_url, browser_navigation_url,
+        browser_surface_coordinates, build_plugin_catalog_sections, case_insensitive_match_ranges,
+        command_task_slot, composer_app_commands, composer_at_skill_commands,
+        composer_desktop_app_commands, composer_file_query, composer_file_search_max_height,
+        composer_model_picker_items, composer_model_placeholder, composer_plugin_commands,
+        composer_service_tier_command_for_query, composer_service_tier_commands,
+        composer_skill_command_for_query, composer_skill_commands,
         composer_slash_command_for_prefix, connection_send_failure, decode_mcp_form_image_data_url,
         default_branch_name, diff_file_review_rows, diff_file_sections,
         extract_code_comment_findings, fetch_plugin_logo_blocking, find_timeline_matches,
@@ -45149,6 +45167,27 @@ mod tests {
         state.tasks[1].status = TaskRunStatus::Completed;
         state.tasks[2].status = TaskRunStatus::Idle;
         assert_eq!(background_chat_window_title(&state), "codexRS");
+    }
+
+    #[test]
+    fn background_completion_notification_requires_a_new_completion_id() {
+        assert!(!background_completion_notification_transition(None, None));
+        assert!(background_completion_notification_transition(
+            None,
+            Some("completed")
+        ));
+        assert!(!background_completion_notification_transition(
+            Some("completed"),
+            Some("completed")
+        ));
+        assert!(background_completion_notification_transition(
+            Some("previous"),
+            Some("completed")
+        ));
+        assert!(!background_completion_notification_transition(
+            Some("completed"),
+            None
+        ));
     }
 
     #[test]
