@@ -4710,6 +4710,49 @@ fn account_device_code(account: &AccountState) -> Option<(String, String)> {
         .flatten()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BedrockWorkspaceNotice {
+    ManagedCredentials,
+    AwsCredentials,
+    Connected,
+    SavingCredentials,
+    RestartingRuntime,
+}
+
+impl BedrockWorkspaceNotice {
+    const fn copy(self) -> &'static str {
+        match self {
+            Self::ManagedCredentials => "Amazon Bedrock is using a managed API key.",
+            Self::AwsCredentials => "Amazon Bedrock is using AWS credentials.",
+            Self::Connected => "Amazon Bedrock is connected.",
+            Self::SavingCredentials => "Saving Amazon Bedrock credentials…",
+            Self::RestartingRuntime => {
+                "Codex is restarting its managed runtime after saving Amazon Bedrock credentials."
+            }
+        }
+    }
+
+    const fn is_busy(self) -> bool {
+        matches!(self, Self::SavingCredentials | Self::RestartingRuntime)
+    }
+}
+
+fn bedrock_workspace_notice(account: &AccountState) -> Option<BedrockWorkspaceNotice> {
+    match account.auth_operation {
+        AccountAuthOperation::SubmittingBedrock => Some(BedrockWorkspaceNotice::SavingCredentials),
+        AccountAuthOperation::RestartingBedrock => Some(BedrockWorkspaceNotice::RestartingRuntime),
+        _ => account.profile.as_ref().and_then(|profile| {
+            (profile.kind == AccountKind::AmazonBedrock).then_some(
+                match profile.uses_codex_managed_credentials {
+                    Some(true) => BedrockWorkspaceNotice::ManagedCredentials,
+                    Some(false) => BedrockWorkspaceNotice::AwsCredentials,
+                    None => BedrockWorkspaceNotice::Connected,
+                },
+            )
+        }),
+    }
+}
+
 fn first_run_account_load_error(state: &AppState) -> Option<&str> {
     if state.connection == ConnectionStatus::Online && state.account.status == LoadStatus::Failed {
         state.account.error.as_deref()
@@ -15873,12 +15916,71 @@ impl WorkspaceView {
         cx.notify();
     }
 
+    fn render_bedrock_workspace_notice(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let notice = bedrock_workspace_notice(&self.state.account)?;
+        let busy = notice.is_busy();
+        let icon = if busy {
+            IconName::LoaderCircle
+        } else {
+            IconName::Info
+        };
+
+        Some(
+            h_flex()
+                .w_full()
+                .min_w_0()
+                .max_w(px(820.0))
+                .mx_auto()
+                .mt_2()
+                .px_3()
+                .py_2()
+                .gap_3()
+                .items_center()
+                .justify_between()
+                .flex_wrap()
+                .rounded_lg()
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().sidebar)
+                .child(
+                    h_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap_2()
+                        .items_center()
+                        .child(
+                            Icon::new(icon)
+                                .small()
+                                .text_color(cx.theme().muted_foreground),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(notice.copy()),
+                        ),
+                )
+                .child(
+                    Button::new("bedrock-workspace-manage-credentials")
+                        .label("Manage credentials")
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.open_settings_section(SettingsSection::Profile, cx);
+                        })),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn render_task_workspace(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let Some(task_id) = self.state.selected_task_id.clone() else {
             let new_chat_cwd = self.state.new_chat_cwd.clone();
             let recovery = startup_recovery_card(&self.state.connection, self.backend.is_some());
             let first_run_sign_in = first_run_sign_in_visible(&self.state);
             let first_run_workspace_picker = first_run_workspace_picker_visible(&self.state);
+            let bedrock_workspace_notice = self.render_bedrock_workspace_notice(cx);
             let account_auth_operation = self.state.account.auth_operation;
             let account_auth_error = self.state.account.auth_error.clone();
             let account_device_code = account_device_code(&self.state.account);
@@ -15914,6 +16016,9 @@ impl WorkspaceView {
                                 .text_color(cx.theme().muted_foreground)
                                 .child("Start a new chat or open one from the sidebar."),
                         )
+                        .when_some(bedrock_workspace_notice, |empty, notice| {
+                            empty.child(notice)
+                        })
                         .when_some(recovery, |empty, recovery| {
                             empty.child(
                                 v_flex()
@@ -16258,6 +16363,7 @@ impl WorkspaceView {
                 .into_any_element();
         };
 
+        let bedrock_workspace_notice = self.render_bedrock_workspace_notice(cx);
         let task = self
             .state
             .tasks
@@ -16534,6 +16640,9 @@ impl WorkspaceView {
                                         )
                                     }),
                             )
+                            .when_some(bedrock_workspace_notice, |workspace, notice| {
+                                workspace.child(notice)
+                            })
                             .child(
                                 list(
                                     self.timeline_list.clone(),
@@ -45117,24 +45226,25 @@ mod tests {
     use super::{
         ACTIVE_KEYBOARD_SHORTCUTS, APPEARANCE_THEME_SHARE_PREFIX, ArchivedChatDeleteScope,
         ArchivedChatKindFilter, ArchivedChatProjectFilter, ArchivedChatSortKey, AssistantFinding,
-        CONVERSATION_MARKDOWN_TRUNCATED_NOTICE, DiffLineKind, DiffReviewRow, INIT_AGENTS_PROMPT,
-        KeyboardShortcutGroup, MAX_CONVERSATION_MARKDOWN_BYTES, MAX_NAVIGATION_HISTORY_ENTRIES,
-        MAX_THREAD_FIND_HISTORY_PAGES, MAX_THREAD_FIND_MATCHES, MODEL_AVAILABILITY_NUX_SOL_COPY,
-        NavigationHistory, NavigationLocation, PaletteCommand, PaletteGroup, ReasoningEffortStep,
-        SettingsSection, ShellWidthClass, TaskCopyKind, ThreadFindSurface, accelerators_conflict,
-        account_daily_usage_rows, account_device_code, adjacent_task_id, app_chatgpt_url,
-        app_mention_prompt, appearance_color, appearance_color_value,
-        appearance_theme_share_string, archived_chat_groups, archived_chat_projects,
-        archived_delete_confirmation_copy, background_chat_running_count,
+        BedrockWorkspaceNotice, CONVERSATION_MARKDOWN_TRUNCATED_NOTICE, DiffLineKind,
+        DiffReviewRow, INIT_AGENTS_PROMPT, KeyboardShortcutGroup, MAX_CONVERSATION_MARKDOWN_BYTES,
+        MAX_NAVIGATION_HISTORY_ENTRIES, MAX_THREAD_FIND_HISTORY_PAGES, MAX_THREAD_FIND_MATCHES,
+        MODEL_AVAILABILITY_NUX_SOL_COPY, NavigationHistory, NavigationLocation, PaletteCommand,
+        PaletteGroup, ReasoningEffortStep, SettingsSection, ShellWidthClass, TaskCopyKind,
+        ThreadFindSurface, accelerators_conflict, account_daily_usage_rows, account_device_code,
+        adjacent_task_id, app_chatgpt_url, app_mention_prompt, appearance_color,
+        appearance_color_value, appearance_theme_share_string, archived_chat_groups,
+        archived_chat_projects, archived_delete_confirmation_copy, background_chat_running_count,
         background_chat_window_title, background_completion_notification_transition,
-        background_terminal_summary, bounded_keyboard_shortcut_search_query,
-        bounded_settings_search_query, bounded_thread_find_query, browser_display_url,
-        browser_navigation_url, browser_surface_coordinates, build_plugin_catalog_sections,
-        case_insensitive_match_ranges, command_task_slot, composer_app_commands,
-        composer_at_skill_commands, composer_desktop_app_commands, composer_file_query,
-        composer_file_search_max_height, composer_model_picker_items, composer_model_placeholder,
-        composer_plugin_commands, composer_service_tier_command_for_query,
-        composer_service_tier_commands, composer_skill_command_for_query, composer_skill_commands,
+        background_terminal_summary, bedrock_workspace_notice,
+        bounded_keyboard_shortcut_search_query, bounded_settings_search_query,
+        bounded_thread_find_query, browser_display_url, browser_navigation_url,
+        browser_surface_coordinates, build_plugin_catalog_sections, case_insensitive_match_ranges,
+        command_task_slot, composer_app_commands, composer_at_skill_commands,
+        composer_desktop_app_commands, composer_file_query, composer_file_search_max_height,
+        composer_model_picker_items, composer_model_placeholder, composer_plugin_commands,
+        composer_service_tier_command_for_query, composer_service_tier_commands,
+        composer_skill_command_for_query, composer_skill_commands,
         composer_slash_command_for_prefix, connection_send_failure, decode_mcp_form_image_data_url,
         default_branch_name, diff_file_review_rows, diff_file_sections,
         extract_code_comment_findings, fetch_plugin_logo_blocking, find_timeline_matches,
@@ -45633,6 +45743,73 @@ mod tests {
 
         account.auth_operation = AccountAuthOperation::Idle;
         assert!(account_device_code(&account).is_none());
+    }
+
+    #[test]
+    fn bedrock_workspace_notice_uses_typed_account_state() {
+        let mut account = AccountState::default();
+        assert_eq!(bedrock_workspace_notice(&account), None);
+
+        account.profile = Some(AccountProfile {
+            kind: AccountKind::ChatGpt,
+            email: None,
+            plan: None,
+            uses_codex_managed_credentials: None,
+        });
+        assert_eq!(bedrock_workspace_notice(&account), None);
+
+        account.profile = Some(AccountProfile {
+            kind: AccountKind::ApiKey,
+            email: None,
+            plan: None,
+            uses_codex_managed_credentials: None,
+        });
+        assert_eq!(bedrock_workspace_notice(&account), None);
+
+        account.profile = Some(AccountProfile {
+            kind: AccountKind::AmazonBedrock,
+            email: None,
+            plan: None,
+            uses_codex_managed_credentials: None,
+        });
+        assert_eq!(
+            bedrock_workspace_notice(&account),
+            Some(BedrockWorkspaceNotice::Connected)
+        );
+
+        account.profile = Some(AccountProfile {
+            kind: AccountKind::AmazonBedrock,
+            email: None,
+            plan: None,
+            uses_codex_managed_credentials: Some(true),
+        });
+        assert_eq!(
+            bedrock_workspace_notice(&account),
+            Some(BedrockWorkspaceNotice::ManagedCredentials)
+        );
+
+        account.profile = Some(AccountProfile {
+            kind: AccountKind::AmazonBedrock,
+            email: None,
+            plan: None,
+            uses_codex_managed_credentials: Some(false),
+        });
+        assert_eq!(
+            bedrock_workspace_notice(&account),
+            Some(BedrockWorkspaceNotice::AwsCredentials)
+        );
+
+        account.profile = None;
+        account.auth_operation = AccountAuthOperation::SubmittingBedrock;
+        assert_eq!(
+            bedrock_workspace_notice(&account),
+            Some(BedrockWorkspaceNotice::SavingCredentials)
+        );
+        account.auth_operation = AccountAuthOperation::RestartingBedrock;
+        assert_eq!(
+            bedrock_workspace_notice(&account),
+            Some(BedrockWorkspaceNotice::RestartingRuntime)
+        );
     }
 
     #[test]
