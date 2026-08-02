@@ -7466,6 +7466,7 @@ fn run_effect(
             ),
         },
         Effect::RefreshMarketplace {
+            generation,
             cwds,
             directory_tab,
             force_refetch,
@@ -7603,6 +7604,7 @@ fn run_effect(
                     emit(
                         events,
                         Action::MarketplaceLoaded {
+                            generation,
                             plugins: cards,
                             sources,
                             marketplace_load_error_count,
@@ -7611,7 +7613,10 @@ fn run_effect(
                 }
                 Err(error) => emit(
                     events,
-                    Action::MarketplaceFailed(format!("failed to load marketplace: {error}")),
+                    Action::MarketplaceFailed {
+                        generation,
+                        message: format!("failed to load marketplace: {error}"),
+                    },
                 ),
             }
         }
