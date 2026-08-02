@@ -6262,6 +6262,10 @@ fn run_effect(
             let runtime_workspace_roots = cwd.clone().map(|path| vec![path]);
             let dynamic_tools = computer_use_dynamic_tools_for_platform();
             let computer_use_attached = dynamic_tools.is_some();
+            let prompt = RetryableUserMessage {
+                text: initial_message,
+                attachments,
+            };
             match app_server.start_thread(ThreadStartParams {
                 model: model.clone(),
                 service_tier: Some(service_tier.clone()),
@@ -6309,10 +6313,7 @@ fn run_effect(
                         StartTurnRequest {
                             task_id: task_id.clone(),
                             submission: RetryableTurnSubmission {
-                                messages: vec![RetryableUserMessage {
-                                    text: initial_message,
-                                    attachments,
-                                }],
+                                messages: vec![prompt.clone()],
                                 model,
                                 effort,
                                 service_tier,
@@ -6333,7 +6334,11 @@ fn run_effect(
                         Err(error) => {
                             emit(
                                 events,
-                                Action::SetStatus(format!("failed to start turn: {error}")),
+                                Action::ComposerSubmissionFailed {
+                                    task_id: Some(task_id.clone()),
+                                    prompt,
+                                    message: format!("failed to start turn: {error}"),
+                                },
                             );
                             false
                         }
@@ -6361,7 +6366,11 @@ fn run_effect(
                 }
                 Err(error) => emit(
                     events,
-                    Action::SetStatus(format!("failed to create task: {error}")),
+                    Action::ComposerSubmissionFailed {
+                        task_id: None,
+                        prompt,
+                        message: format!("failed to create task: {error}"),
+                    },
                 ),
             }
         }
@@ -7160,12 +7169,13 @@ fn run_effect(
             goal_objective,
         } => {
             let goal_task_id = task_id.clone();
+            let prompt = RetryableUserMessage { text, attachments };
             match start_turn(
                 app_server,
                 StartTurnRequest {
                     task_id,
                     submission: RetryableTurnSubmission {
-                        messages: vec![RetryableUserMessage { text, attachments }],
+                        messages: vec![prompt.clone()],
                         model,
                         effort,
                         service_tier,
@@ -7223,7 +7233,11 @@ fn run_effect(
                     } else {
                         emit(
                             events,
-                            Action::SetStatus(format!("failed to start turn: {error}")),
+                            Action::ComposerSubmissionFailed {
+                                task_id: Some(goal_task_id),
+                                prompt,
+                                message: format!("failed to start turn: {error}"),
+                            },
                         );
                     }
                 }
@@ -7254,7 +7268,11 @@ fn run_effect(
                 }
                 Err(error) => emit(
                     events,
-                    Action::SetStatus(format!("failed to steer turn: {error}")),
+                    Action::ComposerSubmissionFailed {
+                        task_id: Some(task_id),
+                        prompt: message,
+                        message: format!("failed to steer turn: {error}"),
+                    },
                 ),
             }
         }

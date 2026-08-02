@@ -4775,6 +4775,11 @@ pub enum Action {
     AddComposerDesktopApp(String),
     RemoveComposerAttachment(usize),
     SubmitComposer,
+    ComposerSubmissionFailed {
+        task_id: Option<String>,
+        prompt: RetryableUserMessage,
+        message: String,
+    },
     InterruptActiveTurn,
     TurnStarted {
         task_id: String,
@@ -11577,6 +11582,18 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     memory_preferences: state.chat_memory.new_chat_preferences,
                 }]
             }
+        }
+        Action::ComposerSubmissionFailed {
+            task_id,
+            mut prompt,
+            message,
+        } => {
+            state.status_message = Some(bounded_string(message, 16 * 1024));
+            if state.selected_task_id == task_id {
+                normalize_retryable_user_message(&mut prompt);
+                restore_retry_prompt(state, &prompt);
+            }
+            Vec::new()
         }
         Action::InterruptActiveTurn => {
             let Some(task_id) = state.selected_task_id.clone() else {
@@ -21770,6 +21787,72 @@ mod tests {
         assert!(state.composer_attachments.is_empty());
         assert_eq!(state.composer_error, None);
         assert!(reduce(&mut state, Action::SubmitComposer).is_empty());
+    }
+
+    #[test]
+    fn failed_submission_restores_only_the_owning_chat_prompt() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(&mut state, Action::TaskCreated(task("t2")));
+        reduce(&mut state, Action::SelectTask("t1".to_owned()));
+        reduce(
+            &mut state,
+            Action::TaskRuntimeLoaded {
+                task_id: "t1".to_owned(),
+                generation: 1,
+                active_turn_id: None,
+                active_turn_is_review: false,
+                run_status: Some(TaskRunStatus::Idle),
+            },
+        );
+        let attachment = ComposerAttachment {
+            path: repository_path().join("note.txt"),
+            name: "note.txt".to_owned(),
+            kind: ComposerAttachmentKind::Mention,
+        };
+        let prompt = RetryableUserMessage {
+            text: "inspect the diff".to_owned(),
+            attachments: vec![attachment.clone()],
+        };
+        state.composer = prompt.text.clone();
+        state.composer_attachments = prompt.attachments.clone();
+
+        assert!(matches!(
+            reduce(&mut state, Action::SubmitComposer).as_slice(),
+            [Effect::StartTurn { task_id, .. }] if task_id == "t1"
+        ));
+        assert!(state.composer.is_empty());
+        assert!(state.composer_attachments.is_empty());
+
+        reduce(
+            &mut state,
+            Action::ComposerSubmissionFailed {
+                task_id: Some("t1".to_owned()),
+                prompt: prompt.clone(),
+                message: "failed to start turn".to_owned(),
+            },
+        );
+        assert_eq!(state.composer, prompt.text);
+        assert_eq!(state.composer_attachments, [attachment]);
+        assert_eq!(
+            state.status_message.as_deref(),
+            Some("failed to start turn")
+        );
+
+        state.composer.clear();
+        state.composer_attachments.clear();
+        reduce(&mut state, Action::SelectTask("t2".to_owned()));
+        reduce(
+            &mut state,
+            Action::ComposerSubmissionFailed {
+                task_id: Some("t1".to_owned()),
+                prompt,
+                message: "late failure".to_owned(),
+            },
+        );
+        assert!(state.composer.is_empty());
+        assert!(state.composer_attachments.is_empty());
+        assert_eq!(state.status_message.as_deref(), Some("late failure"));
     }
 
     #[test]
