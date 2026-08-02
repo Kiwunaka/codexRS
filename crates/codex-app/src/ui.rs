@@ -28335,6 +28335,8 @@ impl WorkspaceView {
             )))
             .label(if pending {
                 format!("Installing {display_name}…")
+            } else if plugin.disabled_by_admin {
+                "Disabled by admin".to_owned()
             } else if plugin.installable {
                 format!("Install {display_name}")
             } else {
@@ -30003,6 +30005,7 @@ impl WorkspaceView {
         let pending = self.state.marketplace.pending_plugin_id.as_deref() == Some(&plugin.id);
         let any_pending = self.state.marketplace.pending_plugin_id.is_some();
         let installable = plugin.installable;
+        let disabled_by_admin = plugin.disabled_by_admin;
         h_flex()
             .flex_1()
             .min_w_0()
@@ -30123,7 +30126,9 @@ impl WorkspaceView {
                     } else {
                         IconName::Plus
                     })
-                    .tooltip(if installable {
+                    .tooltip(if disabled_by_admin {
+                        "Access is turned off by your admin"
+                    } else if installable {
                         "Install plugin"
                     } else {
                         "Plugin unavailable"
@@ -45279,6 +45284,7 @@ mod tests {
             installed: false,
             enabled: false,
             installable: true,
+            disabled_by_admin: false,
             requires_install_confirmation: false,
             featured: featured_rank.is_some(),
             featured_rank,
