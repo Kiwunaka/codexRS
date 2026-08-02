@@ -24432,9 +24432,15 @@ impl WorkspaceView {
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
                             .child(if selected_file.is_some() {
-                                "No bounded text diff is available for this file."
+                                if self.state.git.diff_status == Some(LoadStatus::Failed) {
+                                    self.state.git.diff_error.clone().unwrap_or_else(|| {
+                                        "This file's diff could not be loaded.".to_owned()
+                                    })
+                                } else {
+                                    "No bounded text diff is available for this file.".to_owned()
+                                }
                             } else {
-                                match scope {
+                                (match scope {
                                     GitDiffScope::LastTurn => {
                                         "The latest diffs are no longer available."
                                     }
@@ -24484,7 +24490,8 @@ impl WorkspaceView {
                                             }
                                         }
                                     }
-                                }
+                                })
+                                .to_owned()
                             })
                             .into_any_element()
                     } else {

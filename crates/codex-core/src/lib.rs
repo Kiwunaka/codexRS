@@ -5547,6 +5547,10 @@ pub enum Action {
         text: String,
         truncated: bool,
     },
+    DiffFailed {
+        generation: u64,
+        message: String,
+    },
     BranchDiffLoaded {
         generation: u64,
         base_sha: String,
@@ -17116,6 +17120,20 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
+        Action::DiffFailed {
+            generation,
+            message,
+        } => {
+            if generation == state.git.diff_generation {
+                let message = bounded_string(message, 16 * 1024);
+                state.git.unified_diff.clear();
+                state.git.diff_status = Some(LoadStatus::Failed);
+                state.git.diff_error = Some(message.clone());
+                state.git.diff_truncated = false;
+                state.status_message = Some(message);
+            }
+            Vec::new()
+        }
         Action::BranchDiffLoaded {
             generation,
             base_sha,
@@ -24224,6 +24242,43 @@ mod tests {
                 root: PathBuf::from("C:\\repo"),
             }]
         );
+    }
+
+    #[test]
+    fn selected_file_diff_failure_is_not_reported_as_empty_success() {
+        let mut state = AppState::default();
+        state.git.repository_root = Some(repository_path());
+        let path = PathBuf::from("src/lib.rs");
+        reduce(
+            &mut state,
+            Action::SelectDiffPath {
+                path: path.clone(),
+                scope: GitDiffScope::Unstaged,
+            },
+        );
+
+        reduce(
+            &mut state,
+            Action::DiffFailed {
+                generation: 0,
+                message: "stale failure".to_owned(),
+            },
+        );
+        assert_eq!(state.git.diff_status, Some(LoadStatus::Loading));
+        assert!(state.git.diff_error.is_none());
+
+        reduce(
+            &mut state,
+            Action::DiffFailed {
+                generation: 1,
+                message: "failed to load diff".to_owned(),
+            },
+        );
+        assert_eq!(state.git.selected_path.as_ref(), Some(&path));
+        assert_eq!(state.git.diff_status, Some(LoadStatus::Failed));
+        assert_eq!(state.git.diff_error.as_deref(), Some("failed to load diff"));
+        assert!(state.git.unified_diff.is_empty());
+        assert!(!state.git.diff_truncated);
     }
 
     #[test]

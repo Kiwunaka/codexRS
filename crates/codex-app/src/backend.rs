@@ -4383,20 +4383,13 @@ fn run_effect(
                         truncated: diff.truncated,
                     },
                 ),
-                Err(error) => {
-                    emit(
-                        events,
-                        Action::DiffLoaded {
-                            generation: *generation,
-                            text: String::new(),
-                            truncated: false,
-                        },
-                    );
-                    emit(
-                        events,
-                        Action::SetStatus(format!("failed to load diff: {error}")),
-                    );
-                }
+                Err(error) => emit(
+                    events,
+                    Action::DiffFailed {
+                        generation: *generation,
+                        message: format!("failed to load diff: {error}"),
+                    },
+                ),
             }
             return;
         }
