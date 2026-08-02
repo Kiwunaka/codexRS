@@ -2335,6 +2335,13 @@ pub struct AppCard {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledAppRuntime {
+    pub id: String,
+    pub enabled: bool,
+    pub callable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppToolCard {
     pub name: String,
     pub title: String,
@@ -2488,6 +2495,8 @@ pub struct MarketplaceState {
     pub selected_manage_tab: MarketplaceManageTab,
     pub status: Option<LoadStatus>,
     pub apps_status: Option<LoadStatus>,
+    pub installed_apps_status: Option<LoadStatus>,
+    pub installed_apps_thread_id: Option<String>,
     pub mcp_status: Option<LoadStatus>,
     pub skills_status: Option<LoadStatus>,
     pub query: String,
@@ -2496,6 +2505,7 @@ pub struct MarketplaceState {
     pub composer_plugins: Vec<PluginCard>,
     pub marketplace_sources: Vec<MarketplaceSourceCard>,
     pub apps: Vec<AppCard>,
+    pub installed_apps: Vec<InstalledAppRuntime>,
     pub apps_needing_auth: Vec<AppCard>,
     pub mcp_servers: Vec<McpServerCard>,
     pub plugin_mcp_servers: Vec<McpServerCard>,
@@ -2503,6 +2513,7 @@ pub struct MarketplaceState {
     pub errors: Vec<String>,
     pub marketplace_load_error_count: usize,
     pub app_errors: Vec<String>,
+    pub installed_apps_error: Option<String>,
     pub mcp_errors: Vec<String>,
     pub skill_errors: Vec<String>,
     pub pending_plugin_id: Option<String>,
@@ -5179,6 +5190,14 @@ pub enum Action {
         thread_id: Option<String>,
         message: String,
     },
+    InstalledAppsLoaded {
+        thread_id: Option<String>,
+        apps: Vec<InstalledAppRuntime>,
+    },
+    InstalledAppsFailed {
+        thread_id: Option<String>,
+        message: String,
+    },
     OpenAppDetails {
         app_id: String,
     },
@@ -5881,6 +5900,10 @@ pub enum Effect {
     },
     RefreshApps {
         force_refetch: bool,
+        thread_id: Option<String>,
+    },
+    RefreshInstalledApps {
+        force_refresh: bool,
         thread_id: Option<String>,
     },
     ReadApp {
@@ -7529,6 +7552,24 @@ fn refresh_apps_effect(state: &AppState, force_refetch: bool) -> Effect {
     }
 }
 
+fn refresh_installed_apps_effect(state: &AppState, force_refresh: bool) -> Effect {
+    Effect::RefreshInstalledApps {
+        force_refresh,
+        thread_id: state.selected_task_id.clone(),
+    }
+}
+
+fn installed_apps_needed(state: &AppState) -> bool {
+    state.marketplace.manage_mode
+        && (state.marketplace.selected_manage_tab == MarketplaceManageTab::Apps
+            || state.marketplace.installed_apps_status.is_some())
+}
+
+fn installed_apps_current_for_selected_task(state: &AppState) -> bool {
+    state.marketplace.installed_apps_status == Some(LoadStatus::Ready)
+        && state.marketplace.installed_apps_thread_id == state.selected_task_id
+}
+
 pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
     match action {
         Action::Connect | Action::RetryConnection => {
@@ -7591,6 +7632,10 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 Effect::LoadComputerUsePolicy,
                 Effect::LoadAccount,
             ];
+            if installed_apps_needed(state) {
+                state.marketplace.installed_apps_status = Some(LoadStatus::Loading);
+                effects.push(refresh_installed_apps_effect(state, false));
+            }
             if let Some(effect) = load_pinned_tasks_effect(state) {
                 effects.push(effect);
             }
@@ -9224,6 +9269,10 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             if task_changed {
                 state.artifacts = ArtifactState::default();
+                state.marketplace.selected_app_id = None;
+                state.marketplace.app_detail_status = None;
+                state.marketplace.app_detail = None;
+                state.marketplace.app_detail_error = None;
             }
             state.selected_task_id = Some(task_id.clone());
             if state.process_manager.task_id.as_deref() != Some(task_id.as_str()) {
@@ -9267,6 +9316,10 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             if task_changed {
                 state.marketplace.apps_status = Some(LoadStatus::Loading);
                 effects.push(refresh_apps_effect(state, false));
+                if installed_apps_needed(state) {
+                    state.marketplace.installed_apps_status = Some(LoadStatus::Loading);
+                    effects.push(refresh_installed_apps_effect(state, false));
+                }
             }
             let goal = state.goals.entry(task_id.clone()).or_default();
             if matches!(goal.status, LoadStatus::Idle | LoadStatus::Failed) {
@@ -14165,6 +14218,10 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.marketplace.apps_status = Some(LoadStatus::Loading);
                 effects.push(refresh_apps_effect(state, false));
             }
+            if manage_mode && !installed_apps_current_for_selected_task(state) {
+                state.marketplace.installed_apps_status = Some(LoadStatus::Loading);
+                effects.push(refresh_installed_apps_effect(state, false));
+            }
             if manage_mode && state.marketplace.mcp_status != Some(LoadStatus::Ready) {
                 state.marketplace.mcp_status = Some(LoadStatus::Loading);
                 effects.push(Effect::RefreshMcpServers { cwd });
@@ -14189,14 +14246,22 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.marketplace.app_detail = None;
                 state.marketplace.app_detail_error = None;
             }
-            if tab == MarketplaceManageTab::Apps
-                && !matches!(
+            if tab == MarketplaceManageTab::Apps {
+                let mut effects = Vec::new();
+                if !matches!(
                     state.marketplace.apps_status,
                     Some(LoadStatus::Loading | LoadStatus::Ready)
-                )
-            {
-                state.marketplace.apps_status = Some(LoadStatus::Loading);
-                vec![refresh_apps_effect(state, false)]
+                ) {
+                    state.marketplace.apps_status = Some(LoadStatus::Loading);
+                    effects.push(refresh_apps_effect(state, false));
+                }
+                if state.marketplace.installed_apps_status != Some(LoadStatus::Loading)
+                    && !installed_apps_current_for_selected_task(state)
+                {
+                    state.marketplace.installed_apps_status = Some(LoadStatus::Loading);
+                    effects.push(refresh_installed_apps_effect(state, false));
+                }
+                effects
             } else if tab == MarketplaceManageTab::Mcps
                 && !matches!(
                     state.marketplace.mcp_status,
@@ -14583,14 +14648,27 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::RefreshApps => {
             state.marketplace.apps_status = Some(LoadStatus::Loading);
-            vec![refresh_apps_effect(state, true)]
+            state.marketplace.installed_apps_status = Some(LoadStatus::Loading);
+            vec![
+                refresh_apps_effect(state, true),
+                refresh_installed_apps_effect(state, true),
+            ]
         }
         Action::AppsInvalidated => {
-            if state.marketplace.apps_status == Some(LoadStatus::Loading) {
-                return Vec::new();
+            let mut effects = Vec::new();
+            if state.marketplace.apps_status != Some(LoadStatus::Loading) {
+                state.marketplace.apps_status = Some(LoadStatus::Loading);
+                effects.push(refresh_apps_effect(state, false));
             }
-            state.marketplace.apps_status = Some(LoadStatus::Loading);
-            vec![refresh_apps_effect(state, false)]
+            if state.marketplace.installed_apps_status != Some(LoadStatus::Loading) {
+                state.marketplace.installed_apps_status = None;
+                state.marketplace.installed_apps_thread_id = None;
+                if state.marketplace.manage_mode {
+                    state.marketplace.installed_apps_status = Some(LoadStatus::Loading);
+                    effects.push(refresh_installed_apps_effect(state, false));
+                }
+            }
+            effects
         }
         Action::AppsLoaded {
             thread_id,
@@ -14654,6 +14732,50 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             state.marketplace.apps_status = Some(LoadStatus::Failed);
             state.marketplace.app_errors = vec![bounded_string(message, 4 * 1024)];
+            Vec::new()
+        }
+        Action::InstalledAppsLoaded {
+            thread_id,
+            mut apps,
+        } => {
+            if thread_id != state.selected_task_id {
+                return Vec::new();
+            }
+            apps.truncate(MAX_APP_ITEMS);
+            for app in &mut apps {
+                app.id = bounded_string(app.id.trim().to_owned(), 256);
+            }
+            let mut seen = HashSet::new();
+            apps.retain(|app| !app.id.is_empty() && seen.insert(app.id.clone()));
+            state.marketplace.installed_apps = apps;
+            state.marketplace.installed_apps_status = Some(LoadStatus::Ready);
+            state.marketplace.installed_apps_thread_id = thread_id;
+            state.marketplace.installed_apps_error = None;
+            if state
+                .marketplace
+                .selected_app_id
+                .as_ref()
+                .is_some_and(|selected_app_id| {
+                    !state
+                        .marketplace
+                        .installed_apps
+                        .iter()
+                        .any(|app| app.id == *selected_app_id)
+                })
+            {
+                state.marketplace.selected_app_id = None;
+                state.marketplace.app_detail_status = None;
+                state.marketplace.app_detail = None;
+                state.marketplace.app_detail_error = None;
+            }
+            Vec::new()
+        }
+        Action::InstalledAppsFailed { thread_id, message } => {
+            if thread_id != state.selected_task_id {
+                return Vec::new();
+            }
+            state.marketplace.installed_apps_status = Some(LoadStatus::Failed);
+            state.marketplace.installed_apps_error = Some(bounded_string(message, 4 * 1024));
             Vec::new()
         }
         Action::OpenAppDetails { app_id } => {
@@ -14789,12 +14911,27 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             {
                 app.enabled = enabled;
             }
+            if let Some(runtime) = state
+                .marketplace
+                .installed_apps
+                .iter_mut()
+                .find(|app| app.id == app_id)
+            {
+                runtime.enabled = enabled;
+                if !enabled {
+                    runtime.callable = false;
+                }
+            }
             state.marketplace.pending_app_id = None;
             if overridden {
                 state.status_message =
                     Some("App state is overridden by higher-priority configuration.".to_owned());
             }
-            vec![refresh_apps_effect(state, false)]
+            state.marketplace.installed_apps_status = Some(LoadStatus::Loading);
+            vec![
+                refresh_apps_effect(state, false),
+                refresh_installed_apps_effect(state, false),
+            ]
         }
         Action::AppMutationFailed { app_id, message } => {
             if state.marketplace.pending_app_id.as_deref() == Some(app_id.as_str()) {
@@ -17978,7 +18115,7 @@ mod tests {
         GitReviewCommitState, GitReviewMode, GitState, GitWorktreeState, HookCard, HookEventName,
         HookHandlerType, HookProjectEntry, HookSource, HookTrustStatus, ImportBatch, ImportHistory,
         ImportItemSuccess, ImportItemType, ImportMigrationDetails, ImportMigrationItem,
-        ImportProvider, ImportProviderItems, ImportTypeResult, InspectorPane,
+        ImportProvider, ImportProviderItems, ImportTypeResult, InspectorPane, InstalledAppRuntime,
         IntegratedTerminalShell, KeyboardShortcutPreferences, KeyboardShortcutUpdateTarget,
         LoadStatus, LocalProjectSummary, MAX_ACCOUNT_DAILY_USAGE_BUCKETS, MAX_ACCOUNT_FIELD_BYTES,
         MAX_BROWSER_DOWNLOADS, MAX_COMPOSER_BYTES, MAX_GIT_BRANCH_BYTES, MAX_GIT_DIFF_BYTES,
@@ -26045,6 +26182,10 @@ mod tests {
                     force_refetch: false,
                     thread_id: None,
                 },
+                Effect::RefreshInstalledApps {
+                    force_refresh: false,
+                    thread_id: None,
+                },
                 Effect::RefreshMcpServers { cwd: None },
                 Effect::RefreshSkills {
                     cwds: Vec::new(),
@@ -26054,6 +26195,10 @@ mod tests {
         );
         assert!(state.marketplace.manage_mode);
         assert_eq!(state.marketplace.apps_status, Some(LoadStatus::Loading));
+        assert_eq!(
+            state.marketplace.installed_apps_status,
+            Some(LoadStatus::Loading)
+        );
         assert_eq!(state.marketplace.mcp_status, Some(LoadStatus::Loading));
         assert_eq!(state.marketplace.skills_status, Some(LoadStatus::Loading));
         assert!(
@@ -26136,6 +26281,24 @@ mod tests {
         assert!(
             reduce(
                 &mut state,
+                Action::InstalledAppsLoaded {
+                    thread_id: None,
+                    apps: vec![InstalledAppRuntime {
+                        id: "connector_calendar".to_owned(),
+                        enabled: true,
+                        callable: true,
+                    }],
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.marketplace.installed_apps_status,
+            Some(LoadStatus::Ready)
+        );
+        assert!(
+            reduce(
+                &mut state,
                 Action::SelectMarketplaceManageTab(MarketplaceManageTab::Apps),
             )
             .is_empty()
@@ -26173,19 +26336,33 @@ mod tests {
                     overridden: false,
                 },
             ),
-            [Effect::RefreshApps {
-                force_refetch: false,
-                thread_id: None,
-            }]
+            [
+                Effect::RefreshApps {
+                    force_refetch: false,
+                    thread_id: None,
+                },
+                Effect::RefreshInstalledApps {
+                    force_refresh: false,
+                    thread_id: None,
+                }
+            ]
         );
         assert!(!state.marketplace.apps[0].enabled);
+        assert!(!state.marketplace.installed_apps[0].enabled);
+        assert!(!state.marketplace.installed_apps[0].callable);
         assert!(state.marketplace.pending_app_id.is_none());
         assert_eq!(
             reduce(&mut state, Action::RefreshApps),
-            [Effect::RefreshApps {
-                force_refetch: true,
-                thread_id: None,
-            }]
+            [
+                Effect::RefreshApps {
+                    force_refetch: true,
+                    thread_id: None,
+                },
+                Effect::RefreshInstalledApps {
+                    force_refresh: true,
+                    thread_id: None,
+                }
+            ]
         );
         state.marketplace.apps[0].is_accessible = false;
         assert!(
@@ -26223,6 +26400,11 @@ mod tests {
             force_refetch: false,
             thread_id: Some("t1".to_owned()),
         }));
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::RefreshInstalledApps { .. }))
+        );
         assert_eq!(state.marketplace.apps_status, Some(LoadStatus::Loading));
 
         assert!(
@@ -26278,6 +26460,58 @@ mod tests {
                 .iter()
                 .any(|effect| matches!(effect, Effect::RefreshApps { .. }))
         );
+
+        state.marketplace.manage_mode = true;
+        state.marketplace.selected_manage_tab = MarketplaceManageTab::Apps;
+        state.marketplace.selected_app_id = Some("calendar".to_owned());
+        let managed_effects = reduce(&mut state, Action::SelectTask("t2".to_owned()));
+        assert!(managed_effects.contains(&Effect::RefreshInstalledApps {
+            force_refresh: false,
+            thread_id: Some("t2".to_owned()),
+        }));
+        assert!(state.marketplace.selected_app_id.is_none());
+        assert!(
+            reduce(
+                &mut state,
+                Action::InstalledAppsLoaded {
+                    thread_id: Some("t1".to_owned()),
+                    apps: vec![InstalledAppRuntime {
+                        id: "stale".to_owned(),
+                        enabled: true,
+                        callable: true,
+                    }],
+                },
+            )
+            .is_empty()
+        );
+        assert!(state.marketplace.installed_apps.is_empty());
+        assert!(
+            reduce(
+                &mut state,
+                Action::InstalledAppsLoaded {
+                    thread_id: Some("t2".to_owned()),
+                    apps: vec![InstalledAppRuntime {
+                        id: "calendar".to_owned(),
+                        enabled: false,
+                        callable: false,
+                    }],
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(state.marketplace.installed_apps[0].id, "calendar");
+        assert_eq!(
+            state.marketplace.installed_apps_status,
+            Some(LoadStatus::Ready)
+        );
+        assert_eq!(
+            reduce(&mut state, Action::AppsInvalidated),
+            [Effect::RefreshInstalledApps {
+                force_refresh: false,
+                thread_id: Some("t2".to_owned()),
+            }]
+        );
+        assert!(state.marketplace.installed_apps_thread_id.is_none());
     }
 
     #[test]
