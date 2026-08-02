@@ -249,6 +249,10 @@ fn shell_width_class(width: f32) -> ShellWidthClass {
     }
 }
 
+fn task_workspace_active(route: MainRoute, selected_task_id: Option<&str>) -> bool {
+    route == MainRoute::Tasks && selected_task_id.is_some()
+}
+
 fn repository_uses_split_diff(preference: bool, width_class: Option<ShellWidthClass>) -> bool {
     preference && width_class == Some(ShellWidthClass::Wide)
 }
@@ -9527,12 +9531,12 @@ impl WorkspaceView {
             }
             "forkThread" => self.state.selected_task_id.is_some(),
             "openReviewTab" | "toggleReviewTab" => {
-                self.state.route == MainRoute::Tasks
-                    && self.state.selected_task_id.is_some()
+                task_workspace_active(self.state.route, self.state.selected_task_id.as_deref())
                     && self.state.git.repository_root.is_some()
             }
-            "openBrowserTab" | "toggleBrowserPanel" => {
-                self.state.route == MainRoute::Tasks && self.state.selected_task_id.is_some()
+            "toggleBottomPanel" | "toggleSidePanel" | "toggleTerminal" | "openBrowserTab"
+            | "toggleBrowserPanel" => {
+                task_workspace_active(self.state.route, self.state.selected_task_id.as_deref())
             }
             "focusBrowserAddressBar" => {
                 self.state.route == MainRoute::Tasks
@@ -9657,19 +9661,27 @@ impl WorkspaceView {
             "navigateBrowserBack" => self.dispatch(Action::NavigateBrowserBack, cx),
             "navigateBrowserForward" => self.dispatch(Action::NavigateBrowserForward, cx),
             "toggleSidebar" => self.toggle_sidebar(cx),
-            "toggleBottomPanel" => self.dispatch(Action::ToggleBottomPanel, cx),
+            "toggleBottomPanel" => {
+                if task_workspace_active(self.state.route, self.state.selected_task_id.as_deref()) {
+                    self.dispatch(Action::ToggleBottomPanel, cx);
+                }
+            }
             "openReviewTab" => {
                 if self.keyboard_shortcut_command_enabled("openReviewTab", &[]) {
                     self.dispatch(Action::ShowInspector(InspectorPane::Changes), cx);
                 }
             }
             "toggleReviewTab" => self.dispatch(Action::ToggleReviewTab, cx),
-            "toggleSidePanel" => self.dispatch(Action::ToggleReviewPanel, cx),
+            "toggleSidePanel" => {
+                if task_workspace_active(self.state.route, self.state.selected_task_id.as_deref()) {
+                    self.dispatch(Action::ToggleReviewPanel, cx);
+                }
+            }
             "toggleMaximizeSidePanel" => {
                 self.dispatch(Action::ToggleMaximizeSidePanel, cx);
             }
             "toggleTerminal" => {
-                if self.state.selected_task_id.is_some() {
+                if task_workspace_active(self.state.route, self.state.selected_task_id.as_deref()) {
                     self.dispatch(Action::ToggleTerminalDock, cx);
                 }
             }
@@ -12439,7 +12451,7 @@ impl WorkspaceView {
         mut menu: PopupMenu,
         view: WeakEntity<Self>,
         shortcuts: Arc<HashMap<&'static str, String>>,
-        has_selected_task: bool,
+        task_workspace_active: bool,
         has_multiple_tasks: bool,
         find_available: bool,
         can_navigate_back: bool,
@@ -12459,7 +12471,7 @@ impl WorkspaceView {
         menu = menu.item(
             Self::shortcut_popup_menu_item("Toggle Bottom Panel", "toggleBottomPanel", &shortcuts)
                 .action(Box::new(ToggleBottomPanelShortcut))
-                .disabled(!has_selected_task)
+                .disabled(!task_workspace_active)
                 .on_click(move |_, _, cx| {
                     let _ = bottom_panel_view.update(cx, |this, cx| {
                         this.dispatch(Action::ToggleBottomPanel, cx);
@@ -12470,7 +12482,7 @@ impl WorkspaceView {
         menu = menu.item(
             Self::shortcut_popup_menu_item("Open Terminal", "toggleTerminal", &shortcuts)
                 .action(Box::new(ToggleTerminalShortcut))
-                .disabled(!has_selected_task)
+                .disabled(!task_workspace_active)
                 .on_click(move |_, _, cx| {
                     let _ = terminal_view.update(cx, |this, cx| {
                         this.dispatch(Action::ToggleTerminalDock, cx);
@@ -12486,7 +12498,7 @@ impl WorkspaceView {
                     &shortcuts,
                 )
                 .action(Box::new(ToggleReviewPanelShortcut))
-                .disabled(!has_selected_task)
+                .disabled(!task_workspace_active)
                 .on_click(move |_, _, cx| {
                     let _ = review_view.update(cx, |this, cx| {
                         this.dispatch(Action::ToggleReviewPanel, cx);
@@ -12690,8 +12702,9 @@ impl WorkspaceView {
         let help_shortcuts = menu_shortcuts;
         let account_available = self.state.account.profile.is_some();
         let account_idle = self.state.account.auth_operation == AccountAuthOperation::Idle;
-        let has_selected_task = self.state.selected_task_id.is_some();
-        let find_available = self.state.route == MainRoute::Tasks && has_selected_task;
+        let task_workspace_active =
+            task_workspace_active(self.state.route, self.state.selected_task_id.as_deref());
+        let find_available = task_workspace_active;
         let has_multiple_tasks = self.state.tasks.len() > 1;
         let can_navigate_back = self.can_navigate_history(false);
         let can_navigate_forward = self.can_navigate_history(true);
@@ -12774,7 +12787,7 @@ impl WorkspaceView {
                                     menu,
                                     view_menu_view.clone(),
                                     view_shortcuts.clone(),
-                                    has_selected_task,
+                                    task_workspace_active,
                                     has_multiple_tasks,
                                     find_available,
                                     can_navigate_back,
@@ -45354,9 +45367,9 @@ mod tests {
         settings_section_matches, settings_section_refreshes_account, shell_width_class,
         sidebar_layout_width, split_diff_rows, startup_recovery_card, status_context_total_label,
         status_rate_limit_label, status_rate_limit_reset_metadata_at, task_slot_id,
-        terminal_tab_label, timeline_activity_content, turn_diff_update_is_accepted,
-        usage_limit_reset_summary_copy, validate_plugin_logo_dimensions, worktree_fork_queue_full,
-        worktree_use_disabled,
+        task_workspace_active, terminal_tab_label, timeline_activity_content,
+        turn_diff_update_is_accepted, usage_limit_reset_summary_copy,
+        validate_plugin_logo_dimensions, worktree_fork_queue_full, worktree_use_disabled,
     };
     use codex_core::{
         AccountAuthOperation, AccountDailyUsageBucket, AccountKind, AccountProfile, AccountState,
@@ -47497,6 +47510,16 @@ mod tests {
         assert_eq!(shell_width_class(720.1), ShellWidthClass::Compact);
         assert_eq!(shell_width_class(720.0), ShellWidthClass::Narrow);
         assert_eq!(shell_width_class(480.0), ShellWidthClass::Narrow);
+    }
+
+    #[test]
+    fn task_workspace_active_requires_tasks_route_and_selected_task() {
+        assert!(task_workspace_active(MainRoute::Tasks, Some("task-1")));
+        assert!(!task_workspace_active(MainRoute::Tasks, None));
+        assert!(!task_workspace_active(
+            MainRoute::Repository,
+            Some("task-1")
+        ));
     }
 
     #[test]
