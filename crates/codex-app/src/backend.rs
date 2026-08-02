@@ -7431,10 +7431,17 @@ fn run_effect(
             }
         }
         Effect::RefreshComposerPlugins {
+            generation,
             cwds,
             force_refetch,
         } => match load_composer_plugins(app_server, cwds, force_refetch, marketplaces) {
-            Ok(plugins) => emit(events, Action::ComposerPluginsLoaded(plugins)),
+            Ok(plugins) => emit(
+                events,
+                Action::ComposerPluginsLoaded {
+                    generation,
+                    plugins,
+                },
+            ),
             Err(error) => emit(
                 events,
                 Action::SetStatus(format!("failed to load composer plugins: {error}")),
