@@ -2922,6 +2922,8 @@ pub struct AppInfo {
     pub description: Option<String>,
     pub logo_url: Option<String>,
     pub logo_url_dark: Option<String>,
+    pub icon_assets: Option<BTreeMap<String, String>>,
+    pub icon_dark_assets: Option<BTreeMap<String, String>>,
     pub install_url: Option<String>,
     #[serde(default)]
     pub is_accessible: bool,
