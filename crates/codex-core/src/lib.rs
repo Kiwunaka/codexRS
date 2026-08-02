@@ -3702,6 +3702,7 @@ pub struct AccountProfile {
     pub kind: AccountKind,
     pub email: Option<String>,
     pub plan: Option<String>,
+    pub uses_codex_managed_credentials: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3740,6 +3741,8 @@ pub enum AccountAuthOperation {
     Idle,
     StartingLogin,
     SubmittingApiKey,
+    SubmittingBedrock,
+    RestartingBedrock,
     AwaitingLogin,
     CancelingLogin,
     LoggingOut,
@@ -5072,6 +5075,7 @@ pub enum Action {
     StartAccountLogin,
     StartAccountDeviceCodeLogin,
     StartApiKeyLogin,
+    StartBedrockLogin,
     AccountLoginStarted {
         login_id: String,
         authorization_url: String,
@@ -5079,6 +5083,9 @@ pub enum Action {
     },
     AccountLoginStartFailed(String),
     AccountApiKeyLoginStartFailed,
+    AccountBedrockLoginStartFailed,
+    AccountBedrockLoginAccepted,
+    AccountBedrockRestartFailed,
     AccountLoginAuthorizationUrlRejected,
     CancelAccountLogin,
     AccountLoginCanceled {
@@ -7500,8 +7507,21 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             vec![Effect::ConnectAppServer]
         }
         Action::Connected => {
+            let restarting_bedrock =
+                state.account.auth_operation == AccountAuthOperation::RestartingBedrock;
             state.connection = ConnectionStatus::Online;
-            if state.status_message.as_deref() == Some("Connection lost. Reconnecting…") {
+            if restarting_bedrock {
+                state.account.auth_operation = AccountAuthOperation::Idle;
+                state.account.login_id = None;
+                state.account.login_verification_url = None;
+                state.account.login_user_code = None;
+                state.account.auth_error = None;
+            }
+            if state.status_message.as_deref() == Some("Connection lost. Reconnecting…")
+                || (restarting_bedrock
+                    && state.status_message.as_deref()
+                        == Some("Amazon Bedrock credentials saved. Restarting Codex runtime…"))
+            {
                 state.status_message = None;
             }
             state.task_generation = state.task_generation.saturating_add(1);
@@ -7566,11 +7586,21 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         Action::ConnectionLost => {
             state.review_start.pending = None;
             state.review_start.terminal_events.clear();
+            let bedrock_transient = matches!(
+                state.account.auth_operation,
+                AccountAuthOperation::SubmittingBedrock | AccountAuthOperation::RestartingBedrock
+            );
             state.account.auth_operation = AccountAuthOperation::Idle;
             state.account.login_id = None;
             state.account.login_verification_url = None;
             state.account.login_user_code = None;
             state.account.auth_error = None;
+            if bedrock_transient
+                && state.status_message.as_deref()
+                    == Some("Amazon Bedrock credentials saved. Restarting Codex runtime…")
+            {
+                state.status_message = None;
+            }
             let reconnect = !matches!(
                 state.connection,
                 ConnectionStatus::Connecting | ConnectionStatus::Recovering { .. }
@@ -13645,6 +13675,19 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.account.auth_error = None;
             Vec::new()
         }
+        Action::StartBedrockLogin => {
+            if state.account.profile.is_some()
+                || state.account.auth_operation != AccountAuthOperation::Idle
+            {
+                return Vec::new();
+            }
+            state.account.auth_operation = AccountAuthOperation::SubmittingBedrock;
+            state.account.login_id = None;
+            state.account.login_verification_url = None;
+            state.account.login_user_code = None;
+            state.account.auth_error = None;
+            Vec::new()
+        }
         Action::AccountLoginStarted {
             login_id,
             authorization_url,
@@ -13694,6 +13737,55 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.account.login_user_code = None;
                 state.account.auth_error =
                     Some("API key sign-in failed. Please try again.".to_owned());
+            }
+            Vec::new()
+        }
+        Action::AccountBedrockLoginStartFailed => {
+            if state.account.auth_operation == AccountAuthOperation::SubmittingBedrock {
+                state.account.auth_operation = AccountAuthOperation::Idle;
+                state.account.login_id = None;
+                state.account.login_verification_url = None;
+                state.account.login_user_code = None;
+                state.account.auth_error = Some(
+                    "Amazon Bedrock sign-in failed. Check the API key and AWS Region, then try again."
+                        .to_owned(),
+                );
+            }
+            Vec::new()
+        }
+        Action::AccountBedrockLoginAccepted => {
+            if state.account.auth_operation != AccountAuthOperation::SubmittingBedrock {
+                return Vec::new();
+            }
+            state.account.auth_operation = AccountAuthOperation::RestartingBedrock;
+            state.account.login_id = None;
+            state.account.login_verification_url = None;
+            state.account.login_user_code = None;
+            state.account.auth_error = None;
+            state.connection = ConnectionStatus::Connecting;
+            state.status_message =
+                Some("Amazon Bedrock credentials saved. Restarting Codex runtime…".to_owned());
+            Vec::new()
+        }
+        Action::AccountBedrockRestartFailed => {
+            if state.account.auth_operation != AccountAuthOperation::RestartingBedrock {
+                return Vec::new();
+            }
+            state.account.auth_operation = AccountAuthOperation::Idle;
+            state.account.login_id = None;
+            state.account.login_verification_url = None;
+            state.account.login_user_code = None;
+            state.account.auth_error = Some(
+                "Amazon Bedrock credentials were saved, but Codex runtime could not restart. Retry the connection."
+                    .to_owned(),
+            );
+            state.connection = ConnectionStatus::Failed(
+                "Could not restart Codex runtime. Please try again.".to_owned(),
+            );
+            if state.status_message.as_deref()
+                == Some("Amazon Bedrock credentials saved. Restarting Codex runtime…")
+            {
+                state.status_message = None;
             }
             Vec::new()
         }
@@ -13791,6 +13883,11 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             vec![Effect::LogoutAccount]
         }
         Action::AccountLoggedOut => {
+            if state.status_message.as_deref()
+                == Some("Amazon Bedrock credentials saved. Restarting Codex runtime…")
+            {
+                state.status_message = None;
+            }
             state.account = AccountState {
                 status: LoadStatus::Loading,
                 ..AccountState::default()
@@ -25129,6 +25226,7 @@ mod tests {
                     kind: AccountKind::ChatGpt,
                     email: Some(format!("{}@example.com", "a".repeat(600))),
                     plan: Some(" plus ".to_owned()),
+                    uses_codex_managed_credentials: None,
                 }),
                 requires_openai_auth: true,
                 usage_limits: vec![
@@ -25291,6 +25389,7 @@ mod tests {
                     kind: AccountKind::ChatGpt,
                     email: Some("developer@example.com".to_owned()),
                     plan: Some("Plus".to_owned()),
+                    uses_codex_managed_credentials: None,
                 }),
                 requires_openai_auth: true,
                 usage_limits: Vec::new(),
@@ -25405,6 +25504,7 @@ mod tests {
                     kind: AccountKind::ApiKey,
                     email: None,
                     plan: None,
+                    uses_codex_managed_credentials: None,
                 }),
                 requires_openai_auth: false,
                 usage_limits: Vec::new(),
@@ -25435,6 +25535,116 @@ mod tests {
         );
         assert_eq!(state.account.auth_operation, AccountAuthOperation::Idle);
         assert!(state.account.auth_error.is_none());
+    }
+
+    #[test]
+    fn bedrock_login_is_single_flight_without_a_secret_effect() {
+        let mut state = AppState::default();
+
+        assert!(reduce(&mut state, Action::StartBedrockLogin).is_empty());
+        assert_eq!(
+            state.account.auth_operation,
+            AccountAuthOperation::SubmittingBedrock
+        );
+        assert!(reduce(&mut state, Action::StartBedrockLogin).is_empty());
+    }
+
+    #[test]
+    fn account_load_without_a_profile_does_not_cancel_pending_bedrock_login() {
+        fn account_loaded_without_profile() -> Action {
+            Action::AccountLoaded {
+                profile: None,
+                requires_openai_auth: false,
+                usage_limits: Vec::new(),
+                credits: None,
+                rate_limit_reset_credits_available: None,
+                usage_error: None,
+                token_activity: None,
+                token_activity_error: None,
+            }
+        }
+
+        let mut state = AppState::default();
+        reduce(&mut state, Action::StartBedrockLogin);
+        reduce(&mut state, account_loaded_without_profile());
+        assert_eq!(
+            state.account.auth_operation,
+            AccountAuthOperation::SubmittingBedrock
+        );
+
+        reduce(&mut state, Action::AccountBedrockLoginAccepted);
+        reduce(&mut state, account_loaded_without_profile());
+        assert_eq!(
+            state.account.auth_operation,
+            AccountAuthOperation::RestartingBedrock
+        );
+        assert_eq!(
+            state.status_message.as_deref(),
+            Some("Amazon Bedrock credentials saved. Restarting Codex runtime…")
+        );
+    }
+
+    #[test]
+    fn accepted_bedrock_login_reconnects_and_clears_the_restart_status() {
+        let mut state = AppState::default();
+
+        reduce(&mut state, Action::StartBedrockLogin);
+        assert!(reduce(&mut state, Action::AccountBedrockLoginAccepted).is_empty());
+        assert_eq!(
+            state.account.auth_operation,
+            AccountAuthOperation::RestartingBedrock
+        );
+        assert_eq!(state.connection, ConnectionStatus::Connecting);
+        assert_eq!(
+            state.status_message.as_deref(),
+            Some("Amazon Bedrock credentials saved. Restarting Codex runtime…")
+        );
+
+        reduce(&mut state, Action::Connected);
+        assert_eq!(state.connection, ConnectionStatus::Online);
+        assert_eq!(state.account.auth_operation, AccountAuthOperation::Idle);
+        assert!(state.account.auth_error.is_none());
+        assert!(state.status_message.is_none());
+    }
+
+    #[test]
+    fn bedrock_login_start_failure_is_generic() {
+        let mut state = AppState::default();
+
+        reduce(&mut state, Action::StartBedrockLogin);
+        reduce(&mut state, Action::AccountBedrockLoginStartFailed);
+
+        assert_eq!(state.account.auth_operation, AccountAuthOperation::Idle);
+        assert_eq!(
+            state.account.auth_error.as_deref(),
+            Some(
+                "Amazon Bedrock sign-in failed. Check the API key and AWS Region, then try again."
+            )
+        );
+    }
+
+    #[test]
+    fn bedrock_restart_failure_reports_a_generic_runtime_error() {
+        let mut state = AppState::default();
+
+        reduce(&mut state, Action::StartBedrockLogin);
+        reduce(&mut state, Action::AccountBedrockLoginAccepted);
+        reduce(&mut state, Action::AccountBedrockRestartFailed);
+
+        assert_eq!(state.account.auth_operation, AccountAuthOperation::Idle);
+        assert_eq!(
+            state.connection,
+            ConnectionStatus::Failed(
+                "Could not restart Codex runtime. Please try again.".to_owned()
+            )
+        );
+        assert_eq!(
+            state.account.auth_error.as_deref(),
+            Some(
+                "Amazon Bedrock credentials were saved, but Codex runtime could not restart. Retry the connection."
+            )
+        );
+        assert!(state.status_message.is_none());
     }
 
     #[test]
