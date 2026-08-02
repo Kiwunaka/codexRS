@@ -6854,6 +6854,12 @@ fn prepare_new_chat(state: &mut AppState, cwd: Option<PathBuf>) -> Vec<Effect> {
     effects
 }
 
+fn clear_active_composer_draft(state: &mut AppState) {
+    state.composer.clear();
+    state.composer_attachments.clear();
+    state.composer_error = None;
+}
+
 fn fork_task(state: &mut AppState, task_id: &str, new_worktree: bool) -> Vec<Effect> {
     let Some(task) = state.tasks.iter().find(|task| task.id == task_id) else {
         return Vec::new();
@@ -8922,6 +8928,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             if state.selected_task_id.as_deref() == Some(task_id.as_str()) {
                 state.selected_task_id = None;
                 state.artifacts = ArtifactState::default();
+                clear_active_composer_draft(state);
             }
             state.status_message = Some("Chat archived".to_owned());
             if state.pinned_task_ids.len() != pinned_before {
@@ -9134,6 +9141,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             let previous_cwd = selected_task_cwds(state).into_iter().next();
             let git_context_changed = previous_task_id.as_deref() != Some(task_id.as_str())
                 || previous_cwd.as_ref() != Some(&cwd);
+            if previous_task_id.as_deref() != Some(task_id.as_str()) {
+                clear_active_composer_draft(state);
+            }
             remember_local_project(state, &cwd);
             state.new_chat_cwd = None;
             state.chat_memory.new_chat_preferences = None;
@@ -9299,6 +9309,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.marketplace.app_detail_status = None;
                 state.marketplace.app_detail = None;
                 state.marketplace.app_detail_error = None;
+                clear_active_composer_draft(state);
             }
             state.selected_task_id = Some(task_id.clone());
             if state.process_manager.task_id.as_deref() != Some(task_id.as_str()) {
@@ -21722,6 +21733,34 @@ mod tests {
             state.composer_error.as_deref(),
             Some("Shell commands do not support attachments.")
         );
+    }
+
+    #[test]
+    fn composer_draft_is_cleared_only_when_selected_task_changes() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(&mut state, Action::TaskCreated(task("t2")));
+        reduce(&mut state, Action::SelectTask("t1".to_owned()));
+
+        let attachment = ComposerAttachment {
+            path: PathBuf::from("C:\\repo\\note.txt"),
+            name: "note.txt".to_owned(),
+            kind: ComposerAttachmentKind::Mention,
+        };
+        state.composer = "/shell git status --short".to_owned();
+        state.composer_attachments = vec![attachment.clone()];
+        state.composer_error = Some("keep this error".to_owned());
+
+        reduce(&mut state, Action::SelectTask("t1".to_owned()));
+        assert_eq!(state.composer, "/shell git status --short");
+        assert_eq!(state.composer_attachments, [attachment]);
+        assert_eq!(state.composer_error.as_deref(), Some("keep this error"));
+
+        reduce(&mut state, Action::SelectTask("t2".to_owned()));
+        assert!(state.composer.is_empty());
+        assert!(state.composer_attachments.is_empty());
+        assert_eq!(state.composer_error, None);
+        assert!(reduce(&mut state, Action::SubmitComposer).is_empty());
     }
 
     #[test]
