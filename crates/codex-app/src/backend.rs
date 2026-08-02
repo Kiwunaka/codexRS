@@ -115,9 +115,8 @@ use codex_platform::{
 };
 use codex_protocol::{
     Account as ProtocolAccount, AccountLoginCompletedNotification, AccountTokenUsageSummary,
-    AppInfo, AppListUpdatedNotification, AppSummary,
-    ApprovalsReviewer as ProtocolApprovalsReviewer, AppsListParams, AppsReadParams,
-    CancelLoginAccountParams, ClientInfo, CollaborationMode, CollaborationModeKind,
+    AppInfo, AppSummary, ApprovalsReviewer as ProtocolApprovalsReviewer, AppsListParams,
+    AppsReadParams, CancelLoginAccountParams, ClientInfo, CollaborationMode, CollaborationModeKind,
     CollaborationModeSettings, CommandAction, CommandExecutionApprovalDecision,
     CommandExecutionApprovalDecisionValue, CommandExecutionRequestApprovalParams,
     CommandExecutionRequestApprovalResponse, ConfigBatchWriteParams, ConfigEdit,
@@ -472,16 +471,12 @@ fn load_app_logos(app_server: &AppServerConnection) -> HashMap<String, AppLogo> 
 fn load_apps(
     app_server: &AppServerConnection,
     force_refetch: bool,
+    thread_id: Option<String>,
 ) -> Result<Vec<AppCard>, codex_platform::AppServerError> {
     let mut cards = Vec::new();
     let mut cursor = None;
     for _ in 0..MAX_APP_LIST_PAGES {
-        let response = app_server.list_apps(AppsListParams {
-            cursor,
-            limit: APP_LIST_PAGE_LIMIT,
-            thread_id: None,
-            force_refetch,
-        })?;
+        let response = app_server.list_apps(apps_list_params(cursor, force_refetch, &thread_id))?;
         for card in map_apps(response.data) {
             cards.push(card);
             if cards.len() == codex_core::MAX_APP_ITEMS {
@@ -494,6 +489,19 @@ fn load_apps(
         }
     }
     Ok(cards)
+}
+
+fn apps_list_params(
+    cursor: Option<String>,
+    force_refetch: bool,
+    thread_id: &Option<String>,
+) -> AppsListParams {
+    AppsListParams {
+        cursor,
+        limit: APP_LIST_PAGE_LIMIT,
+        thread_id: thread_id.clone(),
+        force_refetch,
+    }
 }
 
 fn bounded_marketplace_load_error_count(errors: &[Value]) -> usize {
@@ -7370,11 +7378,17 @@ fn run_effect(
                 ),
             }
         }
-        Effect::RefreshApps { force_refetch } => match load_apps(app_server, force_refetch) {
-            Ok(apps) => emit(events, Action::AppsLoaded(apps)),
+        Effect::RefreshApps {
+            force_refetch,
+            thread_id,
+        } => match load_apps(app_server, force_refetch, thread_id.clone()) {
+            Ok(apps) => emit(events, Action::AppsLoaded { thread_id, apps }),
             Err(error) => emit(
                 events,
-                Action::AppsFailed(format!("failed to load apps: {error}")),
+                Action::AppsFailed {
+                    thread_id,
+                    message: format!("failed to load apps: {error}"),
+                },
             ),
         },
         Effect::ReadApp { app_id } => {
@@ -12310,11 +12324,7 @@ fn handle_notification(method: &str, params: Value, events: &Sender<Action>) -> 
             }
         }
         "skills/changed" => emit(events, Action::SkillsInvalidated),
-        "app/list/updated" => {
-            if let Ok(notification) = serde_json::from_value::<AppListUpdatedNotification>(params) {
-                emit(events, Action::AppsLoaded(map_apps(notification.data)));
-            }
-        }
+        "app/list/updated" => emit(events, Action::AppsInvalidated),
         "mcpServer/oauthLogin/completed" => {
             if let Ok(notification) =
                 serde_json::from_value::<McpServerOauthLoginCompletedNotification>(params)
@@ -16175,21 +16185,21 @@ mod tests {
         PendingWorktreeRuntime, STABLE_OPT_OUT_NOTIFICATION_METHODS, TASK_SEARCH_DEBOUNCE,
         TRUSTED_ACCESS_FOR_CYBER_URL, TRUSTED_ACCESS_FOR_CYBER_WARNING, TaskSearchDebouncer,
         TerminalParserCallbacks, account_supports_token_activity, agent_configuration_snapshot,
-        appearance_theme_key, bounded_marketplace_load_error_count, bounded_remote_identifier,
-        browser_account_login_started_action, browser_origin_auto_decision,
-        browser_origin_elicitation_response, browser_policy_target, browser_resource_auto_decision,
-        browser_resource_elicitation_response, cancel_pending_worktree_runtime,
-        combined_git_generation_prompt, combined_git_output_schema, commit_generation_prompt,
-        commit_message_output_schema, composer_config_key, composer_inputs,
-        computer_application_value, computer_tool_request_meta,
-        computer_tool_requires_interruption_monitor, computer_use_allowed_app_ids,
-        computer_use_allowed_app_ids_value, computer_use_app_authorized,
-        computer_use_dynamic_tools, computer_window_argument, computer_window_schema,
-        device_code_account_login_started_action, drag_coordinates, encode_appearance_preferences,
-        encode_browser_download_preferences, encode_browser_permissions, encode_git_preferences,
-        encode_keyboard_shortcut_preferences, encode_primary_window_placement,
-        forbidden_computer_target_message, handle_notification, hook_state_config_value,
-        index_app_logos, initialize_capabilities, is_hidden_timeline_item,
+        appearance_theme_key, apps_list_params, bounded_marketplace_load_error_count,
+        bounded_remote_identifier, browser_account_login_started_action,
+        browser_origin_auto_decision, browser_origin_elicitation_response, browser_policy_target,
+        browser_resource_auto_decision, browser_resource_elicitation_response,
+        cancel_pending_worktree_runtime, combined_git_generation_prompt,
+        combined_git_output_schema, commit_generation_prompt, commit_message_output_schema,
+        composer_config_key, composer_inputs, computer_application_value,
+        computer_tool_request_meta, computer_tool_requires_interruption_monitor,
+        computer_use_allowed_app_ids, computer_use_allowed_app_ids_value,
+        computer_use_app_authorized, computer_use_dynamic_tools, computer_window_argument,
+        computer_window_schema, device_code_account_login_started_action, drag_coordinates,
+        encode_appearance_preferences, encode_browser_download_preferences,
+        encode_browser_permissions, encode_git_preferences, encode_keyboard_shortcut_preferences,
+        encode_primary_window_placement, forbidden_computer_target_message, handle_notification,
+        hook_state_config_value, index_app_logos, initialize_capabilities, is_hidden_timeline_item,
         linux_computer_use_dynamic_tools, map_account_token_activity, map_app_detail,
         map_app_server_approval, map_apps, map_fuzzy_file_search_results, map_mcp_elicitation,
         map_mcp_resource_contents, map_mcp_runtime_catalog, map_model_options,
@@ -18882,6 +18892,15 @@ mod tests {
         assert_eq!(apps[1].id, "discoverable");
         assert!(!apps[1].is_accessible);
 
+        let thread_id = Some("thread-1".to_owned());
+        let first_page = apps_list_params(None, false, &thread_id);
+        let second_page = apps_list_params(Some("cursor-1".to_owned()), true, &thread_id);
+        assert_eq!(first_page.thread_id.as_deref(), Some("thread-1"));
+        assert!(first_page.cursor.is_none());
+        assert_eq!(second_page.thread_id.as_deref(), Some("thread-1"));
+        assert_eq!(second_page.cursor.as_deref(), Some("cursor-1"));
+        assert!(second_page.force_refetch);
+
         let (sender, receiver) = bounded(1);
         assert!(!handle_notification(
             "app/list/updated",
@@ -18898,14 +18917,7 @@ mod tests {
         let Ok(action) = receiver.try_recv() else {
             panic!("expected apps update action");
         };
-        match action {
-            Action::AppsLoaded(apps) => {
-                assert_eq!(apps.len(), 1);
-                assert_eq!(apps[0].id, "connected");
-                assert!(apps[0].enabled);
-            }
-            _ => panic!("expected apps update"),
-        }
+        assert!(matches!(action, Action::AppsInvalidated));
     }
 
     #[test]

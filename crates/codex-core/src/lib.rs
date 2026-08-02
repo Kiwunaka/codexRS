@@ -5137,8 +5137,15 @@ pub enum Action {
     },
     SelectMarketplaceTab(MarketplaceTab),
     RefreshApps,
-    AppsLoaded(Vec<AppCard>),
-    AppsFailed(String),
+    AppsInvalidated,
+    AppsLoaded {
+        thread_id: Option<String>,
+        apps: Vec<AppCard>,
+    },
+    AppsFailed {
+        thread_id: Option<String>,
+        message: String,
+    },
     OpenAppDetails {
         app_id: String,
     },
@@ -5841,6 +5848,7 @@ pub enum Effect {
     },
     RefreshApps {
         force_refetch: bool,
+        thread_id: Option<String>,
     },
     ReadApp {
         app_id: String,
@@ -6745,6 +6753,8 @@ fn prepare_new_chat(state: &mut AppState, cwd: Option<PathBuf>) -> Vec<Effect> {
         cwds: composer_workspace_roots(state),
         force_refetch: false,
     });
+    state.marketplace.apps_status = Some(LoadStatus::Loading);
+    effects.push(refresh_apps_effect(state, false));
     effects.push(Effect::PersistUiState {
         route: state.route,
         inspector: state.inspector,
@@ -7449,6 +7459,13 @@ fn clear_plugin_install_confirmation(state: &mut AppState) {
     }
 }
 
+fn refresh_apps_effect(state: &AppState, force_refetch: bool) -> Effect {
+    Effect::RefreshApps {
+        force_refetch,
+        thread_id: state.selected_task_id.clone(),
+    }
+}
+
 pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
     match action {
         Action::Connect | Action::RetryConnection => {
@@ -7493,9 +7510,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     cwds: composer_workspace_roots(state),
                     force_refetch: false,
                 },
-                Effect::RefreshApps {
-                    force_refetch: false,
-                },
+                refresh_apps_effect(state, false),
                 Effect::LoadComposerDesktopApps,
                 Effect::LoadComputerUsePolicy,
                 Effect::LoadAccount,
@@ -8980,9 +8995,11 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 clear_git_for_context_change(state);
             }
             let generation = next_git_refresh_generation(state);
+            state.marketplace.apps_status = Some(LoadStatus::Loading);
             vec![
                 Effect::RememberWorkspace { path: cwd.clone() },
                 Effect::RefreshGit { generation, cwd },
+                refresh_apps_effect(state, false),
             ]
         }
         Action::LoadMoreTasks => {
@@ -9099,6 +9116,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             let previous_cwds = composer_workspace_roots(state);
             let previous_task_id = state.selected_task_id.clone();
+            let task_changed = previous_task_id.as_deref() != Some(task_id.as_str());
             let previous_cwd = selected_task_cwds(state).into_iter().next();
             if !state.tasks.iter().any(|task| task.id == task_id)
                 && let Some(task) = state
@@ -9111,7 +9129,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.tasks.insert(0, task);
                 state.tasks.truncate(MAX_VISIBLE_THREADS);
             }
-            if state.selected_task_id.as_deref() != Some(task_id.as_str()) {
+            if task_changed {
                 state.artifacts = ArtifactState::default();
             }
             state.selected_task_id = Some(task_id.clone());
@@ -9152,6 +9170,10 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     cwds: selected_cwds,
                     force_refetch: false,
                 });
+            }
+            if task_changed {
+                state.marketplace.apps_status = Some(LoadStatus::Loading);
+                effects.push(refresh_apps_effect(state, false));
             }
             let goal = state.goals.entry(task_id.clone()).or_default();
             if matches!(goal.status, LoadStatus::Idle | LoadStatus::Failed) {
@@ -13889,9 +13911,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }];
             if manage_mode && state.marketplace.apps_status != Some(LoadStatus::Ready) {
                 state.marketplace.apps_status = Some(LoadStatus::Loading);
-                effects.push(Effect::RefreshApps {
-                    force_refetch: false,
-                });
+                effects.push(refresh_apps_effect(state, false));
             }
             if manage_mode && state.marketplace.mcp_status != Some(LoadStatus::Ready) {
                 state.marketplace.mcp_status = Some(LoadStatus::Loading);
@@ -13924,9 +13944,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 )
             {
                 state.marketplace.apps_status = Some(LoadStatus::Loading);
-                vec![Effect::RefreshApps {
-                    force_refetch: false,
-                }]
+                vec![refresh_apps_effect(state, false)]
             } else if tab == MarketplaceManageTab::Mcps
                 && !matches!(
                     state.marketplace.mcp_status,
@@ -14313,11 +14331,22 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::RefreshApps => {
             state.marketplace.apps_status = Some(LoadStatus::Loading);
-            vec![Effect::RefreshApps {
-                force_refetch: true,
-            }]
+            vec![refresh_apps_effect(state, true)]
         }
-        Action::AppsLoaded(mut apps) => {
+        Action::AppsInvalidated => {
+            if state.marketplace.apps_status == Some(LoadStatus::Loading) {
+                return Vec::new();
+            }
+            state.marketplace.apps_status = Some(LoadStatus::Loading);
+            vec![refresh_apps_effect(state, false)]
+        }
+        Action::AppsLoaded {
+            thread_id,
+            mut apps,
+        } => {
+            if thread_id != state.selected_task_id {
+                return Vec::new();
+            }
             apps.truncate(MAX_APP_ITEMS);
             for app in &mut apps {
                 app.id = bounded_string(app.id.trim().to_owned(), 256);
@@ -14367,7 +14396,10 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
-        Action::AppsFailed(message) => {
+        Action::AppsFailed { thread_id, message } => {
+            if thread_id != state.selected_task_id {
+                return Vec::new();
+            }
             state.marketplace.apps_status = Some(LoadStatus::Failed);
             state.marketplace.app_errors = vec![bounded_string(message, 4 * 1024)];
             Vec::new()
@@ -14510,9 +14542,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.status_message =
                     Some("App state is overridden by higher-priority configuration.".to_owned());
             }
-            vec![Effect::RefreshApps {
-                force_refetch: false,
-            }]
+            vec![refresh_apps_effect(state, false)]
         }
         Action::AppMutationFailed { app_id, message } => {
             if state.marketplace.pending_app_id.as_deref() == Some(app_id.as_str()) {
@@ -18396,6 +18426,7 @@ mod tests {
                 },
                 Effect::RefreshApps {
                     force_refetch: false,
+                    thread_id: None,
                 },
                 Effect::LoadComposerDesktopApps,
                 Effect::LoadComputerUsePolicy,
@@ -19695,6 +19726,10 @@ mod tests {
                     cwds: vec![repository.clone()],
                     force_refetch: false,
                 },
+                Effect::RefreshApps {
+                    force_refetch: false,
+                    thread_id: None,
+                },
                 Effect::PersistUiState {
                     route: MainRoute::Tasks,
                     inspector: InspectorPane::Hidden,
@@ -19808,30 +19843,33 @@ mod tests {
         let mut state = AppState::default();
         reduce(
             &mut state,
-            Action::AppsLoaded(vec![
-                AppCard {
-                    id: "calendar".to_owned(),
-                    name: "Calendar".to_owned(),
-                    description: "Read calendar events".to_owned(),
-                    plugin_display_names: Vec::new(),
-                    logo_url: None,
-                    logo_url_dark: None,
-                    install_url: None,
-                    is_accessible: true,
-                    enabled: true,
-                },
-                AppCard {
-                    id: "disabled".to_owned(),
-                    name: "Disabled".to_owned(),
-                    description: String::new(),
-                    plugin_display_names: Vec::new(),
-                    logo_url: None,
-                    logo_url_dark: None,
-                    install_url: None,
-                    is_accessible: true,
-                    enabled: false,
-                },
-            ]),
+            Action::AppsLoaded {
+                thread_id: None,
+                apps: vec![
+                    AppCard {
+                        id: "calendar".to_owned(),
+                        name: "Calendar".to_owned(),
+                        description: "Read calendar events".to_owned(),
+                        plugin_display_names: Vec::new(),
+                        logo_url: None,
+                        logo_url_dark: None,
+                        install_url: None,
+                        is_accessible: true,
+                        enabled: true,
+                    },
+                    AppCard {
+                        id: "disabled".to_owned(),
+                        name: "Disabled".to_owned(),
+                        description: String::new(),
+                        plugin_display_names: Vec::new(),
+                        logo_url: None,
+                        logo_url_dark: None,
+                        install_url: None,
+                        is_accessible: true,
+                        enabled: false,
+                    },
+                ],
+            },
         );
         reduce(
             &mut state,
@@ -19924,6 +19962,10 @@ mod tests {
                 Effect::RefreshComposerPlugins {
                     cwds: Vec::new(),
                     force_refetch: false,
+                },
+                Effect::RefreshApps {
+                    force_refetch: false,
+                    thread_id: None,
                 },
                 Effect::PersistUiState {
                     route: MainRoute::Tasks,
@@ -20170,6 +20212,10 @@ mod tests {
                 Effect::RefreshComposerPlugins {
                     cwds: vec![worktree.clone()],
                     force_refetch: false,
+                },
+                Effect::RefreshApps {
+                    force_refetch: false,
+                    thread_id: None,
                 },
                 Effect::PersistUiState {
                     route: MainRoute::Tasks,
@@ -20460,6 +20506,10 @@ mod tests {
                 Effect::RefreshComposerPlugins {
                     cwds: vec![repository],
                     force_refetch: false,
+                },
+                Effect::RefreshApps {
+                    force_refetch: false,
+                    thread_id: Some("t1".to_owned()),
                 },
             ]
         );
@@ -21028,6 +21078,10 @@ mod tests {
                 Effect::RefreshComposerPlugins {
                     cwds: vec![repository],
                     force_refetch: false,
+                },
+                Effect::RefreshApps {
+                    force_refetch: false,
+                    thread_id: None,
                 },
                 Effect::PersistUiState {
                     route: MainRoute::Tasks,
@@ -25363,6 +25417,7 @@ mod tests {
                 },
                 Effect::RefreshApps {
                     force_refetch: false,
+                    thread_id: None,
                 },
                 Effect::RefreshMcpServers { cwd: None },
                 Effect::RefreshSkills {
@@ -25434,17 +25489,20 @@ mod tests {
         assert!(
             reduce(
                 &mut state,
-                Action::AppsLoaded(vec![AppCard {
-                    id: "connector_calendar".to_owned(),
-                    name: "Calendar".to_owned(),
-                    description: "Read and update calendar events.".to_owned(),
-                    plugin_display_names: Vec::new(),
-                    logo_url: Some("https://example.com/calendar.png".to_owned()),
-                    logo_url_dark: None,
-                    install_url: Some("https://example.com/calendar".to_owned()),
-                    is_accessible: true,
-                    enabled: true,
-                }]),
+                Action::AppsLoaded {
+                    thread_id: None,
+                    apps: vec![AppCard {
+                        id: "connector_calendar".to_owned(),
+                        name: "Calendar".to_owned(),
+                        description: "Read and update calendar events.".to_owned(),
+                        plugin_display_names: Vec::new(),
+                        logo_url: Some("https://example.com/calendar.png".to_owned()),
+                        logo_url_dark: None,
+                        install_url: Some("https://example.com/calendar".to_owned()),
+                        is_accessible: true,
+                        enabled: true,
+                    }],
+                },
             )
             .is_empty()
         );
@@ -25491,6 +25549,7 @@ mod tests {
             ),
             [Effect::RefreshApps {
                 force_refetch: false,
+                thread_id: None,
             }]
         );
         assert!(!state.marketplace.apps[0].enabled);
@@ -25499,6 +25558,7 @@ mod tests {
             reduce(&mut state, Action::RefreshApps),
             [Effect::RefreshApps {
                 force_refetch: true,
+                thread_id: None,
             }]
         );
         state.marketplace.apps[0].is_accessible = false;
@@ -25511,6 +25571,86 @@ mod tests {
                 },
             )
             .is_empty()
+        );
+    }
+
+    #[test]
+    fn app_catalog_tracks_the_selected_chat_and_ignores_stale_results() {
+        let app = |id: &str| AppCard {
+            id: id.to_owned(),
+            name: "Calendar".to_owned(),
+            description: String::new(),
+            plugin_display_names: Vec::new(),
+            logo_url: None,
+            logo_url_dark: None,
+            install_url: None,
+            is_accessible: true,
+            enabled: true,
+        };
+        let mut state = AppState {
+            tasks: vec![task("t1"), task("t2")],
+            ..AppState::default()
+        };
+
+        let effects = reduce(&mut state, Action::SelectTask("t1".to_owned()));
+        assert!(effects.contains(&Effect::RefreshApps {
+            force_refetch: false,
+            thread_id: Some("t1".to_owned()),
+        }));
+        assert_eq!(state.marketplace.apps_status, Some(LoadStatus::Loading));
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::AppsLoaded {
+                    thread_id: Some("t2".to_owned()),
+                    apps: vec![app("stale")],
+                },
+            )
+            .is_empty()
+        );
+        assert!(state.marketplace.apps.is_empty());
+        assert_eq!(state.marketplace.apps_status, Some(LoadStatus::Loading));
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::AppsLoaded {
+                    thread_id: Some("t1".to_owned()),
+                    apps: vec![app("calendar")],
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(state.marketplace.apps[0].id, "calendar");
+        assert_eq!(state.marketplace.apps_status, Some(LoadStatus::Ready));
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::AppsFailed {
+                    thread_id: Some("t2".to_owned()),
+                    message: "stale".to_owned(),
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(state.marketplace.apps_status, Some(LoadStatus::Ready));
+
+        assert_eq!(
+            reduce(&mut state, Action::AppsInvalidated),
+            [Effect::RefreshApps {
+                force_refetch: false,
+                thread_id: Some("t1".to_owned()),
+            }]
+        );
+        assert!(reduce(&mut state, Action::AppsInvalidated).is_empty());
+
+        let repeat_effects = reduce(&mut state, Action::SelectTask("t1".to_owned()));
+        assert!(
+            !repeat_effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::RefreshApps { .. }))
         );
     }
 
