@@ -13,7 +13,7 @@ body:
     attributes:
       label: codexRS version
       description: Release tag or commit hash
-      placeholder: v0.1.0-rc.4
+      placeholder: v0.1.0-rc.5
     validations:
       required: true
   - type: input
