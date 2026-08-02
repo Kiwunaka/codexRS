@@ -4444,7 +4444,7 @@ pub fn run() {
                         appears_transparent: true,
                         traffic_light_position: Some(point(px(9.0), px(9.0))),
                     }),
-                    app_id: Some("dev.codexrs.desktop".to_owned()),
+                    app_id: Some("com.codexrs.CodexRS".to_owned()),
                     ..Default::default()
                 },
                 |window, cx| {
@@ -8882,7 +8882,7 @@ impl WorkspaceView {
                 kind: WindowKind::Floating,
                 is_resizable: false,
                 is_minimizable: false,
-                app_id: Some("dev.codexrs.desktop".to_owned()),
+                app_id: Some("com.codexrs.CodexRS".to_owned()),
                 window_min_size: Some(about_size),
                 ..Default::default()
             },
