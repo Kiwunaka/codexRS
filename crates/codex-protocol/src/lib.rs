@@ -2927,10 +2927,14 @@ pub struct AppInfo {
     pub install_url: Option<String>,
     #[serde(default)]
     pub is_accessible: bool,
-    #[serde(default)]
+    #[serde(default = "default_app_enabled")]
     pub is_enabled: bool,
     #[serde(default)]
     pub plugin_display_names: Vec<String>,
+}
+
+const fn default_app_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize)]
