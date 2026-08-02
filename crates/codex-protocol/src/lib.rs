@@ -5370,7 +5370,7 @@ mod tests {
                         "screenshotUrls": []
                     }
                 },
-                "shareUrl": null,
+                "shareUrl": "https://example.test/plugins/gmail/share",
                 "description": "Search mail and draft replies.",
                 "skills": [{
                     "name": "draft-reply",
@@ -5405,6 +5405,8 @@ mod tests {
             Ok(response)
                 if response.plugin.summary.id == "gmail@openai-curated-remote"
                     && response.plugin.summary.must_show_installation_interstitial.is_none()
+                    && response.plugin.share_url.as_deref()
+                        == Some("https://example.test/plugins/gmail/share")
                     && response.plugin.skills.len() == 1
                     && response.plugin.apps.len() == 1
                     && response.plugin.mcp_servers == ["gmail"]
