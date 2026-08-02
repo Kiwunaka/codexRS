@@ -262,7 +262,7 @@ mod tests {
     fn read_test_file(path: &Path) -> Vec<u8> {
         let mut file = fs::File::open(path).expect("open test file");
         let mut bytes = Vec::new();
-        file.by_ref()
+        std::io::Read::by_ref(&mut file)
             .take((MAX_LINUX_DESKTOP_ENTRY_BYTES + 1) as u64)
             .read_to_end(&mut bytes)
             .expect("read test file");
