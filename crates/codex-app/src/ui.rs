@@ -39687,6 +39687,12 @@ impl WorkspaceView {
                     .tab_group()
                     .tab_stop(true)
                     .key_context("ResetKeyboardShortcutsModal")
+                    .on_action(cx.listener(move |this, _: &Escape, _, cx| {
+                        if !pending {
+                            this.close_workspace_modal(cx);
+                        }
+                        cx.stop_propagation();
+                    }))
                     .on_action(cx.listener(
                         |this, _: &ResetKeyboardShortcutsFocusNext, window, cx| {
                             this.cycle_reset_keyboard_shortcuts_focus(false, window, cx);
@@ -39723,6 +39729,7 @@ impl WorkspaceView {
                                 Button::new("cancel-reset-all-keyboard-shortcuts")
                                     .label("Cancel")
                                     .ghost()
+                                    .disabled(pending)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.close_workspace_modal(cx);
                                     })),
@@ -39739,7 +39746,7 @@ impl WorkspaceView {
                             ),
                     )
                     .into_any_element();
-                self.render_workspace_modal_overlay(panel, true, cx)
+                self.render_workspace_modal_overlay(panel, !pending, cx)
             }
             WorkspaceModal::ProcessManager => {
                 let panel = self.render_process_manager_modal(cx);
