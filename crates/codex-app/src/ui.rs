@@ -30,10 +30,10 @@ use codex_core::{
     GitPullRequestPhase, GitPullRequestProvider, GitReviewCommitState, GitReviewMode,
     GitWorktreeState, HookCard, HookEventName, HookHandlerType, HookIssue, HookProjectEntry,
     HookSource, HookTrustStatus, ImportHistory, ImportItemFailure, ImportItemSuccess,
-    ImportItemType, ImportMigrationItem, ImportProvider, InspectorPane, IntegratedTerminalShell,
-    KeyboardShortcutPreferences, KeyboardShortcutUpdateTarget, LoadStatus, LocalProjectSummary,
-    MAX_COMPOSER_OPTIONS, MAX_FEEDBACK_DETAILS_BYTES, MAX_FUZZY_FILE_QUERY_BYTES,
-    MAX_GIT_COMMIT_MESSAGE_CHARS, MAX_GIT_PULL_REQUEST_BODY_CHARS,
+    ImportItemType, ImportMigrationItem, ImportProvider, InspectorPane, InstalledAppRuntime,
+    IntegratedTerminalShell, KeyboardShortcutPreferences, KeyboardShortcutUpdateTarget, LoadStatus,
+    LocalProjectSummary, MAX_COMPOSER_OPTIONS, MAX_FEEDBACK_DETAILS_BYTES,
+    MAX_FUZZY_FILE_QUERY_BYTES, MAX_GIT_COMMIT_MESSAGE_CHARS, MAX_GIT_PULL_REQUEST_BODY_CHARS,
     MAX_GIT_PULL_REQUEST_TITLE_CHARS, MAX_KEYBOARD_SHORTCUT_ACCELERATOR_BYTES,
     MAX_KEYBOARD_SHORTCUTS_PER_COMMAND, MAX_LOCAL_PROJECT_NAME_BYTES,
     MAX_MCP_FORM_IMAGE_DATA_URL_BYTES, MAX_MCP_FORM_VALUE_BYTES, MAX_PENDING_WORKTREE_FORKS,
@@ -27348,10 +27348,30 @@ impl WorkspaceView {
         let try_app_id = app.id.clone();
         let try_app_name = app.name.clone();
         let is_accessible = app.is_accessible;
-        let enabled = app.enabled;
-        let can_try = is_accessible && enabled;
+        let runtime = self
+            .state
+            .marketplace
+            .installed_apps
+            .iter()
+            .find(|runtime| runtime.id == app.id);
+        let enabled = runtime.map_or(app.enabled, |runtime| runtime.enabled);
+        let callable = runtime.is_some_and(|runtime| runtime.callable);
+        let runtime_current = self.state.marketplace.installed_apps_status
+            == Some(LoadStatus::Ready)
+            && self.state.marketplace.installed_apps_thread_id == self.state.selected_task_id;
+        let can_try = runtime_current && is_accessible && enabled && callable;
+        let try_disabled_tooltip = if !runtime_current {
+            "Refreshing app availability…"
+        } else if !enabled {
+            "Enable and connect this app to try it now"
+        } else if !callable {
+            "This app is not currently available to Codex"
+        } else {
+            "Connect this app to try it now"
+        };
         let pending = self.state.marketplace.pending_app_id.as_deref() == Some(app.id.as_str());
-        let any_pending = self.state.marketplace.pending_app_id.is_some();
+        let any_pending = self.state.marketplace.pending_app_id.is_some()
+            || self.state.marketplace.installed_apps_status == Some(LoadStatus::Loading);
         let manage_url = app
             .install_url
             .as_deref()
@@ -27557,9 +27577,7 @@ impl WorkspaceView {
                         .small()
                         .primary()
                         .disabled(!can_try)
-                        .when(!can_try, |button| {
-                            button.tooltip("Enable and connect this app to try it now")
-                        })
+                        .when(!can_try, |button| button.tooltip(try_disabled_tooltip))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             let prompt = app_mention_prompt(&try_app_id, &try_app_name);
                             this.dispatch(Action::CloseAppDetails, cx);
@@ -29652,33 +29670,34 @@ impl WorkspaceView {
     }
 
     fn render_apps_catalog(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let query = self.state.marketplace.query.trim().to_lowercase();
-        let indices = self
-            .state
-            .marketplace
-            .apps
-            .iter()
-            .enumerate()
-            .filter(|(_, app)| {
-                query.is_empty()
-                    || app.name.to_lowercase().contains(&query)
-                    || app.description.to_lowercase().contains(&query)
-            })
-            .map(|(index, _)| index)
-            .collect::<Vec<_>>();
+        let indices = installed_app_indices(
+            &self.state.marketplace.query,
+            &self.state.marketplace.apps,
+            &self.state.marketplace.installed_apps,
+        );
 
-        match self.state.marketplace.apps_status {
-            Some(LoadStatus::Loading) | None => {
+        match (
+            self.state.marketplace.apps_status,
+            self.state.marketplace.installed_apps_status,
+        ) {
+            (Some(LoadStatus::Loading) | None, _) | (_, Some(LoadStatus::Loading) | None) => {
                 self.render_catalog_message("Loading apps…", "", true, cx)
             }
-            Some(LoadStatus::Failed) => {
-                let message = self
-                    .state
-                    .marketplace
-                    .app_errors
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "The apps list could not be loaded.".to_owned());
+            (Some(LoadStatus::Failed), _) | (_, Some(LoadStatus::Failed)) => {
+                let message = if self.state.marketplace.apps_status == Some(LoadStatus::Failed) {
+                    self.state
+                        .marketplace
+                        .app_errors
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| "The apps list could not be loaded.".to_owned())
+                } else {
+                    self.state
+                        .marketplace
+                        .installed_apps_error
+                        .clone()
+                        .unwrap_or_else(|| "The installed apps could not be loaded.".to_owned())
+                };
                 v_flex()
                     .flex_1()
                     .items_center()
@@ -29705,7 +29724,10 @@ impl WorkspaceView {
                     )
                     .into_any_element()
             }
-            Some(LoadStatus::Idle | LoadStatus::Ready) if indices.is_empty() => v_flex()
+            (
+                Some(LoadStatus::Idle | LoadStatus::Ready),
+                Some(LoadStatus::Idle | LoadStatus::Ready),
+            ) if indices.is_empty() => v_flex()
                 .flex_1()
                 .items_center()
                 .justify_center()
@@ -29716,7 +29738,10 @@ impl WorkspaceView {
                         .child("No installed apps"),
                 )
                 .into_any_element(),
-            Some(LoadStatus::Idle | LoadStatus::Ready) => h_flex()
+            (
+                Some(LoadStatus::Idle | LoadStatus::Ready),
+                Some(LoadStatus::Idle | LoadStatus::Ready),
+            ) => h_flex()
                 .flex_1()
                 .min_h_0()
                 .w_full()
@@ -29951,9 +29976,16 @@ impl WorkspaceView {
         let connect_app_id = app.id.clone();
         let details_app_id = app.id.clone();
         let is_accessible = app.is_accessible;
-        let enabled = app.enabled;
+        let enabled = self
+            .state
+            .marketplace
+            .installed_apps
+            .iter()
+            .find(|runtime| runtime.id == app.id)
+            .map_or(app.enabled, |runtime| runtime.enabled);
         let pending = self.state.marketplace.pending_app_id.as_deref() == Some(&app.id);
-        let any_pending = self.state.marketplace.pending_app_id.is_some();
+        let any_pending = self.state.marketplace.pending_app_id.is_some()
+            || self.state.marketplace.installed_apps_status == Some(LoadStatus::Loading);
         let manage_url = app
             .install_url
             .as_deref()
@@ -43653,6 +43685,28 @@ fn normalized_app_plugin_key(value: &str) -> String {
         .collect()
 }
 
+fn installed_app_indices(
+    query: &str,
+    apps: &[AppCard],
+    installed_apps: &[InstalledAppRuntime],
+) -> Vec<usize> {
+    let query = query.trim().to_lowercase();
+    let installed_ids = installed_apps
+        .iter()
+        .map(|runtime| runtime.id.as_str())
+        .collect::<HashSet<_>>();
+    apps.iter()
+        .enumerate()
+        .filter(|(_, app)| {
+            installed_ids.contains(app.id.as_str())
+                && (query.is_empty()
+                    || app.name.to_lowercase().contains(&query)
+                    || app.description.to_lowercase().contains(&query))
+        })
+        .map(|(index, _)| index)
+        .collect()
+}
+
 fn composer_app_commands(
     query: &str,
     apps: &[AppCard],
@@ -45008,15 +45062,16 @@ mod tests {
         extract_code_comment_findings, fetch_plugin_logo_blocking, find_timeline_matches,
         first_run_account_load_error, first_run_sign_in_visible, format_decimal_grouped,
         format_token_activity_days, format_token_activity_duration, initial_app_state,
-        input_position_for_offset, integrated_terminal_shell_label, is_navigation_back_key,
-        is_navigation_forward_key, is_next_chat_bracket_key, is_previous_chat_bracket_key,
-        is_settings_shortcut_key, is_stable_composer_photo, is_supported_external_url,
-        is_supported_plugin_logo_url, is_terminal_shortcut_key, keyboard_shortcut_search_matches,
-        keyboard_shortcut_settings_matches, keyboard_shortcut_stable_order,
-        linked_pull_request_merge_command_enabled, mcp_auth_status_label, modal_surface_max_height,
-        modal_surface_width, model_availability_nux_candidate, model_upgrade_learn_more_visible,
-        normalized_accelerator, output_artifact_type_label, parse_appearance_theme_share_string,
-        parse_mcp_list, parse_mcp_record, parse_unified_diff, plugin_logo_format,
+        input_position_for_offset, installed_app_indices, integrated_terminal_shell_label,
+        is_navigation_back_key, is_navigation_forward_key, is_next_chat_bracket_key,
+        is_previous_chat_bracket_key, is_settings_shortcut_key, is_stable_composer_photo,
+        is_supported_external_url, is_supported_plugin_logo_url, is_terminal_shortcut_key,
+        keyboard_shortcut_search_matches, keyboard_shortcut_settings_matches,
+        keyboard_shortcut_stable_order, linked_pull_request_merge_command_enabled,
+        mcp_auth_status_label, modal_surface_max_height, modal_surface_width,
+        model_availability_nux_candidate, model_upgrade_learn_more_visible, normalized_accelerator,
+        output_artifact_type_label, parse_appearance_theme_share_string, parse_mcp_list,
+        parse_mcp_record, parse_unified_diff, plugin_logo_format,
         process_manager_auto_refresh_allowed, project_trigger_matches, project_workspace_options,
         pull_request_merge_submission_enabled, reasoning_effort_target, reduced_motion_enabled,
         remote_control_status_label, render_conversation_markdown, replace_composer_file_query,
@@ -45033,12 +45088,12 @@ mod tests {
         AccountAuthOperation, AccountDailyUsageBucket, AccountKind, AccountProfile, AccountState,
         AppCard, AppState, AppearancePalette, AppearanceVariant, ApprovalContext, ApprovalKind,
         ApprovalRequest, ComposerAttachment, ComposerAttachmentKind, ComputerApplicationState,
-        ConnectionStatus, GitPullRequestState, GitWorktreeState, IntegratedTerminalShell,
-        KEYBOARD_SHORTCUT_COMMAND_IDS, LoadStatus, MAX_PENDING_WORKTREE_FORKS, MainRoute,
-        McpAuthStatus, ModelOption, ModelUpgradeNotice, PendingWorktreeFork,
-        PendingWorktreeForkPhase, PluginCard, ProcessManagerState, PullRequestCiStatus,
-        PullRequestDetail, PullRequestIdentity, PullRequestMutationKind, PullRequestState,
-        PullRequestSummary, ReasoningEffortOption, ReducedMotionPreference,
+        ConnectionStatus, GitPullRequestState, GitWorktreeState, InstalledAppRuntime,
+        IntegratedTerminalShell, KEYBOARD_SHORTCUT_COMMAND_IDS, LoadStatus,
+        MAX_PENDING_WORKTREE_FORKS, MainRoute, McpAuthStatus, ModelOption, ModelUpgradeNotice,
+        PendingWorktreeFork, PendingWorktreeForkPhase, PluginCard, ProcessManagerState,
+        PullRequestCiStatus, PullRequestDetail, PullRequestIdentity, PullRequestMutationKind,
+        PullRequestState, PullRequestSummary, ReasoningEffortOption, ReducedMotionPreference,
         RemoteControlRuntimeStatus, ServiceTierOption, SkillCard, SkillScope, TaskRunStatus,
         TaskSummary, TerminalTabState, TimelineItem, TimelineKind, TurnDiffState,
     };
@@ -45912,6 +45967,46 @@ mod tests {
             Some(format!("/skill:{}", path.display()))
         );
         assert!(composer_skill_commands("review", &skills).is_empty());
+    }
+
+    #[test]
+    fn installed_app_indices_intersect_runtime_with_directory_metadata() {
+        let app = |id: &str, name: &str| AppCard {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            description: String::new(),
+            plugin_display_names: Vec::new(),
+            logo_url: None,
+            logo_url_dark: None,
+            install_url: None,
+            is_accessible: true,
+            enabled: true,
+        };
+        let apps = [
+            app("calendar", "Calendar"),
+            app("directory-only", "Directory only"),
+            app("drive", "Drive"),
+        ];
+        let installed = [
+            InstalledAppRuntime {
+                id: "drive".to_owned(),
+                enabled: true,
+                callable: true,
+            },
+            InstalledAppRuntime {
+                id: "runtime-only".to_owned(),
+                enabled: true,
+                callable: true,
+            },
+            InstalledAppRuntime {
+                id: "calendar".to_owned(),
+                enabled: false,
+                callable: false,
+            },
+        ];
+
+        assert_eq!(installed_app_indices("", &apps, &installed), [0, 2]);
+        assert_eq!(installed_app_indices("drive", &apps, &installed), [2]);
     }
 
     #[test]

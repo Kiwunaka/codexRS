@@ -32,7 +32,7 @@ use codex_core::{
     ImportItemFailure, ImportItemSuccess, ImportItemType, ImportMigrationDetails,
     ImportMigrationItem, ImportPluginMigration, ImportProvider, ImportProviderItems,
     ImportSessionMigration, ImportStartFailure, ImportTypeResult, ImportedConnectorCandidate,
-    InspectorPane, IntegratedTerminalShell, KEYBOARD_SHORTCUT_COMMAND_IDS,
+    InspectorPane, InstalledAppRuntime, IntegratedTerminalShell, KEYBOARD_SHORTCUT_COMMAND_IDS,
     KeyboardShortcutPreferences, LocalProjectSummary, MAX_ACCOUNT_DAILY_USAGE_BUCKETS,
     MAX_APPEARANCE_FONT_FAMILY_BYTES, MAX_ATTACHMENT_LABEL_BYTES, MAX_BACKGROUND_TERMINALS,
     MAX_BROWSER_DOWNLOAD_PATH_BYTES, MAX_BROWSER_PERMISSION_ORIGIN_BYTES,
@@ -117,14 +117,14 @@ use codex_platform::{
 };
 use codex_protocol::{
     Account as ProtocolAccount, AccountLoginCompletedNotification, AccountTokenUsageDailyBucket,
-    AppInfo, AppSummary, ApprovalsReviewer as ProtocolApprovalsReviewer, AppsListParams,
-    AppsReadParams, CancelLoginAccountParams, ClientInfo, CollaborationMode, CollaborationModeKind,
-    CollaborationModeSettings, CommandAction, CommandExecutionApprovalDecision,
-    CommandExecutionApprovalDecisionValue, CommandExecutionRequestApprovalParams,
-    CommandExecutionRequestApprovalResponse, ConfigBatchWriteParams, ConfigEdit,
-    ConfigMergeStrategy, ConfigReadParams, ConfigReadResponse, ConfigWriteStatus,
-    DynamicToolCallOutputContentItem, DynamicToolCallParams, DynamicToolCallResponse,
-    ExecpolicyAmendment, ExternalAgentConfigDetectParams,
+    AppInfo, AppSummary, ApprovalsReviewer as ProtocolApprovalsReviewer, AppsInstalledParams,
+    AppsListParams, AppsReadParams, CancelLoginAccountParams, ClientInfo, CollaborationMode,
+    CollaborationModeKind, CollaborationModeSettings, CommandAction,
+    CommandExecutionApprovalDecision, CommandExecutionApprovalDecisionValue,
+    CommandExecutionRequestApprovalParams, CommandExecutionRequestApprovalResponse,
+    ConfigBatchWriteParams, ConfigEdit, ConfigMergeStrategy, ConfigReadParams, ConfigReadResponse,
+    ConfigWriteStatus, DynamicToolCallOutputContentItem, DynamicToolCallParams,
+    DynamicToolCallResponse, ExecpolicyAmendment, ExternalAgentConfigDetectParams,
     ExternalAgentConfigImportCompletedNotification, ExternalAgentConfigImportHistoriesReadResponse,
     ExternalAgentConfigImportItemTypeFailure, ExternalAgentConfigImportItemTypeSuccess,
     ExternalAgentConfigImportParams, ExternalAgentConfigImportProgressNotification,
@@ -493,6 +493,27 @@ fn load_apps(
         }
     }
     Ok(cards)
+}
+
+fn load_installed_apps(
+    app_server: &AppServerConnection,
+    force_refresh: bool,
+    thread_id: Option<String>,
+) -> Result<Vec<InstalledAppRuntime>, codex_platform::AppServerError> {
+    let response = app_server.installed_apps(AppsInstalledParams {
+        thread_id,
+        force_refresh,
+    })?;
+    Ok(response
+        .apps
+        .into_iter()
+        .take(codex_core::MAX_APP_ITEMS)
+        .map(|app| InstalledAppRuntime {
+            id: app.id,
+            enabled: app.enabled,
+            callable: app.callable,
+        })
+        .collect())
 }
 
 fn apps_list_params(
@@ -7539,6 +7560,19 @@ fn run_effect(
                 Action::AppsFailed {
                     thread_id,
                     message: format!("failed to load apps: {error}"),
+                },
+            ),
+        },
+        Effect::RefreshInstalledApps {
+            force_refresh,
+            thread_id,
+        } => match load_installed_apps(app_server, force_refresh, thread_id.clone()) {
+            Ok(apps) => emit(events, Action::InstalledAppsLoaded { thread_id, apps }),
+            Err(error) => emit(
+                events,
+                Action::InstalledAppsFailed {
+                    thread_id,
+                    message: format!("failed to load installed apps: {error}"),
                 },
             ),
         },
