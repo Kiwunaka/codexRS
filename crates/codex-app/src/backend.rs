@@ -10,13 +10,14 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[cfg(any(windows, test))]
 use codex_core::MAX_COMPUTER_ALLOWED_APPS;
 use codex_core::{
-    AccountCredits, AccountKind, AccountProfile, Action, AgentConfigScope, AgentConfigScopeKind,
-    AgentConfigurationMutationKind, AppCard, AppDetailView, AppToolCard, AppearancePalette,
-    AppearancePreferences, AppearanceSemanticColors, AppearanceTheme, AppearanceVariant,
-    ApprovalContext, ApprovalDecision, ApprovalKind, ApprovalRequest,
-    ApprovalsReviewer as CoreApprovalsReviewer, ArchivedTaskDeleteKind, ArtifactPreview,
-    ArtifactPreviewKind, BackgroundTerminal, BrowserApprovalMode, BrowserDownloadPreferences,
-    BrowserDownloadState, BrowserDownloadStatus as CoreBrowserDownloadStatus,
+    AccountCredits, AccountKind, AccountProfile, AccountTokenActivitySummary, Action,
+    AgentConfigScope, AgentConfigScopeKind, AgentConfigurationMutationKind, AppCard, AppDetailView,
+    AppToolCard, AppearancePalette, AppearancePreferences, AppearanceSemanticColors,
+    AppearanceTheme, AppearanceVariant, ApprovalContext, ApprovalDecision, ApprovalKind,
+    ApprovalRequest, ApprovalsReviewer as CoreApprovalsReviewer, ArchivedTaskDeleteKind,
+    ArtifactPreview, ArtifactPreviewKind, BackgroundTerminal, BrowserApprovalMode,
+    BrowserDownloadPreferences, BrowserDownloadState,
+    BrowserDownloadStatus as CoreBrowserDownloadStatus,
     BrowserMouseButton as CoreBrowserMouseButton, BrowserOriginElicitationDecision,
     BrowserPermissionResource, BrowserPermissionValue, BrowserPermissionsState,
     BrowserResourceElicitationDecision, BrowserSitePermission, BrowserTabState,
@@ -113,15 +114,16 @@ use codex_platform::{
     uncommitted_diff as git_uncommitted_diff,
 };
 use codex_protocol::{
-    Account as ProtocolAccount, AccountLoginCompletedNotification, AppInfo,
-    AppListUpdatedNotification, AppSummary, ApprovalsReviewer as ProtocolApprovalsReviewer,
-    AppsListParams, AppsReadParams, CancelLoginAccountParams, ClientInfo, CollaborationMode,
-    CollaborationModeKind, CollaborationModeSettings, CommandAction,
-    CommandExecutionApprovalDecision, CommandExecutionApprovalDecisionValue,
-    CommandExecutionRequestApprovalParams, CommandExecutionRequestApprovalResponse,
-    ConfigBatchWriteParams, ConfigEdit, ConfigMergeStrategy, ConfigReadParams, ConfigReadResponse,
-    ConfigWriteStatus, DynamicToolCallOutputContentItem, DynamicToolCallParams,
-    DynamicToolCallResponse, ExecpolicyAmendment, ExternalAgentConfigDetectParams,
+    Account as ProtocolAccount, AccountLoginCompletedNotification, AccountTokenUsageSummary,
+    AppInfo, AppListUpdatedNotification, AppSummary,
+    ApprovalsReviewer as ProtocolApprovalsReviewer, AppsListParams, AppsReadParams,
+    CancelLoginAccountParams, ClientInfo, CollaborationMode, CollaborationModeKind,
+    CollaborationModeSettings, CommandAction, CommandExecutionApprovalDecision,
+    CommandExecutionApprovalDecisionValue, CommandExecutionRequestApprovalParams,
+    CommandExecutionRequestApprovalResponse, ConfigBatchWriteParams, ConfigEdit,
+    ConfigMergeStrategy, ConfigReadParams, ConfigReadResponse, ConfigWriteStatus,
+    DynamicToolCallOutputContentItem, DynamicToolCallParams, DynamicToolCallResponse,
+    ExecpolicyAmendment, ExternalAgentConfigDetectParams,
     ExternalAgentConfigImportCompletedNotification, ExternalAgentConfigImportHistoriesReadResponse,
     ExternalAgentConfigImportItemTypeFailure, ExternalAgentConfigImportItemTypeSuccess,
     ExternalAgentConfigImportParams, ExternalAgentConfigImportProgressNotification,
@@ -5119,6 +5121,8 @@ fn run_effect(
                 refresh_token: Some(false),
             }) {
                 Ok(response) => {
+                    let supports_token_activity =
+                        account_supports_token_activity(response.account.as_ref());
                     let (usage_limits, credits, usage_error) = if response.account.is_some() {
                         match app_server.read_account_rate_limits() {
                             Ok(response) => {
@@ -5144,6 +5148,16 @@ fn run_effect(
                     } else {
                         (Vec::new(), None, None)
                     };
+                    let (token_activity, token_activity_error) = if supports_token_activity {
+                        match app_server.read_account_token_usage() {
+                            Ok(response) => {
+                                (Some(map_account_token_activity(response.summary)), None)
+                            }
+                            Err(_) => (None, Some("Could not load token activity.".to_owned())),
+                        }
+                    } else {
+                        (None, None)
+                    };
                     emit(
                         events,
                         Action::AccountLoaded {
@@ -5152,6 +5166,8 @@ fn run_effect(
                             usage_limits,
                             credits,
                             usage_error,
+                            token_activity,
+                            token_activity_error,
                         },
                     );
                 }
@@ -14248,6 +14264,20 @@ fn map_account_profile(account: ProtocolAccount) -> AccountProfile {
     }
 }
 
+fn account_supports_token_activity(account: Option<&ProtocolAccount>) -> bool {
+    matches!(account, Some(ProtocolAccount::ChatGpt { .. }))
+}
+
+fn map_account_token_activity(summary: AccountTokenUsageSummary) -> AccountTokenActivitySummary {
+    AccountTokenActivitySummary {
+        lifetime_tokens: summary.lifetime_tokens.filter(|value| *value >= 0),
+        peak_daily_tokens: summary.peak_daily_tokens.filter(|value| *value >= 0),
+        longest_running_turn_sec: summary.longest_running_turn_sec.filter(|value| *value >= 0),
+        current_streak_days: summary.current_streak_days.filter(|value| *value >= 0),
+        longest_streak_days: summary.longest_streak_days.filter(|value| *value >= 0),
+    }
+}
+
 fn browser_account_login_started_action(response: LoginAccountResponse) -> Option<Action> {
     match response {
         LoginAccountResponse::ChatGpt { login_id, auth_url } => {
@@ -16108,28 +16138,29 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use codex_core::{
-        Action, AgentConfigScopeKind, AppearancePalette, AppearancePreferences, AppearanceTheme,
-        AppearanceVariant, ApprovalContext, BrowserApprovalMode, BrowserDownloadPreferences,
-        BrowserDownloadState, BrowserDownloadStatus, BrowserOriginElicitationDecision,
-        BrowserPermissionResource, BrowserPermissionValue, BrowserPermissionsState,
-        BrowserResourceElicitationDecision, BrowserSitePermission, ComposerAttachment,
-        ComposerAttachmentKind, DiffMarkerStyle, FuzzyFileMatchType, GitPreferences, GitReviewMode,
-        ImportItemType, KeyboardShortcutPreferences, MAX_MARKETPLACE_SOURCES,
-        MAX_MCP_SERVER_FIELD_BYTES, McpBrowserOriginElicitation, McpBrowserResourceElicitation,
-        McpElicitation, McpElicitationContent, McpElicitationValue, McpFormElicitation,
-        McpFormFieldKind, McpServerDraft, McpServerStartupFailureReason, McpServerStartupState,
-        McpTransportKind, ModelUpgradeNotice, NetworkPolicyAction, OutputArtifactKind,
-        PermissionFileSystemAccess, PermissionRequestDetail, Personality, PluginDirectoryTab,
-        PrimaryWindowPlacement, PullRequestMergeMethod, ReducedMotionPreference,
-        RemoteControlRuntimeStatus, RemotePairing, RetryableTurnSubmission, RetryableUserMessage,
-        ReviewDelivery, TimelineItem, TimelineKind, TimelineSource, UserInputAnswer,
-        UserInputAnswers,
+        AccountTokenActivitySummary, Action, AgentConfigScopeKind, AppearancePalette,
+        AppearancePreferences, AppearanceTheme, AppearanceVariant, ApprovalContext,
+        BrowserApprovalMode, BrowserDownloadPreferences, BrowserDownloadState,
+        BrowserDownloadStatus, BrowserOriginElicitationDecision, BrowserPermissionResource,
+        BrowserPermissionValue, BrowserPermissionsState, BrowserResourceElicitationDecision,
+        BrowserSitePermission, ComposerAttachment, ComposerAttachmentKind, DiffMarkerStyle,
+        FuzzyFileMatchType, GitPreferences, GitReviewMode, ImportItemType,
+        KeyboardShortcutPreferences, MAX_MARKETPLACE_SOURCES, MAX_MCP_SERVER_FIELD_BYTES,
+        McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
+        McpElicitationContent, McpElicitationValue, McpFormElicitation, McpFormFieldKind,
+        McpServerDraft, McpServerStartupFailureReason, McpServerStartupState, McpTransportKind,
+        ModelUpgradeNotice, NetworkPolicyAction, OutputArtifactKind, PermissionFileSystemAccess,
+        PermissionRequestDetail, Personality, PluginDirectoryTab, PrimaryWindowPlacement,
+        PullRequestMergeMethod, ReducedMotionPreference, RemoteControlRuntimeStatus, RemotePairing,
+        RetryableTurnSubmission, RetryableUserMessage, ReviewDelivery, TimelineItem, TimelineKind,
+        TimelineSource, UserInputAnswer, UserInputAnswers,
     };
     use codex_platform::{AppServerEvent, ComputerApplication, ComputerKey};
     use codex_protocol::{
-        AppInfo, AppToolSummary, ConfigReadResponse, ConnectorMetadata, FuzzyFileSearchMatchType,
+        Account as ProtocolAccount, AccountTokenUsageSummary, AppInfo, AppToolSummary,
+        ConfigReadResponse, ConnectorMetadata, FuzzyFileSearchMatchType,
         FuzzyFileSearchResult as ProtocolFuzzyFileResult, LoginAccountResponse,
-        McpServerStatus as ProtocolMcpServerStatus, ModelSummary, ModelUpgradeInfo,
+        McpServerStatus as ProtocolMcpServerStatus, ModelSummary, ModelUpgradeInfo, PlanType,
         PluginListMarketplaceKind, RemoteControlClient, RemoteControlConnectionStatus, UserInput,
     };
     use crossbeam_channel::bounded;
@@ -16143,8 +16174,8 @@ mod tests {
         MAX_MODEL_UPGRADE_LINK_BYTES, McpElicitationMapError, PendingApproval,
         PendingWorktreeRuntime, STABLE_OPT_OUT_NOTIFICATION_METHODS, TASK_SEARCH_DEBOUNCE,
         TRUSTED_ACCESS_FOR_CYBER_URL, TRUSTED_ACCESS_FOR_CYBER_WARNING, TaskSearchDebouncer,
-        TerminalParserCallbacks, agent_configuration_snapshot, appearance_theme_key,
-        bounded_marketplace_load_error_count, bounded_remote_identifier,
+        TerminalParserCallbacks, account_supports_token_activity, agent_configuration_snapshot,
+        appearance_theme_key, bounded_marketplace_load_error_count, bounded_remote_identifier,
         browser_account_login_started_action, browser_origin_auto_decision,
         browser_origin_elicitation_response, browser_policy_target, browser_resource_auto_decision,
         browser_resource_elicitation_response, cancel_pending_worktree_runtime,
@@ -16159,15 +16190,16 @@ mod tests {
         encode_keyboard_shortcut_preferences, encode_primary_window_placement,
         forbidden_computer_target_message, handle_notification, hook_state_config_value,
         index_app_logos, initialize_capabilities, is_hidden_timeline_item,
-        linux_computer_use_dynamic_tools, map_app_detail, map_app_server_approval, map_apps,
-        map_fuzzy_file_search_results, map_mcp_elicitation, map_mcp_resource_contents,
-        map_mcp_runtime_catalog, map_model_options, map_remote_control_snapshot,
-        map_remote_devices_page, map_timeline_item, map_user_input_request,
-        mcp_elicitation_content_json, mcp_server_config_value, newest_review_mode_from_items,
-        parse_appearance_preferences, parse_appearance_theme, parse_browser_download_preferences,
-        parse_browser_permissions, parse_computer_key_chord, parse_generated_commit_message,
-        parse_generated_commit_pull_request_messages, parse_generated_pull_request_message,
-        parse_git_preferences, parse_keyboard_shortcut_preferences, parse_primary_window_placement,
+        linux_computer_use_dynamic_tools, map_account_token_activity, map_app_detail,
+        map_app_server_approval, map_apps, map_fuzzy_file_search_results, map_mcp_elicitation,
+        map_mcp_resource_contents, map_mcp_runtime_catalog, map_model_options,
+        map_remote_control_snapshot, map_remote_devices_page, map_timeline_item,
+        map_user_input_request, mcp_elicitation_content_json, mcp_server_config_value,
+        newest_review_mode_from_items, parse_appearance_preferences, parse_appearance_theme,
+        parse_browser_download_preferences, parse_browser_permissions, parse_computer_key_chord,
+        parse_generated_commit_message, parse_generated_commit_pull_request_messages,
+        parse_generated_pull_request_message, parse_git_preferences,
+        parse_keyboard_shortcut_preferences, parse_primary_window_placement,
         personalization_snapshot, plugin_directory_includes_marketplace,
         plugin_directory_marketplace_kinds, plugin_requires_install_confirmation,
         pull_request_generation_prompt, pull_request_output_schema, record_retryable_steer,
@@ -16543,6 +16575,42 @@ mod tests {
             &input[2],
             UserInput::LocalImage { path, detail } if path == &image_path && detail.is_none()
         ));
+    }
+
+    #[test]
+    fn account_token_activity_is_chatgpt_only_and_omits_negative_values() {
+        assert!(account_supports_token_activity(Some(
+            &ProtocolAccount::ChatGpt {
+                email: None,
+                plan_type: PlanType::Plus,
+            }
+        )));
+        assert!(!account_supports_token_activity(Some(
+            &ProtocolAccount::ApiKey
+        )));
+        assert!(!account_supports_token_activity(Some(
+            &ProtocolAccount::AmazonBedrock {
+                uses_codex_managed_credentials: false,
+            }
+        )));
+        assert!(!account_supports_token_activity(None));
+
+        assert_eq!(
+            map_account_token_activity(AccountTokenUsageSummary {
+                lifetime_tokens: Some(1_250_000),
+                peak_daily_tokens: Some(-1),
+                longest_running_turn_sec: Some(5_400),
+                current_streak_days: Some(-7),
+                longest_streak_days: Some(21),
+            }),
+            AccountTokenActivitySummary {
+                lifetime_tokens: Some(1_250_000),
+                peak_daily_tokens: None,
+                longest_running_turn_sec: Some(5_400),
+                current_streak_days: None,
+                longest_streak_days: Some(21),
+            }
+        );
     }
 
     #[test]

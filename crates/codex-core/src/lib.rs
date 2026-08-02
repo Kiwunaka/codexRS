@@ -3713,6 +3713,15 @@ pub struct AccountCredits {
     pub balance: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountTokenActivitySummary {
+    pub lifetime_tokens: Option<i64>,
+    pub peak_daily_tokens: Option<i64>,
+    pub longest_running_turn_sec: Option<i64>,
+    pub current_streak_days: Option<i64>,
+    pub longest_streak_days: Option<i64>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AccountAuthOperation {
     #[default]
@@ -3731,6 +3740,8 @@ pub struct AccountState {
     pub usage_limits: Vec<UsageLimitWindow>,
     pub credits: Option<AccountCredits>,
     pub usage_error: Option<String>,
+    pub token_activity: Option<AccountTokenActivitySummary>,
+    pub token_activity_error: Option<String>,
     pub error: Option<String>,
     pub auth_operation: AccountAuthOperation,
     pub login_id: Option<String>,
@@ -3748,6 +3759,8 @@ impl Default for AccountState {
             usage_limits: Vec::new(),
             credits: None,
             usage_error: None,
+            token_activity: None,
+            token_activity_error: None,
             error: None,
             auth_operation: AccountAuthOperation::Idle,
             login_id: None,
@@ -5036,6 +5049,8 @@ pub enum Action {
         usage_limits: Vec<UsageLimitWindow>,
         credits: Option<AccountCredits>,
         usage_error: Option<String>,
+        token_activity: Option<AccountTokenActivitySummary>,
+        token_activity_error: Option<String>,
     },
     AccountLoadFailed(String),
     StartAccountLogin,
@@ -7460,6 +7475,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.account.status = LoadStatus::Loading;
             state.account.error = None;
             state.account.usage_error = None;
+            state.account.token_activity_error = None;
             let mut effects = vec![
                 Effect::LoadTasks {
                     generation: state.task_generation,
@@ -13456,6 +13472,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.account.status = LoadStatus::Loading;
             state.account.error = None;
             state.account.usage_error = None;
+            state.account.token_activity_error = None;
             vec![Effect::LoadAccount]
         }
         Action::AccountLoaded {
@@ -13464,6 +13481,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             mut usage_limits,
             mut credits,
             usage_error,
+            token_activity,
+            token_activity_error,
         } => {
             if let Some(profile) = &mut profile {
                 profile.email = profile.email.take().and_then(|email| {
@@ -13491,6 +13510,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.account.credits = credits;
             state.account.usage_error =
                 usage_error.map(|message| bounded_string(message, MAX_ACCOUNT_FIELD_BYTES));
+            state.account.token_activity = token_activity;
+            state.account.token_activity_error = token_activity_error
+                .map(|message| bounded_string(message, MAX_ACCOUNT_FIELD_BYTES));
             state.account.error = None;
             if connected {
                 state.account.auth_operation = AccountAuthOperation::Idle;
@@ -17628,23 +17650,24 @@ mod tests {
 
     use super::{
         APPEARANCE_CODE_THEMES, AccountAuthOperation, AccountCredits, AccountKind, AccountProfile,
-        Action, AgentConfigScope, AgentConfigScopeKind, AgentConfigurationMutationKind, AppCard,
-        AppDetailView, AppState, AppToolCard, AppearancePalette, AppearancePreferences,
-        AppearanceTheme, AppearanceVariant, ApprovalContext, ApprovalDecision, ApprovalKind,
-        ApprovalRequest, ApprovalsReviewer, ArchivedTaskDeleteKind, ArtifactPreview,
-        ArtifactPreviewKind, ArtifactState, BackgroundTerminal, BrowserApprovalMode,
-        BrowserDownloadPreferences, BrowserDownloadState, BrowserDownloadStatus, BrowserKeyInput,
-        BrowserMouseButton, BrowserOriginElicitationDecision, BrowserPermissionResource,
-        BrowserPermissionValue, BrowserPermissionsState, BrowserResourceElicitationDecision,
-        BrowserSitePermission, BrowserTabState, ChatMemoryPreferences, CommandApprovalContext,
-        ComposerAttachment, ComposerAttachmentKind, ComputerApplicationState, ComputerUseState,
-        ConnectionStatus, DiffMarkerStyle, Effect, FeedbackClassification, FuzzyFileMatchType,
-        FuzzyFileResult, GitBranchConflictState, GitCommitNextStep, GitCommitPhase, GitDiffScope,
-        GitPreferences, GitPullRequestNextStep, GitPullRequestPhase, GitPullRequestProvider,
-        GitPullRequestState, GitReviewCommitState, GitReviewMode, GitState, GitWorktreeState,
-        HookCard, HookEventName, HookHandlerType, HookProjectEntry, HookSource, HookTrustStatus,
-        ImportBatch, ImportHistory, ImportItemSuccess, ImportItemType, ImportMigrationDetails,
-        ImportMigrationItem, ImportProvider, ImportProviderItems, ImportTypeResult, InspectorPane,
+        AccountTokenActivitySummary, Action, AgentConfigScope, AgentConfigScopeKind,
+        AgentConfigurationMutationKind, AppCard, AppDetailView, AppState, AppToolCard,
+        AppearancePalette, AppearancePreferences, AppearanceTheme, AppearanceVariant,
+        ApprovalContext, ApprovalDecision, ApprovalKind, ApprovalRequest, ApprovalsReviewer,
+        ArchivedTaskDeleteKind, ArtifactPreview, ArtifactPreviewKind, ArtifactState,
+        BackgroundTerminal, BrowserApprovalMode, BrowserDownloadPreferences, BrowserDownloadState,
+        BrowserDownloadStatus, BrowserKeyInput, BrowserMouseButton,
+        BrowserOriginElicitationDecision, BrowserPermissionResource, BrowserPermissionValue,
+        BrowserPermissionsState, BrowserResourceElicitationDecision, BrowserSitePermission,
+        BrowserTabState, ChatMemoryPreferences, CommandApprovalContext, ComposerAttachment,
+        ComposerAttachmentKind, ComputerApplicationState, ComputerUseState, ConnectionStatus,
+        DiffMarkerStyle, Effect, FeedbackClassification, FuzzyFileMatchType, FuzzyFileResult,
+        GitBranchConflictState, GitCommitNextStep, GitCommitPhase, GitDiffScope, GitPreferences,
+        GitPullRequestNextStep, GitPullRequestPhase, GitPullRequestProvider, GitPullRequestState,
+        GitReviewCommitState, GitReviewMode, GitState, GitWorktreeState, HookCard, HookEventName,
+        HookHandlerType, HookProjectEntry, HookSource, HookTrustStatus, ImportBatch, ImportHistory,
+        ImportItemSuccess, ImportItemType, ImportMigrationDetails, ImportMigrationItem,
+        ImportProvider, ImportProviderItems, ImportTypeResult, InspectorPane,
         IntegratedTerminalShell, KeyboardShortcutPreferences, KeyboardShortcutUpdateTarget,
         LoadStatus, LocalProjectSummary, MAX_ACCOUNT_FIELD_BYTES, MAX_BROWSER_DOWNLOADS,
         MAX_COMPOSER_BYTES, MAX_GIT_BRANCH_BYTES, MAX_GIT_DIFF_BYTES, MAX_GIT_INSTRUCTIONS_BYTES,
@@ -24906,6 +24929,14 @@ mod tests {
                     balance: Some(format!("  {}  ", "9".repeat(600))),
                 }),
                 usage_error: None,
+                token_activity: Some(AccountTokenActivitySummary {
+                    lifetime_tokens: Some(1_250_000),
+                    peak_daily_tokens: Some(250_000),
+                    longest_running_turn_sec: Some(5_400),
+                    current_streak_days: Some(7),
+                    longest_streak_days: Some(21),
+                }),
+                token_activity_error: None,
             },
         );
 
@@ -24934,6 +24965,14 @@ mod tests {
                 .as_ref()
                 .and_then(|credits| credits.balance.as_ref())
                 .is_some_and(|balance| balance.len() <= 512)
+        );
+        assert_eq!(
+            state
+                .account
+                .token_activity
+                .as_ref()
+                .and_then(|summary| summary.lifetime_tokens),
+            Some(1_250_000)
         );
     }
 
@@ -25006,6 +25045,8 @@ mod tests {
                 usage_limits: Vec::new(),
                 credits: None,
                 usage_error: None,
+                token_activity: None,
+                token_activity_error: None,
             },
         );
         assert_eq!(

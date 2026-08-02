@@ -524,6 +524,22 @@ pub struct GetAccountRateLimitsResponse {
     pub rate_limits: RateLimitSnapshot,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetAccountTokenUsageResponse {
+    pub summary: AccountTokenUsageSummary,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountTokenUsageSummary {
+    pub lifetime_tokens: Option<i64>,
+    pub peak_daily_tokens: Option<i64>,
+    pub longest_running_turn_sec: Option<i64>,
+    pub current_streak_days: Option<i64>,
+    pub longest_streak_days: Option<i64>,
+}
+
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThreadSortKey {
@@ -3491,12 +3507,12 @@ mod tests {
         FuzzyFileSearchParams, FuzzyFileSearchResponse,
         FuzzyFileSearchSessionCompletedNotification, FuzzyFileSearchSessionStartParams,
         FuzzyFileSearchSessionUpdateParams, FuzzyFileSearchSessionUpdatedNotification,
-        GetAccountParams, GetAccountRateLimitsResponse, GetAccountResponse, GetAuthStatusParams,
-        GetAuthStatusResponse, GitDiffToRemoteParams, GitDiffToRemoteResponse,
-        HistorySortDirection, HookEventName, HookHandlerType, HookSource, HookTrustStatus,
-        HooksListParams, HooksListResponse, IncomingMessage, InitializeParams,
-        ListMcpServerStatusParams, ListMcpServerStatusResponse, LoginAccountParams,
-        LoginAccountResponse, MarketplaceAddParams, MarketplaceRemoveParams,
+        GetAccountParams, GetAccountRateLimitsResponse, GetAccountResponse,
+        GetAccountTokenUsageResponse, GetAuthStatusParams, GetAuthStatusResponse,
+        GitDiffToRemoteParams, GitDiffToRemoteResponse, HistorySortDirection, HookEventName,
+        HookHandlerType, HookSource, HookTrustStatus, HooksListParams, HooksListResponse,
+        IncomingMessage, InitializeParams, ListMcpServerStatusParams, ListMcpServerStatusResponse,
+        LoginAccountParams, LoginAccountResponse, MarketplaceAddParams, MarketplaceRemoveParams,
         MarketplaceUpgradeParams, McpAuthStatus, McpElicitationPrimitiveSchema,
         McpResourceReadParams, McpResourceReadResponse, McpServerElicitationAction,
         McpServerElicitationRequest, McpServerElicitationRequestParams,
@@ -3716,6 +3732,30 @@ mod tests {
                         .as_ref()
                         .and_then(|credits| credits.balance.as_deref())
                         == Some("125.5")
+        ));
+
+        let token_usage = serde_json::from_value::<GetAccountTokenUsageResponse>(json!({
+            "summary": {
+                "lifetimeTokens": 1250000,
+                "peakDailyTokens": 250000,
+                "longestRunningTurnSec": 5400,
+                "currentStreakDays": 7,
+                "longestStreakDays": 21
+            },
+            "dailyUsageBuckets": [{
+                "startDate": "2026-07-01",
+                "tokens": 250000
+            }]
+        }));
+        assert!(matches!(
+            token_usage,
+            Ok(GetAccountTokenUsageResponse {
+                summary,
+            }) if summary.lifetime_tokens == Some(1_250_000)
+                && summary.peak_daily_tokens == Some(250_000)
+                && summary.longest_running_turn_sec == Some(5_400)
+                && summary.current_streak_days == Some(7)
+                && summary.longest_streak_days == Some(21)
         ));
     }
 

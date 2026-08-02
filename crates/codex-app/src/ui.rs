@@ -17,16 +17,16 @@ use base64::{
 };
 use chrono::{Local, TimeZone};
 use codex_core::{
-    APPEARANCE_CODE_THEMES, AccountAuthOperation, AccountKind, AccountState, Action,
-    AgentConfigScope, AgentConfigScopeKind, AppCard, AppDetailView, AppState, AppearancePalette,
-    AppearancePreferences, AppearanceTheme, AppearanceVariant, ApprovalContext, ApprovalDecision,
-    ApprovalRequest, ArchivedTaskDeleteKind, ArtifactPreviewKind, BackgroundTerminal,
-    BrowserApprovalMode, BrowserDownloadState, BrowserDownloadStatus, BrowserKeyInput,
-    BrowserMouseButton, BrowserOriginElicitationDecision, BrowserPermissionResource,
-    BrowserPermissionValue, BrowserResourceElicitationDecision, BrowserSitePermission,
-    ChatMemoryPreferences, ComposerAttachmentKind, ComputerApplicationState, ConnectionStatus,
-    DiffMarkerStyle, Effect, FeedbackClassification, FuzzyFileMatchType, FuzzyFileResult,
-    GitCommitNextStep, GitCommitPhase, GitDiffScope, GitFileKind, GitPreferences,
+    APPEARANCE_CODE_THEMES, AccountAuthOperation, AccountKind, AccountState,
+    AccountTokenActivitySummary, Action, AgentConfigScope, AgentConfigScopeKind, AppCard,
+    AppDetailView, AppState, AppearancePalette, AppearancePreferences, AppearanceTheme,
+    AppearanceVariant, ApprovalContext, ApprovalDecision, ApprovalRequest, ArchivedTaskDeleteKind,
+    ArtifactPreviewKind, BackgroundTerminal, BrowserApprovalMode, BrowserDownloadState,
+    BrowserDownloadStatus, BrowserKeyInput, BrowserMouseButton, BrowserOriginElicitationDecision,
+    BrowserPermissionResource, BrowserPermissionValue, BrowserResourceElicitationDecision,
+    BrowserSitePermission, ChatMemoryPreferences, ComposerAttachmentKind, ComputerApplicationState,
+    ConnectionStatus, DiffMarkerStyle, Effect, FeedbackClassification, FuzzyFileMatchType,
+    FuzzyFileResult, GitCommitNextStep, GitCommitPhase, GitDiffScope, GitFileKind, GitPreferences,
     GitPullRequestPhase, GitPullRequestProvider, GitReviewCommitState, GitReviewMode,
     GitWorktreeState, HookCard, HookEventName, HookHandlerType, HookIssue, HookProjectEntry,
     HookSource, HookTrustStatus, ImportHistory, ImportItemFailure, ImportItemSuccess,
@@ -35187,6 +35187,54 @@ impl WorkspaceView {
                 cards.push(settings_card("Credits balance", balance, cx));
             }
 
+            if let Some(summary) = account.token_activity.as_ref() {
+                let rows = account_token_activity_rows(summary)
+                    .into_iter()
+                    .map(|(label, value)| {
+                        h_flex()
+                            .w_full()
+                            .min_w_0()
+                            .px_4()
+                            .py_2()
+                            .gap_4()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(label),
+                            )
+                            .child(div().min_w_0().truncate().text_sm().child(value))
+                    })
+                    .collect::<Vec<_>>();
+                if !rows.is_empty() {
+                    cards.push(
+                        v_flex()
+                            .max_w(px(760.0))
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .bg(cx.theme().sidebar)
+                            .child(
+                                div()
+                                    .px_4()
+                                    .py_3()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child("Token activity"),
+                            )
+                            .children(rows)
+                            .into_any_element(),
+                    );
+                }
+            }
+
+            if let Some(message) = account.token_activity_error {
+                cards.push(settings_card("Token activity", message, cx));
+            }
+
             if let Some(message) = account.usage_error {
                 cards.push(settings_card("General usage limits", message, cx));
             } else if account.usage_limits.is_empty() {
@@ -40836,6 +40884,55 @@ fn format_duration(seconds: i64) -> String {
     }
 }
 
+fn account_token_activity_rows(
+    summary: &AccountTokenActivitySummary,
+) -> Vec<(&'static str, String)> {
+    [
+        (
+            "Lifetime tokens",
+            summary.lifetime_tokens.map(format_compact_number),
+        ),
+        (
+            "Peak daily tokens",
+            summary.peak_daily_tokens.map(format_compact_number),
+        ),
+        (
+            "Longest task",
+            summary
+                .longest_running_turn_sec
+                .map(format_token_activity_duration),
+        ),
+        (
+            "Current streak",
+            summary.current_streak_days.map(format_token_activity_days),
+        ),
+        (
+            "Longest streak",
+            summary.longest_streak_days.map(format_token_activity_days),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(label, value)| value.map(|value| (label, value)))
+    .collect()
+}
+
+fn format_token_activity_duration(seconds: i64) -> String {
+    let days = seconds.max(0) / 86_400;
+    if days >= 1_000 {
+        format!("{}d", format_compact_number(days))
+    } else {
+        format_duration(seconds)
+    }
+}
+
+fn format_token_activity_days(days: i64) -> String {
+    format!(
+        "{} day{}",
+        format_compact_number(days),
+        if days == 1 { "" } else { "s" }
+    )
+}
+
 fn approval_file_change_count(item: &TimelineItem) -> usize {
     if item.kind != TimelineKind::FileChange {
         return 1;
@@ -44021,17 +44118,18 @@ mod tests {
         default_branch_name, diff_file_review_rows, diff_file_sections,
         extract_code_comment_findings, fetch_plugin_logo_blocking, find_timeline_matches,
         first_run_account_load_error, first_run_sign_in_visible, format_decimal_grouped,
-        initial_app_state, input_position_for_offset, integrated_terminal_shell_label,
-        is_navigation_back_key, is_navigation_forward_key, is_next_chat_bracket_key,
-        is_previous_chat_bracket_key, is_settings_shortcut_key, is_stable_composer_photo,
-        is_supported_external_url, is_supported_plugin_logo_url, is_terminal_shortcut_key,
-        keyboard_shortcut_search_matches, keyboard_shortcut_settings_matches,
-        keyboard_shortcut_stable_order, linked_pull_request_merge_command_enabled,
-        mcp_auth_status_label, modal_surface_max_height, modal_surface_width,
-        model_upgrade_learn_more_visible, normalized_accelerator, output_artifact_type_label,
-        parse_appearance_theme_share_string, parse_mcp_list, parse_mcp_record, parse_unified_diff,
-        plugin_logo_format, process_manager_auto_refresh_allowed, project_trigger_matches,
-        project_workspace_options, pull_request_merge_submission_enabled, reasoning_effort_target,
+        format_token_activity_days, format_token_activity_duration, initial_app_state,
+        input_position_for_offset, integrated_terminal_shell_label, is_navigation_back_key,
+        is_navigation_forward_key, is_next_chat_bracket_key, is_previous_chat_bracket_key,
+        is_settings_shortcut_key, is_stable_composer_photo, is_supported_external_url,
+        is_supported_plugin_logo_url, is_terminal_shortcut_key, keyboard_shortcut_search_matches,
+        keyboard_shortcut_settings_matches, keyboard_shortcut_stable_order,
+        linked_pull_request_merge_command_enabled, mcp_auth_status_label, modal_surface_max_height,
+        modal_surface_width, model_upgrade_learn_more_visible, normalized_accelerator,
+        output_artifact_type_label, parse_appearance_theme_share_string, parse_mcp_list,
+        parse_mcp_record, parse_unified_diff, plugin_logo_format,
+        process_manager_auto_refresh_allowed, project_trigger_matches, project_workspace_options,
+        pull_request_merge_submission_enabled, reasoning_effort_target,
         remote_control_status_label, render_conversation_markdown, replace_composer_file_query,
         repository_uses_split_diff, reserve_thread_find_history_page, sanitize_assistant_markdown,
         selected_approval_request, selected_model_upgrade_notice, selected_task_copy_value,
@@ -44067,6 +44165,13 @@ mod tests {
             forked_from_id: None,
             status: TaskRunStatus::Idle,
         }
+    }
+
+    #[test]
+    fn token_activity_formats_extreme_provider_values_compactly() {
+        assert_eq!(format_token_activity_duration(i64::MAX), "106752Bd");
+        assert_eq!(format_token_activity_days(1), "1 day");
+        assert_eq!(format_token_activity_days(i64::MAX), "9223372037B days");
     }
 
     #[test]
