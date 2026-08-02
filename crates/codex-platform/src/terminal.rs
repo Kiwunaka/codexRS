@@ -156,6 +156,7 @@ pub struct TerminalSession {
     commands: Sender<TerminalCommand>,
     events: Receiver<TerminalEvent>,
     output_truncated: Arc<AtomicBool>,
+    shutdown_requested: Arc<AtomicBool>,
     process_id: Option<u32>,
     thread: Option<JoinHandle<()>>,
 }
@@ -196,6 +197,8 @@ impl TerminalSession {
         let (event_sender, event_receiver) = crossbeam_channel::bounded(TERMINAL_EVENT_CAPACITY);
         let output_truncated = Arc::new(AtomicBool::new(false));
         let reader_truncated = Arc::clone(&output_truncated);
+        let shutdown_requested = Arc::new(AtomicBool::new(false));
+        let terminal_shutdown_requested = Arc::clone(&shutdown_requested);
         let response_commands = command_sender.clone();
         let thread = thread::Builder::new()
             .name("codex-terminal-supervisor".to_owned())
@@ -210,6 +213,7 @@ impl TerminalSession {
                     response_commands,
                     event_sender,
                     reader_truncated,
+                    terminal_shutdown_requested,
                 );
             })
             .map_err(TerminalError::Thread)?;
@@ -218,6 +222,7 @@ impl TerminalSession {
             commands: command_sender,
             events: event_receiver,
             output_truncated,
+            shutdown_requested,
             process_id,
             thread: Some(thread),
         })
@@ -261,6 +266,7 @@ impl TerminalSession {
     }
 
     pub fn shutdown(&mut self) {
+        self.shutdown_requested.store(true, Ordering::Release);
         let _ = self.commands.try_send(TerminalCommand::Shutdown);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -417,6 +423,7 @@ fn run_terminal(
     response_commands: Sender<TerminalCommand>,
     events: Sender<TerminalEvent>,
     output_truncated: Arc<AtomicBool>,
+    shutdown_requested: Arc<AtomicBool>,
 ) {
     let reader_events = events.clone();
     let reader_thread = thread::Builder::new()
@@ -442,7 +449,18 @@ fn run_terminal(
             }
         }
 
-        match commands.recv_timeout(TERMINAL_TICK) {
+        let command = next_terminal_command(&shutdown_requested, &commands);
+        if shutdown_requested.load(Ordering::Acquire) {
+            graceful_terminal_exit(child.as_mut(), writer.as_mut());
+            exit_code = child
+                .try_wait()
+                .ok()
+                .flatten()
+                .map(|status| status.exit_code());
+            break;
+        }
+
+        match command {
             Ok(TerminalCommand::Write(bytes)) => {
                 if !terminal_ready {
                     pending_input.push_back(bytes);
@@ -507,6 +525,17 @@ fn run_terminal(
     });
 }
 
+fn next_terminal_command(
+    shutdown_requested: &AtomicBool,
+    commands: &Receiver<TerminalCommand>,
+) -> Result<TerminalCommand, crossbeam_channel::RecvTimeoutError> {
+    if shutdown_requested.load(Ordering::Acquire) {
+        Ok(TerminalCommand::Shutdown)
+    } else {
+        commands.recv_timeout(TERMINAL_TICK)
+    }
+}
+
 fn graceful_terminal_exit(child: &mut (dyn Child + Send + Sync), writer: &mut (dyn Write + Send)) {
     let _ = writer.write_all(b"exit\r");
     let _ = writer.flush();
@@ -569,8 +598,26 @@ mod tests {
     use codex_core::IntegratedTerminalShell;
 
     use super::{
-        MAX_TERMINAL_INPUT_BYTES, TerminalConfig, TerminalEvent, TerminalSession, read_terminal,
+        MAX_TERMINAL_INPUT_BYTES, TerminalCommand, TerminalConfig, TerminalEvent, TerminalSession,
+        next_terminal_command, read_terminal,
     };
+
+    #[test]
+    fn shutdown_request_outranks_a_full_terminal_command_queue() {
+        let (sender, receiver) = crossbeam_channel::bounded(1);
+        assert!(sender.try_send(TerminalCommand::Write(vec![b'x'])).is_ok());
+        let shutdown_requested = AtomicBool::new(false);
+        shutdown_requested.store(true, Ordering::Release);
+
+        assert!(matches!(
+            next_terminal_command(&shutdown_requested, &receiver),
+            Ok(TerminalCommand::Shutdown)
+        ));
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(TerminalCommand::Write(bytes)) if bytes == b"x"
+        ));
+    }
 
     #[test]
     fn reader_marks_output_truncated_when_the_bounded_queue_fills() {
