@@ -7681,7 +7681,16 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 });
             }
             if let Some(task_id) = state.selected_task_id.clone() {
-                effects.push(resume_task_effect(state, task_id));
+                effects.push(resume_task_effect(state, task_id.clone()));
+                let timeline = state.timelines.entry(task_id.clone()).or_default();
+                timeline.generation = timeline.generation.saturating_add(1);
+                timeline.status = LoadStatus::Loading;
+                timeline.next_cursor = None;
+                effects.push(Effect::LoadTimeline {
+                    task_id,
+                    generation: timeline.generation,
+                    cursor: None,
+                });
             }
             if let Some(effect) = load_marketplace_route_effect(state) {
                 effects.push(effect);
@@ -28944,6 +28953,81 @@ mod tests {
                 last_error: None,
             }
         );
+    }
+
+    #[test]
+    fn reconnect_reloads_the_selected_timeline_authoritatively() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        let partial = TimelineItem {
+            id: "partial".to_owned(),
+            turn_id: "turn-1".to_owned(),
+            kind: TimelineKind::Agent,
+            text: "partial output".to_owned(),
+            detail: None,
+            process_id: None,
+            memory_citations: Vec::new(),
+            sources: Vec::new(),
+            attachments: Vec::new(),
+            output_artifacts: Vec::new(),
+            edit_supported: false,
+            completed: false,
+        };
+        let timeline = state.timelines.entry("t1".to_owned()).or_default();
+        timeline.status = LoadStatus::Ready;
+        timeline.generation = 7;
+        timeline.next_cursor = Some("stale-page".to_owned());
+        timeline.items = vec![partial.clone()];
+        timeline.rebuild_item_indices();
+        state.connection = ConnectionStatus::Recovering {
+            attempt: 1,
+            retry_in_ms: None,
+            last_error: None,
+        };
+
+        let effects = reduce(&mut state, Action::Connected);
+
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::ResumeTask { task_id, .. } if task_id == "t1"
+        )));
+        assert!(effects.contains(&Effect::LoadTimeline {
+            task_id: "t1".to_owned(),
+            generation: 8,
+            cursor: None,
+        }));
+        let timeline = &state.timelines["t1"];
+        assert_eq!(timeline.status, LoadStatus::Loading);
+        assert!(timeline.next_cursor.is_none());
+        assert_eq!(timeline.items(), std::slice::from_ref(&partial));
+
+        reduce(
+            &mut state,
+            Action::TimelineLoaded {
+                task_id: "t1".to_owned(),
+                generation: 7,
+                items: Vec::new(),
+                next_cursor: None,
+                append: false,
+            },
+        );
+        assert_eq!(
+            state.timelines["t1"].items(),
+            std::slice::from_ref(&partial)
+        );
+
+        reduce(
+            &mut state,
+            Action::TimelineLoaded {
+                task_id: "t1".to_owned(),
+                generation: 8,
+                items: Vec::new(),
+                next_cursor: None,
+                append: false,
+            },
+        );
+        assert!(state.timelines["t1"].items().is_empty());
+        assert_eq!(state.timelines["t1"].status, LoadStatus::Ready);
     }
 
     fn remote_requirements(managed_allow_remote_control: Option<bool>) -> PermissionRequirements {
