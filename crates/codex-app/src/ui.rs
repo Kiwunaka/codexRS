@@ -1532,7 +1532,9 @@ gpui::actions!(
         ResetMemoriesFocusNext,
         ResetMemoriesFocusPrev,
         ResetKeyboardShortcutsFocusNext,
-        ResetKeyboardShortcutsFocusPrev
+        ResetKeyboardShortcutsFocusPrev,
+        AllowAllBrowserSitesFocusNext,
+        AllowAllBrowserSitesFocusPrev
     ]
 );
 
@@ -4435,6 +4437,16 @@ pub fn run() {
                     ResetKeyboardShortcutsFocusPrev,
                     Some("ResetKeyboardShortcutsModal"),
                 ),
+                KeyBinding::new(
+                    "tab",
+                    AllowAllBrowserSitesFocusNext,
+                    Some("AllowAllBrowserSitesModal"),
+                ),
+                KeyBinding::new(
+                    "shift-tab",
+                    AllowAllBrowserSitesFocusPrev,
+                    Some("AllowAllBrowserSitesModal"),
+                ),
             ]);
             let default_bounds =
                 Bounds::centered(None, size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)), cx);
@@ -4991,6 +5003,8 @@ struct WorkspaceView {
     reset_memories_focus_requested: bool,
     reset_keyboard_shortcuts_focus: FocusHandle,
     reset_keyboard_shortcuts_focus_requested: bool,
+    allow_all_browser_sites_focus: FocusHandle,
+    allow_all_browser_sites_focus_requested: bool,
     account_logout_focus: FocusHandle,
     account_logout_focus_requested: bool,
     plugin_install_confirmation_focus: FocusHandle,
@@ -5066,6 +5080,7 @@ impl WorkspaceView {
         let delete_archived_tasks_focus = cx.focus_handle();
         let reset_memories_focus = cx.focus_handle();
         let reset_keyboard_shortcuts_focus = cx.focus_handle();
+        let allow_all_browser_sites_focus = cx.focus_handle();
         let account_logout_focus = cx.focus_handle();
         let plugin_install_confirmation_focus = cx.focus_handle();
         let initial_appearance_preferences = AppearancePreferences::default();
@@ -6077,6 +6092,8 @@ impl WorkspaceView {
             reset_memories_focus_requested: false,
             reset_keyboard_shortcuts_focus,
             reset_keyboard_shortcuts_focus_requested: false,
+            allow_all_browser_sites_focus,
+            allow_all_browser_sites_focus_requested: false,
             account_logout_focus,
             account_logout_focus_requested: false,
             plugin_install_confirmation_focus,
@@ -8505,6 +8522,36 @@ impl WorkspaceView {
         cx.stop_propagation();
     }
 
+    fn cycle_allow_all_browser_sites_focus(
+        &mut self,
+        backwards: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if backwards {
+            window.focus_prev();
+            if self.allow_all_browser_sites_focus.is_focused(window)
+                || !self
+                    .allow_all_browser_sites_focus
+                    .contains_focused(window, cx)
+            {
+                self.allow_all_browser_sites_focus.focus(window);
+                window.focus_next();
+                window.focus_next();
+            }
+        } else {
+            window.focus_next();
+            if !self
+                .allow_all_browser_sites_focus
+                .contains_focused(window, cx)
+            {
+                self.allow_all_browser_sites_focus.focus(window);
+                window.focus_next();
+            }
+        }
+        cx.stop_propagation();
+    }
+
     fn prompt_for_workspace(&mut self, cx: &mut Context<Self>) {
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: false,
@@ -9420,6 +9467,12 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.workspace_modal.is_some() {
+            self.keyboard_shortcut_capture = None;
+            self.pending_keyboard_shortcut = None;
+            return false;
+        }
+
         if self.keyboard_shortcut_capture.is_some() {
             if keystroke.key.eq_ignore_ascii_case("escape") {
                 self.cancel_keyboard_shortcut_capture(cx);
@@ -25804,6 +25857,20 @@ impl WorkspaceView {
             .bg(cx.theme().popover)
             .shadow_xl()
             .occlude()
+            .track_focus(&self.allow_all_browser_sites_focus)
+            .tab_group()
+            .tab_stop(true)
+            .key_context("AllowAllBrowserSitesModal")
+            .on_action(
+                cx.listener(|this, _: &AllowAllBrowserSitesFocusNext, window, cx| {
+                    this.cycle_allow_all_browser_sites_focus(false, window, cx);
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &AllowAllBrowserSitesFocusPrev, window, cx| {
+                    this.cycle_allow_all_browser_sites_focus(true, window, cx);
+                }),
+            )
             .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
             .child(
                 div()
@@ -41363,6 +41430,17 @@ impl Render for WorkspaceView {
             }
         } else {
             self.reset_keyboard_shortcuts_focus_requested = false;
+        }
+        if matches!(
+            self.workspace_modal,
+            Some(WorkspaceModal::AllowAllBrowserSites { .. })
+        ) {
+            if !self.allow_all_browser_sites_focus_requested {
+                self.allow_all_browser_sites_focus.focus(window);
+                self.allow_all_browser_sites_focus_requested = true;
+            }
+        } else {
+            self.allow_all_browser_sites_focus_requested = false;
         }
         if matches!(self.workspace_modal, Some(WorkspaceModal::LogOutAccount)) {
             if !self.account_logout_focus_requested {
