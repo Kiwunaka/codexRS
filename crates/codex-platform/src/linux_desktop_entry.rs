@@ -225,6 +225,7 @@ fn publish_temporary_entry(
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use std::{
         ffi::OsString,
