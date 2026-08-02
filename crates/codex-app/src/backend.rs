@@ -1283,6 +1283,10 @@ const GIT_INCLUDE_UNSTAGED_PREFERENCE: &str = "git_action_include_unstaged_chang
 enum BackendCommand {
     Run(Box<Effect>),
     StartApiKeyLogin(SecretString),
+    StartBedrockLogin {
+        api_key: SecretString,
+        region: String,
+    },
     Shutdown,
 }
 
@@ -2179,6 +2183,19 @@ impl Backend {
     pub fn start_api_key_login(&self, api_key: SecretString) -> Result<(), &'static str> {
         self.commands
             .try_send(BackendCommand::StartApiKeyLogin(api_key))
+            .map_err(|error| match error {
+                crossbeam_channel::TrySendError::Full(_) => "backend command queue is full",
+                crossbeam_channel::TrySendError::Disconnected(_) => "backend is disconnected",
+            })
+    }
+
+    pub fn start_bedrock_login(
+        &self,
+        api_key: SecretString,
+        region: String,
+    ) -> Result<(), &'static str> {
+        self.commands
+            .try_send(BackendCommand::StartBedrockLogin { api_key, region })
             .map_err(|error| match error {
                 crossbeam_channel::TrySendError::Full(_) => "backend command queue is full",
                 crossbeam_channel::TrySendError::Disconnected(_) => "backend is disconnected",
@@ -3247,6 +3264,48 @@ fn run_backend(commands: Receiver<BackendCommand>, events: Sender<Action>) {
         }
 
         match commands.recv_timeout(BACKEND_TICK) {
+            Ok(BackendCommand::StartBedrockLogin { api_key, region }) => {
+                let accepted = match bedrock_login_region(region) {
+                    Some(region) => match connection.as_ref() {
+                        Some(app_server) => match app_server.start_account_login(
+                            LoginAccountParams::AmazonBedrock { api_key, region },
+                        ) {
+                            Ok(response) => bedrock_account_login_response_accepted(response),
+                            Err(_) => false,
+                        },
+                        None => false,
+                    },
+                    None => false,
+                };
+                if !accepted {
+                    emit(&events, Action::AccountBedrockLoginStartFailed);
+                } else {
+                    emit(&events, Action::AccountBedrockLoginAccepted);
+                    let shutdown_failed = connection
+                        .take()
+                        .is_some_and(|mut app_server| app_server.shutdown().is_err());
+                    pending_approvals.clear();
+                    computer_allowed_app_ids.clear();
+                    computer_accessibility = ComputerUseAccessibilityClient::new();
+                    computer_url_policy.clear();
+                    if let Some(monitor) = computer_interruption.as_ref() {
+                        monitor.disarm();
+                    }
+                    if let Some(overlay) = computer_overlay.as_mut() {
+                        let _ = overlay.hide();
+                    }
+                    interrupted_computer_turns.clear();
+                    retryable_turns.clear();
+                    task_search.clear();
+                    fuzzy_file_search.reset();
+                    pull_request_search.clear();
+                    goal_continuations.clear();
+                    app_server_reconnect.reset();
+                    if shutdown_failed || connect(&events, &mut connection).is_err() {
+                        emit(&events, Action::AccountBedrockRestartFailed);
+                    }
+                }
+            }
             Ok(BackendCommand::StartApiKeyLogin(api_key)) => match connection.as_ref() {
                 Some(app_server) => {
                     match app_server.start_account_login(LoginAccountParams::ApiKey { api_key }) {
@@ -14319,16 +14378,21 @@ fn map_account_profile(account: ProtocolAccount) -> AccountProfile {
             kind: AccountKind::ApiKey,
             email: None,
             plan: None,
+            uses_codex_managed_credentials: None,
         },
         ProtocolAccount::ChatGpt { email, plan_type } => AccountProfile {
             kind: AccountKind::ChatGpt,
             email: email.map(|email| bounded(email, 512)),
             plan: Some(plan_type_label(plan_type).to_owned()),
+            uses_codex_managed_credentials: None,
         },
-        ProtocolAccount::AmazonBedrock { .. } => AccountProfile {
+        ProtocolAccount::AmazonBedrock {
+            uses_codex_managed_credentials,
+        } => AccountProfile {
             kind: AccountKind::AmazonBedrock,
             email: None,
             plan: None,
+            uses_codex_managed_credentials: Some(uses_codex_managed_credentials),
         },
     }
 }
@@ -14399,6 +14463,15 @@ fn device_code_account_login_started_action(response: LoginAccountResponse) -> O
 
 fn api_key_account_login_started_action(response: LoginAccountResponse) -> Option<Action> {
     matches!(response, LoginAccountResponse::ApiKey).then_some(Action::RefreshAccount)
+}
+
+fn bedrock_login_region(region: String) -> Option<String> {
+    let region = region.trim();
+    (!region.is_empty() && region.len() <= 512).then(|| region.to_owned())
+}
+
+fn bedrock_account_login_response_accepted(response: LoginAccountResponse) -> bool {
+    matches!(response, LoginAccountResponse::AmazonBedrock)
 }
 
 fn account_login_started_action(
@@ -16275,6 +16348,7 @@ mod tests {
         TRUSTED_ACCESS_FOR_CYBER_URL, TRUSTED_ACCESS_FOR_CYBER_WARNING, TaskSearchDebouncer,
         TerminalParserCallbacks, account_supports_token_activity, agent_configuration_snapshot,
         api_key_account_login_started_action, appearance_theme_key, apps_list_params,
+        bedrock_account_login_response_accepted, bedrock_login_region,
         bounded_marketplace_load_error_count, bounded_remote_identifier,
         browser_account_login_started_action, browser_origin_auto_decision,
         browser_origin_elicitation_response, browser_policy_target, browser_resource_auto_decision,
@@ -16290,14 +16364,14 @@ mod tests {
         encode_keyboard_shortcut_preferences, encode_primary_window_placement,
         forbidden_computer_target_message, handle_notification, hook_state_config_value,
         index_app_logos, initialize_capabilities, is_hidden_timeline_item,
-        linux_computer_use_dynamic_tools, map_account_token_activity, map_app_detail,
-        map_app_server_approval, map_apps, map_fuzzy_file_search_results, map_mcp_elicitation,
-        map_mcp_resource_contents, map_mcp_runtime_catalog, map_model_options, map_plugin_detail,
-        map_rate_limit_reset_credit_count, map_remote_control_snapshot, map_remote_devices_page,
-        map_timeline_item, map_user_input_request, mcp_elicitation_content_json,
-        mcp_server_config_value, newest_review_mode_from_items, parse_appearance_preferences,
-        parse_appearance_theme, parse_browser_download_preferences, parse_browser_permissions,
-        parse_computer_key_chord, parse_generated_commit_message,
+        linux_computer_use_dynamic_tools, map_account_profile, map_account_token_activity,
+        map_app_detail, map_app_server_approval, map_apps, map_fuzzy_file_search_results,
+        map_mcp_elicitation, map_mcp_resource_contents, map_mcp_runtime_catalog, map_model_options,
+        map_plugin_detail, map_rate_limit_reset_credit_count, map_remote_control_snapshot,
+        map_remote_devices_page, map_timeline_item, map_user_input_request,
+        mcp_elicitation_content_json, mcp_server_config_value, newest_review_mode_from_items,
+        parse_appearance_preferences, parse_appearance_theme, parse_browser_download_preferences,
+        parse_browser_permissions, parse_computer_key_chord, parse_generated_commit_message,
         parse_generated_commit_pull_request_messages, parse_generated_pull_request_message,
         parse_git_preferences, parse_keyboard_shortcut_preferences, parse_primary_window_placement,
         personalization_snapshot, plugin_directory_includes_marketplace,
@@ -18353,6 +18427,43 @@ mod tests {
                 user_code: "ABCD-EFGH".to_owned(),
             })
             .is_none()
+        );
+    }
+
+    #[test]
+    fn bedrock_login_input_response_and_profile_mapping_are_strict() {
+        assert_eq!(
+            bedrock_login_region(" us-west-2 ".to_owned()),
+            Some("us-west-2".to_owned())
+        );
+        assert_eq!(bedrock_login_region(" \t\n ".to_owned()), None);
+        assert_eq!(bedrock_login_region("r".repeat(513)), None);
+
+        assert!(bedrock_account_login_response_accepted(
+            LoginAccountResponse::AmazonBedrock
+        ));
+        assert!(!bedrock_account_login_response_accepted(
+            LoginAccountResponse::ApiKey
+        ));
+
+        assert_eq!(
+            map_account_profile(ProtocolAccount::ApiKey).uses_codex_managed_credentials,
+            None
+        );
+        assert_eq!(
+            map_account_profile(ProtocolAccount::ChatGpt {
+                email: Some("developer@example.com".to_owned()),
+                plan_type: PlanType::Plus,
+            })
+            .uses_codex_managed_credentials,
+            None
+        );
+        assert_eq!(
+            map_account_profile(ProtocolAccount::AmazonBedrock {
+                uses_codex_managed_credentials: true,
+            })
+            .uses_codex_managed_credentials,
+            Some(true)
         );
     }
 

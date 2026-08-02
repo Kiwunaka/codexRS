@@ -414,6 +414,12 @@ pub enum LoginAccountParams {
         #[serde(rename = "apiKey")]
         api_key: SecretString,
     },
+    #[serde(rename = "amazonBedrock")]
+    AmazonBedrock {
+        #[serde(rename = "apiKey")]
+        api_key: SecretString,
+        region: String,
+    },
     #[serde(rename = "chatgpt")]
     ChatGpt {
         #[serde(
@@ -3852,6 +3858,24 @@ mod tests {
                 params: Some(LoginAccountParams::ChatGptDeviceCode),
             }),
             b"{\"method\":\"account/login/start\",\"id\":3,\"params\":{\"type\":\"chatgptDeviceCode\"}}\n"
+        );
+        let bedrock_api_key = SecretString::new("bedrock-test-key".to_owned());
+        assert!(bedrock_api_key.is_some());
+        let Some(bedrock_api_key) = bedrock_api_key else {
+            return;
+        };
+        assert_eq!(format!("{bedrock_api_key:?}"), "[REDACTED]");
+        assert!(!format!("{bedrock_api_key:?}").contains("bedrock-test-key"));
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "account/login/start",
+                id: 4,
+                params: Some(LoginAccountParams::AmazonBedrock {
+                    api_key: bedrock_api_key,
+                    region: "us-west-2".to_owned(),
+                }),
+            }),
+            b"{\"method\":\"account/login/start\",\"id\":4,\"params\":{\"type\":\"amazonBedrock\",\"apiKey\":\"bedrock-test-key\",\"region\":\"us-west-2\"}}\n"
         );
         assert!(matches!(
             serde_json::from_value::<LoginAccountResponse>(json!({ "type": "apiKey" })),
