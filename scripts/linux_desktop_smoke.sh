@@ -23,6 +23,7 @@ install -d -m 0700 \
   "$smoke_root/data" \
   "$smoke_root/runtime" \
   "$smoke_root/codex"
+log_file="$smoke_root/codexrs.log"
 
 set +e
 HOME="$smoke_root/home" \
@@ -34,11 +35,12 @@ CODEX_RS_CODEX_BIN=/bin/false \
 LIBGL_ALWAYS_SOFTWARE=1 \
 xvfb-run --auto-servernum --server-args="-screen 0 1280x800x24 -nolisten tcp" \
   timeout --signal=TERM --kill-after=5s 15s "$binary" \
-  >/dev/null 2>&1
+  >"$log_file" 2>&1
 status=$?
 set -e
 
 if [[ $status -ne 124 ]]; then
   echo "Linux desktop smoke exited before the expected timeout (status $status)" >&2
+  tail -c 16384 "$log_file" >&2
   exit 1
 fi
