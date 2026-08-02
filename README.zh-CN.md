@@ -25,7 +25,7 @@
 </p>
 
 > [!IMPORTANT]
-> 当前代码树以 `v0.1.0-rc.5` 为目标。Windows 已通过针对精确 stable
+> 当前代码树面向预览版。Windows 已通过针对精确 stable
 > 参考版本的源码端到端冒烟测试。Linux 已纳入原生 CI，但在稳定版发布前仍需覆盖更多桌面环境。
 
 ## 为什么选择 codexRS
@@ -92,11 +92,12 @@ codex --version
 ### 2. 下载便携预览版
 
 仅从 [GitHub Releases](https://github.com/Kiwunaka/codexRS/releases)
-页面下载。RC5 文件为 `codexrs-v0.1.0-rc.5-windows-x86_64.zip` 和
-`codexrs-v0.1.0-rc.5-linux-x86_64.tar.gz`，并附有 `SHA256SUMS.txt`。
+页面下载。每个预览版都包含 `codexrs-<tag>-windows-x86_64.zip`、
+`codexrs-<tag>-linux-x86_64.tar.gz` 和 `SHA256SUMS.txt`；请将 `<tag>`
+替换为完整 release tag，例如 `v0.1.0-rc.6`。
 解压前请校验 checksum：Linux 可运行
-`grep ' \./codexrs-v0.1.0-rc.5-linux-x86_64.tar.gz$' SHA256SUMS.txt | sha256sum -c -`；Windows
-可将 `(Get-FileHash .\codexrs-v0.1.0-rc.5-windows-x86_64.zip -Algorithm SHA256).Hash`
+`grep ' \./codexrs-<tag>-linux-x86_64.tar.gz$' SHA256SUMS.txt | sha256sum -c -`；Windows
+可将 `(Get-FileHash .\codexrs-<tag>-windows-x86_64.zip -Algorithm SHA256).Hash`
 与对应条目比较。checksum 只能在从可信 release 页面取得后发现损坏，不能替代
 独立的发布者签名。
 
@@ -109,7 +110,7 @@ codex --version
 Linux 归档不是系统软件包：它不会自动安装 runtime 依赖或 desktop integration。
 运行 `codexrs --install-desktop-entry` 可为当前解压出的二进制文件创建用户级 desktop
 entry；该命令绝不修改已有 entry。Ubuntu CI 会在隔离的 Xvfb 会话中启动解压后的归档；
-更广泛的桌面环境 smoke 测试仍在进行中。RC5 中 Linux Computer Use 仅在 `DISPLAY` 非空时，对 X11/XWayland 窗口提供有界只读截图
+更广泛的桌面环境 smoke 测试仍在进行中。该预览版中 Linux Computer Use 仅在 `DISPLAY` 非空时，对 X11/XWayland 窗口提供有界只读截图
 观察。不支持文本提取、输入、应用启动、持久化审批、覆盖层或中断监控；不支持没有
 XWayland 的纯 Wayland。
 
