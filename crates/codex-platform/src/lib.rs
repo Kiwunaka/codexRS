@@ -2,6 +2,8 @@ use std::env;
 use std::error::Error;
 use std::fmt;
 use std::num::NonZeroUsize;
+#[cfg(any(target_os = "linux", test))]
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 #[cfg(windows)]
@@ -220,21 +222,29 @@ pub fn codexrs_data_dir() -> Result<PathBuf, DataDirectoryError> {
 
     #[cfg(target_os = "linux")]
     {
-        if let Some(data_home) = env::var_os("XDG_DATA_HOME")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-        {
-            return Ok(data_home.join("codexRS"));
-        }
-        return env::var_os("HOME")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-            .map(|path| path.join(".local").join("share").join("codexRS"))
-            .ok_or(DataDirectoryError::HomeUnavailable);
+        return linux_data_directory(
+            env::var_os("XDG_DATA_HOME").as_deref().map(Path::new),
+            env::var_os("HOME").as_deref().map(Path::new),
+        );
     }
 
     #[allow(unreachable_code)]
     Err(DataDirectoryError::HomeUnavailable)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_data_directory(
+    xdg_data_home: Option<&Path>,
+    home: Option<&Path>,
+) -> Result<PathBuf, DataDirectoryError> {
+    if let Some(data_home) =
+        xdg_data_home.filter(|path| !path.as_os_str().is_empty() && path.is_absolute())
+    {
+        return Ok(data_home.join("codexRS"));
+    }
+    home.filter(|path| !path.as_os_str().is_empty() && path.is_absolute())
+        .map(|path| path.join(".local").join("share").join("codexRS"))
+        .ok_or(DataDirectoryError::HomeUnavailable)
 }
 
 /// Resolves the official Codex CLI without introducing a Node runtime
@@ -371,11 +381,14 @@ impl Default for RuntimePolicy {
 
 #[cfg(test)]
 mod tests {
-    use super::{DesktopWorkArea, RuntimePolicy};
+    #[cfg(any(target_os = "linux", test))]
+    use super::linux_data_directory;
+    use super::{DataDirectoryError, DesktopWorkArea, RuntimePolicy};
     #[cfg(windows)]
     use super::{sha256_matches, windows_npm_codex_candidate, windows_packaged_codex_candidate};
     #[cfg(windows)]
     use std::fs;
+    use std::path::Path;
     #[cfg(windows)]
     use std::path::PathBuf;
 
@@ -393,6 +406,29 @@ mod tests {
         assert!(work_area.intersects(1_800.0, 900.0, 480.0, 600.0));
         assert!(!work_area.intersects(1_920.0, 0.0, 480.0, 600.0));
         assert!(!work_area.intersects(0.0, 1_040.0, 480.0, 600.0));
+    }
+
+    #[test]
+    fn linux_data_directory_requires_absolute_xdg_or_home_paths() {
+        let root = std::env::temp_dir().join("codexrs-data-directory");
+        let xdg_data_home = root.join("xdg");
+        let home = root.join("home");
+
+        assert_eq!(
+            linux_data_directory(Some(&xdg_data_home), Some(&home)),
+            Ok(xdg_data_home.join("codexRS"))
+        );
+        assert_eq!(
+            linux_data_directory(Some(Path::new("relative-xdg")), Some(&home)),
+            Ok(home.join(".local").join("share").join("codexRS"))
+        );
+        assert_eq!(
+            linux_data_directory(
+                Some(Path::new("relative-xdg")),
+                Some(Path::new("relative-home")),
+            ),
+            Err(DataDirectoryError::HomeUnavailable)
+        );
     }
 
     #[cfg(windows)]
