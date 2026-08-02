@@ -145,8 +145,9 @@ and on Windows compare
 with the matching entry. The checksum helps detect corruption after obtaining
 it from the trusted release page; it is not an independent publisher signature.
 
-These are unsigned portable technical-preview archives. They do not install a
-Start Menu entry, URI handler, uninstaller, or updater. Extract them into a
+These are unsigned portable technical-preview archives. They do not
+automatically install a Start Menu entry, desktop entry, URI handler,
+uninstaller, or updater. Extract them into a
 directory you control. On Windows, keep `codexrs.exe` and
 `codex-computer-use-overlay.exe` together. To update, quit codexRS and replace
 the extracted directory; to remove it, delete only that directory. Neither
@@ -154,8 +155,11 @@ operation removes your `CODEX_HOME` or codexRS-owned state. Do not enable
 Computer Use from an archive whose source or checksum you do not trust.
 
 The Linux archive is not a system package: it does not install runtime
-dependencies or desktop integration. Ubuntu CI builds and tests the binary, but
-the extracted archive has not received a desktop smoke test. Linux Computer Use
+dependencies or desktop integration automatically. Run
+`codexrs --install-desktop-entry` to create a per-user desktop entry for the
+current extracted binary; the command never changes an existing entry. Ubuntu
+CI builds and tests the binary, but the extracted archive has not received a
+desktop smoke test. Linux Computer Use
 provides only bounded, read-only screenshot observation of X11/XWayland windows
 when `DISPLAY` is nonempty. Text extraction, input, app launch, persistent
 approvals, the overlay, and interruption monitoring are unavailable; pure

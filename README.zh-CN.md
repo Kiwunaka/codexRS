@@ -106,9 +106,10 @@ codex --version
 解压目录；删除时只删除该目录。两者都不会删除 `CODEX_HOME` 或 codexRS 自己的
 状态数据。不要从来源或 checksum 不可信的归档中启用 Computer Use。
 
-Linux 归档不是系统软件包：它不会安装 runtime 依赖或 desktop integration。
-Ubuntu CI 会构建并测试二进制文件，但解压后的归档尚未完成 desktop smoke 测试。RC4
-中 Linux Computer Use 仅在 `DISPLAY` 非空时，对 X11/XWayland 窗口提供有界只读截图
+Linux 归档不是系统软件包：它不会自动安装 runtime 依赖或 desktop integration。
+运行 `codexrs --install-desktop-entry` 可为当前解压出的二进制文件创建用户级 desktop
+entry；该命令绝不修改已有 entry。Ubuntu CI 会构建并测试二进制文件，但解压后的归档
+尚未完成 desktop smoke 测试。RC4 中 Linux Computer Use 仅在 `DISPLAY` 非空时，对 X11/XWayland 窗口提供有界只读截图
 观察。不支持文本提取、输入、应用启动、持久化审批、覆盖层或中断监控；不支持没有
 XWayland 的纯 Wayland。
 

@@ -149,8 +149,10 @@ sudo apt-get install --yes --no-install-recommends \
 Package names vary across distributions.
 
 The published Linux tar.gz is a portable archive, not a system package. It
-does not install runtime dependencies, a desktop entry, or a URI handler, and
-the extracted archive has not yet received a desktop smoke test.
+does not automatically install runtime dependencies, a desktop entry, or a URI
+handler. `codexrs --install-desktop-entry` explicitly creates a per-user entry
+for the current extracted binary and never changes an existing entry. The
+extracted archive has not yet received a desktop smoke test.
 
 On Linux, Computer Use attaches only when `DISPLAY` is nonempty and exposes a
 bounded, read-only X11/XWayland observation slice: window/app discovery,

@@ -10,6 +10,8 @@ use codex_platform::{
     ComputerAccessibilityError, DEFAULT_THREAD_PAGE_LIMIT, MAX_THREAD_PAGE_LIMIT,
     resolve_codex_binary, run_computer_use_helper,
 };
+#[cfg(target_os = "linux")]
+use codex_platform::{LinuxDesktopEntryError, install_linux_desktop_entry};
 use codex_protocol::ClientInfo;
 
 mod backend;
@@ -41,12 +43,25 @@ fn run() -> Result<(), CliError> {
         Some(command) if command == "--computer-use-helper" => {
             run_computer_use_helper().map_err(CliError::ComputerUse)
         }
+        #[cfg(target_os = "linux")]
+        Some(command) if command == "--install-desktop-entry" => run_install_desktop_entry(args),
         Some(command) if command == "--help" || command == "-h" => {
             print_help();
             Ok(())
         }
         Some(_) => Err(CliError::UnknownCommand),
     }
+}
+
+#[cfg(target_os = "linux")]
+fn run_install_desktop_entry(mut args: impl Iterator<Item = OsString>) -> Result<(), CliError> {
+    if args.next().is_some() {
+        return Err(CliError::UnexpectedArguments("--install-desktop-entry"));
+    }
+
+    let path = install_linux_desktop_entry().map_err(CliError::LinuxDesktopEntry)?;
+    println!("desktop entry installed: {}", path.display());
+    Ok(())
 }
 
 fn run_probe(args: impl Iterator<Item = OsString>) -> Result<(), CliError> {
@@ -139,6 +154,8 @@ fn print_help() {
     println!("  codexrs              open the native desktop client");
     println!("  codexrs info         print bounded runtime information");
     println!("  codexrs probe [OPTIONS]");
+    #[cfg(target_os = "linux")]
+    println!("  codexrs --install-desktop-entry");
     println!();
     println!("The probe uses the default ~/.codex unless --codex-home or CODEX_HOME is set.");
     println!("Set CODEX_RS_CODEX_BIN when codex.exe is not available through PATH.");
@@ -159,8 +176,12 @@ enum CliError {
     UnknownOption,
     MissingValue(&'static str),
     InvalidLimit,
+    #[cfg(target_os = "linux")]
+    UnexpectedArguments(&'static str),
     AppServer(AppServerError),
     ComputerUse(ComputerAccessibilityError),
+    #[cfg(target_os = "linux")]
+    LinuxDesktopEntry(LinuxDesktopEntryError),
 }
 
 impl fmt::Display for CliError {
@@ -172,8 +193,14 @@ impl fmt::Display for CliError {
             Self::InvalidLimit => {
                 formatter.write_str("limit must be an integer from 1 through 100")
             }
+            #[cfg(target_os = "linux")]
+            Self::UnexpectedArguments(command) => {
+                write!(formatter, "{command} does not accept arguments")
+            }
             Self::AppServer(error) => error.fmt(formatter),
             Self::ComputerUse(error) => error.fmt(formatter),
+            #[cfg(target_os = "linux")]
+            Self::LinuxDesktopEntry(error) => error.fmt(formatter),
         }
     }
 }
@@ -183,10 +210,14 @@ impl Error for CliError {
         match self {
             Self::AppServer(error) => Some(error),
             Self::ComputerUse(error) => Some(error),
+            #[cfg(target_os = "linux")]
+            Self::LinuxDesktopEntry(error) => Some(error),
             Self::UnknownCommand
             | Self::UnknownOption
             | Self::MissingValue(_)
             | Self::InvalidLimit => None,
+            #[cfg(target_os = "linux")]
+            Self::UnexpectedArguments(_) => None,
         }
     }
 }
@@ -194,6 +225,21 @@ impl Error for CliError {
 impl From<AppServerError> for CliError {
     fn from(error: AppServerError) -> Self {
         Self::AppServer(error)
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_tests {
+    use std::ffi::OsString;
+
+    use super::{CliError, run_install_desktop_entry};
+
+    #[test]
+    fn install_desktop_entry_rejects_arguments_before_touching_the_filesystem() {
+        assert!(matches!(
+            run_install_desktop_entry([OsString::from("unexpected")].into_iter()),
+            Err(CliError::UnexpectedArguments("--install-desktop-entry"))
+        ));
     }
 }
 
