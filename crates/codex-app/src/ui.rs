@@ -4806,6 +4806,8 @@ struct WorkspaceView {
     remote_pairing_focus_requested: bool,
     remote_confirmation_focus: FocusHandle,
     remote_confirmation_focus_requested: bool,
+    account_logout_focus: FocusHandle,
+    account_logout_focus_requested: bool,
     plugin_install_confirmation_focus: FocusHandle,
     plugin_install_confirmation_focus_requested: bool,
     remote_pairing_not_claimed: bool,
@@ -4875,6 +4877,7 @@ impl WorkspaceView {
         let browser_focus = cx.focus_handle();
         let remote_pairing_focus = cx.focus_handle();
         let remote_confirmation_focus = cx.focus_handle();
+        let account_logout_focus = cx.focus_handle();
         let plugin_install_confirmation_focus = cx.focus_handle();
         let initial_appearance_preferences = AppearancePreferences::default();
         let initial_appearance_variant = active_appearance_variant(cx);
@@ -5847,6 +5850,8 @@ impl WorkspaceView {
             remote_pairing_focus_requested: false,
             remote_confirmation_focus,
             remote_confirmation_focus_requested: false,
+            account_logout_focus,
+            account_logout_focus_requested: false,
             plugin_install_confirmation_focus,
             plugin_install_confirmation_focus_requested: false,
             remote_pairing_not_claimed: false,
@@ -39952,6 +39957,9 @@ impl WorkspaceView {
                     .bg(cx.theme().popover)
                     .shadow_xl()
                     .occlude()
+                    .track_focus(&self.account_logout_focus)
+                    .tab_group()
+                    .tab_stop(true)
                     .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
                     .child(
                         div()
@@ -40191,6 +40199,14 @@ impl Render for WorkspaceView {
             }
         } else {
             self.remote_confirmation_focus_requested = false;
+        }
+        if matches!(self.workspace_modal, Some(WorkspaceModal::LogOutAccount)) {
+            if !self.account_logout_focus_requested {
+                self.account_logout_focus.focus(window);
+                self.account_logout_focus_requested = true;
+            }
+        } else {
+            self.account_logout_focus_requested = false;
         }
         if self
             .state
