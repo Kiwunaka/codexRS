@@ -1526,7 +1526,9 @@ gpui::actions!(
         DeleteArchivedTasksFocusNext,
         DeleteArchivedTasksFocusPrev,
         ResetMemoriesFocusNext,
-        ResetMemoriesFocusPrev
+        ResetMemoriesFocusPrev,
+        ResetKeyboardShortcutsFocusNext,
+        ResetKeyboardShortcutsFocusPrev
     ]
 );
 
@@ -4419,6 +4421,16 @@ pub fn run() {
                     ResetMemoriesFocusPrev,
                     Some("ResetMemoriesModal"),
                 ),
+                KeyBinding::new(
+                    "tab",
+                    ResetKeyboardShortcutsFocusNext,
+                    Some("ResetKeyboardShortcutsModal"),
+                ),
+                KeyBinding::new(
+                    "shift-tab",
+                    ResetKeyboardShortcutsFocusPrev,
+                    Some("ResetKeyboardShortcutsModal"),
+                ),
             ]);
             let default_bounds =
                 Bounds::centered(None, size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)), cx);
@@ -4973,6 +4985,8 @@ struct WorkspaceView {
     delete_archived_tasks_focus_requested: bool,
     reset_memories_focus: FocusHandle,
     reset_memories_focus_requested: bool,
+    reset_keyboard_shortcuts_focus: FocusHandle,
+    reset_keyboard_shortcuts_focus_requested: bool,
     account_logout_focus: FocusHandle,
     account_logout_focus_requested: bool,
     plugin_install_confirmation_focus: FocusHandle,
@@ -5047,6 +5061,7 @@ impl WorkspaceView {
         let remove_local_project_focus = cx.focus_handle();
         let delete_archived_tasks_focus = cx.focus_handle();
         let reset_memories_focus = cx.focus_handle();
+        let reset_keyboard_shortcuts_focus = cx.focus_handle();
         let account_logout_focus = cx.focus_handle();
         let plugin_install_confirmation_focus = cx.focus_handle();
         let initial_appearance_preferences = AppearancePreferences::default();
@@ -6048,6 +6063,8 @@ impl WorkspaceView {
             delete_archived_tasks_focus_requested: false,
             reset_memories_focus,
             reset_memories_focus_requested: false,
+            reset_keyboard_shortcuts_focus,
+            reset_keyboard_shortcuts_focus_requested: false,
             account_logout_focus,
             account_logout_focus_requested: false,
             plugin_install_confirmation_focus,
@@ -8426,6 +8443,36 @@ impl WorkspaceView {
             window.focus_next();
             if !self.reset_memories_focus.contains_focused(window, cx) {
                 self.reset_memories_focus.focus(window);
+                window.focus_next();
+            }
+        }
+        cx.stop_propagation();
+    }
+
+    fn cycle_reset_keyboard_shortcuts_focus(
+        &mut self,
+        backwards: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if backwards {
+            window.focus_prev();
+            if self.reset_keyboard_shortcuts_focus.is_focused(window)
+                || !self
+                    .reset_keyboard_shortcuts_focus
+                    .contains_focused(window, cx)
+            {
+                self.reset_keyboard_shortcuts_focus.focus(window);
+                window.focus_next();
+                window.focus_next();
+            }
+        } else {
+            window.focus_next();
+            if !self
+                .reset_keyboard_shortcuts_focus
+                .contains_focused(window, cx)
+            {
+                self.reset_keyboard_shortcuts_focus.focus(window);
                 window.focus_next();
             }
         }
@@ -39636,6 +39683,26 @@ impl WorkspaceView {
                     .bg(cx.theme().popover)
                     .shadow_xl()
                     .occlude()
+                    .track_focus(&self.reset_keyboard_shortcuts_focus)
+                    .tab_group()
+                    .tab_stop(true)
+                    .key_context("ResetKeyboardShortcutsModal")
+                    .on_action(cx.listener(move |this, _: &Escape, _, cx| {
+                        if !pending {
+                            this.close_workspace_modal(cx);
+                        }
+                        cx.stop_propagation();
+                    }))
+                    .on_action(cx.listener(
+                        |this, _: &ResetKeyboardShortcutsFocusNext, window, cx| {
+                            this.cycle_reset_keyboard_shortcuts_focus(false, window, cx);
+                        },
+                    ))
+                    .on_action(cx.listener(
+                        |this, _: &ResetKeyboardShortcutsFocusPrev, window, cx| {
+                            this.cycle_reset_keyboard_shortcuts_focus(true, window, cx);
+                        },
+                    ))
                     .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
                     .child(
                         div()
@@ -39662,6 +39729,7 @@ impl WorkspaceView {
                                 Button::new("cancel-reset-all-keyboard-shortcuts")
                                     .label("Cancel")
                                     .ghost()
+                                    .disabled(pending)
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.close_workspace_modal(cx);
                                     })),
@@ -39678,7 +39746,7 @@ impl WorkspaceView {
                             ),
                     )
                     .into_any_element();
-                self.render_workspace_modal_overlay(panel, true, cx)
+                self.render_workspace_modal_overlay(panel, !pending, cx)
             }
             WorkspaceModal::ProcessManager => {
                 let panel = self.render_process_manager_modal(cx);
@@ -41231,6 +41299,17 @@ impl Render for WorkspaceView {
             }
         } else {
             self.reset_memories_focus_requested = false;
+        }
+        if matches!(
+            self.workspace_modal,
+            Some(WorkspaceModal::ResetKeyboardShortcuts)
+        ) {
+            if !self.reset_keyboard_shortcuts_focus_requested {
+                self.reset_keyboard_shortcuts_focus.focus(window);
+                self.reset_keyboard_shortcuts_focus_requested = true;
+            }
+        } else {
+            self.reset_keyboard_shortcuts_focus_requested = false;
         }
         if matches!(self.workspace_modal, Some(WorkspaceModal::LogOutAccount)) {
             if !self.account_logout_focus_requested {
