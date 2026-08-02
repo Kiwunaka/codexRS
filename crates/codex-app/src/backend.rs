@@ -235,6 +235,8 @@ const COMPUTER_USE_OVERLAY_UNAVAILABLE_MESSAGE: &str =
     "system Computer Use indicator unavailable; guarded input cannot continue";
 const COMPUTER_USE_USER_INPUT_STALE_MESSAGE: &str =
     "user input was detected in this window; call get_window_state before continuing";
+const COMPUTER_USE_ACTIVE_TURN_MESSAGE: &str =
+    "another Computer Use turn is active; wait for it to finish before controlling a window";
 const COMPUTER_USE_URL_FORBIDDEN_MESSAGE: &str = "Computer Use has been stopped for this turn because it is not allowed on the current browser URL. Stop your work and send a final message noting why Computer Use ended. Note that Computer Use is not allowed on this URL even if the user navigates to it themselves.";
 const COMPUTER_USE_URL_VERIFICATION_FAILED_MESSAGE: &str = "Computer Use has been stopped for this turn because it could not verify whether the current browser URL is allowed. Stop your work and send a final message noting why Computer Use ended.";
 const COMPUTER_USE_URL_CONFIDENCE_FAILED_MESSAGE: &str = "Computer Use has been stopped for this turn because it could not determine the current browser URL on Windows with enough confidence to enforce policy. Stop your work and send a final message noting why Computer Use ended.";
@@ -3418,19 +3420,16 @@ fn run_backend(
                         let active_computer_turn = computer_interruption
                             .as_ref()
                             .and_then(ComputerUseInterruptionMonitor::active_turn);
-                        if computer_request.as_ref().is_some_and(|request| {
-                            computer_tool_target_requires_refresh(
-                                request,
-                                active_computer_turn.as_ref(),
-                            )
-                        }) {
-                            if let Some(request) = computer_request.as_ref() {
-                                respond_dynamic_tool_failure(
-                                    app_server,
-                                    &request.id,
-                                    COMPUTER_USE_USER_INPUT_STALE_MESSAGE,
-                                );
-                            }
+                        if let Some((request, message)) =
+                            computer_request.as_ref().and_then(|request| {
+                                computer_tool_target_block_message(
+                                    request,
+                                    active_computer_turn.as_ref(),
+                                )
+                                .map(|message| (request, message))
+                            })
+                        {
+                            respond_dynamic_tool_failure(app_server, &request.id, message);
                             continue;
                         }
                         if computer_monitor_transition
@@ -3845,19 +3844,26 @@ fn computer_tool_updates_interruption_monitor(request: &ComputerToolRequestMeta)
     request.window_id.is_some() || computer_tool_requires_interruption_monitor(&request.tool)
 }
 
-fn computer_tool_target_requires_refresh(
+fn computer_tool_target_block_message(
     request: &ComputerToolRequestMeta,
     active_turn: Option<&ComputerUseTurnKey>,
-) -> bool {
+) -> Option<&'static str> {
+    if let Some(active_turn) = active_turn
+        && (active_turn.thread_id != request.thread_id || active_turn.turn_id != request.turn_id)
+        && computer_tool_updates_interruption_monitor(request)
+    {
+        return Some(COMPUTER_USE_ACTIVE_TURN_MESSAGE);
+    }
     if request.tool == "get_window_state" {
-        return false;
+        return None;
     }
     let (Some(window_id), Some(active_turn)) = (request.window_id.as_deref(), active_turn) else {
-        return false;
+        return None;
     };
-    active_turn.thread_id != request.thread_id
+    (active_turn.thread_id != request.thread_id
         || active_turn.turn_id != request.turn_id
-        || active_turn.window_id.as_deref() != Some(window_id)
+        || active_turn.window_id.as_deref() != Some(window_id))
+    .then_some(COMPUTER_USE_USER_INPUT_STALE_MESSAGE)
 }
 
 fn handle_computer_use_interruption(
@@ -16729,16 +16735,16 @@ mod tests {
 
     use super::{
         ActionEmitter, AppLogo, AppServerReconnectScheduler, Backend, BackendCommand,
-        BrowserPolicyTarget, BudgetedActionEmitter, COMPUTER_USE_USER_INPUT_STALE_MESSAGE,
-        ComputerUseAccessibilityClient, ComputerUsePermission, GOAL_CONTINUATION_DELAY,
-        GitRefreshDebouncer, GoalContinuationScheduler, MAX_ITEM_TEXT_BYTES,
-        MAX_MODEL_UPGRADE_COPY_BYTES, MAX_MODEL_UPGRADE_LINK_BYTES, McpElicitationMapError,
-        PendingApproval, PendingWorktreeRuntime, STABLE_OPT_OUT_NOTIFICATION_METHODS,
-        TASK_SEARCH_DEBOUNCE, TRUSTED_ACCESS_FOR_CYBER_URL, TRUSTED_ACCESS_FOR_CYBER_WARNING,
-        TaskSearchDebouncer, TerminalParserCallbacks, UiEventDelivery, UiEventSender,
-        account_supports_token_activity, agent_configuration_snapshot,
-        api_key_account_login_started_action, appearance_theme_key, apps_list_params,
-        bedrock_account_login_response_accepted, bedrock_login_region,
+        BrowserPolicyTarget, BudgetedActionEmitter, COMPUTER_USE_ACTIVE_TURN_MESSAGE,
+        COMPUTER_USE_USER_INPUT_STALE_MESSAGE, ComputerUseAccessibilityClient,
+        ComputerUsePermission, GOAL_CONTINUATION_DELAY, GitRefreshDebouncer,
+        GoalContinuationScheduler, MAX_ITEM_TEXT_BYTES, MAX_MODEL_UPGRADE_COPY_BYTES,
+        MAX_MODEL_UPGRADE_LINK_BYTES, McpElicitationMapError, PendingApproval,
+        PendingWorktreeRuntime, STABLE_OPT_OUT_NOTIFICATION_METHODS, TASK_SEARCH_DEBOUNCE,
+        TRUSTED_ACCESS_FOR_CYBER_URL, TRUSTED_ACCESS_FOR_CYBER_WARNING, TaskSearchDebouncer,
+        TerminalParserCallbacks, UiEventDelivery, UiEventSender, account_supports_token_activity,
+        agent_configuration_snapshot, api_key_account_login_started_action, appearance_theme_key,
+        apps_list_params, bedrock_account_login_response_accepted, bedrock_login_region,
         bounded_marketplace_load_error_count, bounded_remote_identifier,
         browser_account_login_started_action, browser_origin_auto_decision,
         browser_origin_elicitation_response, browser_policy_target, browser_resource_auto_decision,
@@ -16746,7 +16752,7 @@ mod tests {
         combined_git_generation_prompt, combined_git_output_schema, commit_generation_prompt,
         commit_message_output_schema, composer_config_key, composer_inputs,
         computer_application_value, computer_tool_request_meta,
-        computer_tool_requires_interruption_monitor, computer_tool_target_requires_refresh,
+        computer_tool_requires_interruption_monitor, computer_tool_target_block_message,
         computer_use_allowed_app_ids, computer_use_allowed_app_ids_value,
         computer_use_app_authorized, computer_use_dynamic_tools, computer_window_argument,
         computer_window_schema, device_code_account_login_started_action, drag_coordinates,
@@ -17155,40 +17161,78 @@ mod tests {
 
     #[test]
     fn computer_actions_require_state_after_switching_exact_targets() {
-        let request =
-            |thread_id: &str, tool: &str, window_id: Option<&str>| super::ComputerToolRequestMeta {
+        let request = |thread_id: &str,
+                       turn_id: &str,
+                       tool: &str,
+                       window_id: Option<&str>|
+         -> super::ComputerToolRequestMeta {
+            super::ComputerToolRequestMeta {
                 id: Value::Null,
                 thread_id: thread_id.to_owned(),
-                turn_id: "turn-1".to_owned(),
+                turn_id: turn_id.to_owned(),
                 tool: tool.to_owned(),
                 window_id: window_id.map(str::to_owned),
-            };
+            }
+        };
         let active = ComputerUseTurnKey {
             thread_id: "thread-1".to_owned(),
             turn_id: "turn-1".to_owned(),
             window_id: Some("7".to_owned()),
         };
 
-        assert!(!computer_tool_target_requires_refresh(
-            &request("thread-1", "click", Some("7")),
-            Some(&active),
-        ));
-        assert!(computer_tool_target_requires_refresh(
-            &request("thread-1", "click", Some("8")),
-            Some(&active),
-        ));
-        assert!(computer_tool_target_requires_refresh(
-            &request("thread-2", "click", Some("7")),
-            Some(&active),
-        ));
-        assert!(!computer_tool_target_requires_refresh(
-            &request("thread-1", "get_window_state", Some("8")),
-            Some(&active),
-        ));
-        assert!(!computer_tool_target_requires_refresh(
-            &request("thread-1", "launch_app", None),
-            Some(&active),
-        ));
+        let cases = [
+            (
+                request("thread-1", "turn-1", "click", Some("7")),
+                Some(&active),
+                None,
+            ),
+            (
+                request("thread-1", "turn-1", "click", Some("8")),
+                Some(&active),
+                Some(COMPUTER_USE_USER_INPUT_STALE_MESSAGE),
+            ),
+            (
+                request("thread-2", "turn-1", "click", Some("7")),
+                Some(&active),
+                Some(COMPUTER_USE_ACTIVE_TURN_MESSAGE),
+            ),
+            (
+                request("thread-1", "turn-1", "get_window_state", Some("8")),
+                Some(&active),
+                None,
+            ),
+            (
+                request("thread-1", "turn-1", "launch_app", None),
+                Some(&active),
+                None,
+            ),
+            (
+                request("thread-2", "turn-2", "get_window_state", Some("8")),
+                Some(&active),
+                Some(COMPUTER_USE_ACTIVE_TURN_MESSAGE),
+            ),
+            (
+                request("thread-2", "turn-2", "launch_app", None),
+                Some(&active),
+                Some(COMPUTER_USE_ACTIVE_TURN_MESSAGE),
+            ),
+            (
+                request("thread-2", "turn-2", "list_apps", None),
+                Some(&active),
+                None,
+            ),
+            (
+                request("thread-2", "turn-2", "get_window_state", Some("8")),
+                None,
+                None,
+            ),
+        ];
+        for (request, active_turn, expected) in cases {
+            assert_eq!(
+                computer_tool_target_block_message(&request, active_turn),
+                expected
+            );
+        }
     }
 
     #[test]
