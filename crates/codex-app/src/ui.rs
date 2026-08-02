@@ -17,9 +17,9 @@ use base64::{
 };
 use chrono::{Local, TimeZone};
 use codex_core::{
-    APPEARANCE_CODE_THEMES, AccountAuthOperation, AccountKind, AccountState,
-    AccountTokenActivitySummary, Action, AgentConfigScope, AgentConfigScopeKind, AppCard,
-    AppDetailView, AppState, AppearancePalette, AppearancePreferences, AppearanceTheme,
+    APPEARANCE_CODE_THEMES, AccountAuthOperation, AccountDailyUsageBucket, AccountKind,
+    AccountState, AccountTokenActivitySummary, Action, AgentConfigScope, AgentConfigScopeKind,
+    AppCard, AppDetailView, AppState, AppearancePalette, AppearancePreferences, AppearanceTheme,
     AppearanceVariant, ApprovalContext, ApprovalDecision, ApprovalRequest, ArchivedTaskDeleteKind,
     ArtifactPreviewKind, BackgroundTerminal, BrowserApprovalMode, BrowserDownloadState,
     BrowserDownloadStatus, BrowserKeyInput, BrowserMouseButton, BrowserOriginElicitationDecision,
@@ -35230,6 +35230,48 @@ impl WorkspaceView {
                             .into_any_element(),
                     );
                 }
+
+                let daily_usage_rows = account_daily_usage_rows(&summary.daily_usage_buckets)
+                    .into_iter()
+                    .map(|(label, value)| {
+                        h_flex()
+                            .w_full()
+                            .min_w_0()
+                            .px_4()
+                            .py_2()
+                            .gap_4()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(label),
+                            )
+                            .child(div().min_w_0().truncate().text_sm().child(value))
+                    })
+                    .collect::<Vec<_>>();
+                if !daily_usage_rows.is_empty() {
+                    cards.push(
+                        v_flex()
+                            .max_w(px(760.0))
+                            .rounded_lg()
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .bg(cx.theme().sidebar)
+                            .child(
+                                div()
+                                    .px_4()
+                                    .py_3()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child("Daily token usage"),
+                            )
+                            .children(daily_usage_rows)
+                            .into_any_element(),
+                    );
+                }
             }
 
             if let Some(message) = account.token_activity_error {
@@ -40936,6 +40978,22 @@ fn account_token_activity_rows(
     .collect()
 }
 
+fn account_daily_usage_rows(buckets: &[AccountDailyUsageBucket]) -> Vec<(String, String)> {
+    buckets
+        .iter()
+        .map(|bucket| {
+            (
+                bucket.start_date.clone(),
+                format!(
+                    "{} token{}",
+                    format_compact_number(bucket.tokens),
+                    if bucket.tokens == 1 { "" } else { "s" }
+                ),
+            )
+        })
+        .collect()
+}
+
 fn format_token_activity_duration(seconds: i64) -> String {
     let days = seconds.max(0) / 86_400;
     if days >= 1_000 {
@@ -44131,17 +44189,18 @@ mod tests {
         MAX_THREAD_FIND_HISTORY_PAGES, MAX_THREAD_FIND_MATCHES, NavigationHistory,
         NavigationLocation, PaletteCommand, PaletteGroup, ReasoningEffortStep, SettingsSection,
         ShellWidthClass, TaskCopyKind, ThreadFindSurface, accelerators_conflict,
-        account_device_code, adjacent_task_id, app_chatgpt_url, app_mention_prompt,
-        appearance_color, appearance_color_value, appearance_theme_share_string,
-        archived_chat_groups, archived_chat_projects, archived_delete_confirmation_copy,
-        background_terminal_summary, bounded_keyboard_shortcut_search_query,
-        bounded_settings_search_query, bounded_thread_find_query, browser_display_url,
-        browser_navigation_url, browser_surface_coordinates, build_plugin_catalog_sections,
-        case_insensitive_match_ranges, command_task_slot, composer_app_commands,
-        composer_at_skill_commands, composer_desktop_app_commands, composer_file_query,
-        composer_file_search_max_height, composer_model_picker_items, composer_model_placeholder,
-        composer_plugin_commands, composer_service_tier_command_for_query,
-        composer_service_tier_commands, composer_skill_command_for_query, composer_skill_commands,
+        account_daily_usage_rows, account_device_code, adjacent_task_id, app_chatgpt_url,
+        app_mention_prompt, appearance_color, appearance_color_value,
+        appearance_theme_share_string, archived_chat_groups, archived_chat_projects,
+        archived_delete_confirmation_copy, background_terminal_summary,
+        bounded_keyboard_shortcut_search_query, bounded_settings_search_query,
+        bounded_thread_find_query, browser_display_url, browser_navigation_url,
+        browser_surface_coordinates, build_plugin_catalog_sections, case_insensitive_match_ranges,
+        command_task_slot, composer_app_commands, composer_at_skill_commands,
+        composer_desktop_app_commands, composer_file_query, composer_file_search_max_height,
+        composer_model_picker_items, composer_model_placeholder, composer_plugin_commands,
+        composer_service_tier_command_for_query, composer_service_tier_commands,
+        composer_skill_command_for_query, composer_skill_commands,
         composer_slash_command_for_prefix, connection_send_failure, decode_mcp_form_image_data_url,
         default_branch_name, diff_file_review_rows, diff_file_sections,
         extract_code_comment_findings, fetch_plugin_logo_blocking, find_timeline_matches,
@@ -44169,10 +44228,10 @@ mod tests {
         worktree_use_disabled,
     };
     use codex_core::{
-        AccountAuthOperation, AccountKind, AccountProfile, AccountState, AppCard, AppState,
-        AppearancePalette, AppearanceVariant, ApprovalContext, ApprovalKind, ApprovalRequest,
-        ComposerAttachment, ComposerAttachmentKind, ComputerApplicationState, ConnectionStatus,
-        GitPullRequestState, GitWorktreeState, IntegratedTerminalShell,
+        AccountAuthOperation, AccountDailyUsageBucket, AccountKind, AccountProfile, AccountState,
+        AppCard, AppState, AppearancePalette, AppearanceVariant, ApprovalContext, ApprovalKind,
+        ApprovalRequest, ComposerAttachment, ComposerAttachmentKind, ComputerApplicationState,
+        ConnectionStatus, GitPullRequestState, GitWorktreeState, IntegratedTerminalShell,
         KEYBOARD_SHORTCUT_COMMAND_IDS, LoadStatus, MAX_PENDING_WORKTREE_FORKS, MainRoute,
         McpAuthStatus, ModelOption, ModelUpgradeNotice, PendingWorktreeFork,
         PendingWorktreeForkPhase, PluginCard, ProcessManagerState, PullRequestCiStatus,
@@ -44201,6 +44260,26 @@ mod tests {
         assert_eq!(format_token_activity_duration(i64::MAX), "106752Bd");
         assert_eq!(format_token_activity_days(1), "1 day");
         assert_eq!(format_token_activity_days(i64::MAX), "9223372037B days");
+    }
+
+    #[test]
+    fn daily_token_usage_rows_keep_the_date_and_format_tokens() {
+        assert_eq!(
+            account_daily_usage_rows(&[
+                AccountDailyUsageBucket {
+                    start_date: "2026-07-01".to_owned(),
+                    tokens: 1,
+                },
+                AccountDailyUsageBucket {
+                    start_date: "2026-07-02".to_owned(),
+                    tokens: 250_000,
+                },
+            ]),
+            vec![
+                ("2026-07-01".to_owned(), "1 token".to_owned()),
+                ("2026-07-02".to_owned(), "250K tokens".to_owned()),
+            ]
+        );
     }
 
     #[test]

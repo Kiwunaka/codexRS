@@ -535,6 +535,8 @@ pub struct GetAccountRateLimitsResponse {
 #[serde(rename_all = "camelCase")]
 pub struct GetAccountTokenUsageResponse {
     pub summary: AccountTokenUsageSummary,
+    #[serde(default)]
+    pub daily_usage_buckets: Vec<AccountTokenUsageDailyBucket>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -545,6 +547,13 @@ pub struct AccountTokenUsageSummary {
     pub longest_running_turn_sec: Option<i64>,
     pub current_streak_days: Option<i64>,
     pub longest_streak_days: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountTokenUsageDailyBucket {
+    pub start_date: String,
+    pub tokens: i64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -3495,10 +3504,11 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        Account, AccountLoginCompletedNotification, ApprovalsReviewer, AppsReadParams,
-        AppsReadResponse, BoundedLineDecoder, CancelLoginAccountParams, CancelLoginAccountResponse,
-        CancelLoginAccountStatus, ClientInfo, ClientNotification, ClientRequest, CollaborationMode,
-        CollaborationModeKind, CollaborationModeSettings, CommandExecutionApprovalDecision,
+        Account, AccountLoginCompletedNotification, AccountTokenUsageDailyBucket,
+        ApprovalsReviewer, AppsReadParams, AppsReadResponse, BoundedLineDecoder,
+        CancelLoginAccountParams, CancelLoginAccountResponse, CancelLoginAccountStatus, ClientInfo,
+        ClientNotification, ClientRequest, CollaborationMode, CollaborationModeKind,
+        CollaborationModeSettings, CommandExecutionApprovalDecision,
         CommandExecutionApprovalDecisionValue, CommandExecutionRequestApprovalParams,
         CommandExecutionRequestApprovalResponse, ConfigBatchWriteParams, ConfigEdit,
         ConfigMergeStrategy, ConfigReadParams, ConfigReadResponse, ConfigRequirementsReadResponse,
@@ -3765,11 +3775,17 @@ mod tests {
             token_usage,
             Ok(GetAccountTokenUsageResponse {
                 summary,
+                daily_usage_buckets,
             }) if summary.lifetime_tokens == Some(1_250_000)
                 && summary.peak_daily_tokens == Some(250_000)
                 && summary.longest_running_turn_sec == Some(5_400)
                 && summary.current_streak_days == Some(7)
                 && summary.longest_streak_days == Some(21)
+                && matches!(
+                    daily_usage_buckets.as_slice(),
+                    [AccountTokenUsageDailyBucket { start_date, tokens }]
+                        if start_date == "2026-07-01" && *tokens == 250_000
+                )
         ));
     }
 

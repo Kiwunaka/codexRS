@@ -10,14 +10,14 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[cfg(any(windows, test))]
 use codex_core::MAX_COMPUTER_ALLOWED_APPS;
 use codex_core::{
-    AccountCredits, AccountKind, AccountProfile, AccountTokenActivitySummary, Action,
-    AgentConfigScope, AgentConfigScopeKind, AgentConfigurationMutationKind, AppCard, AppDetailView,
-    AppToolCard, AppearancePalette, AppearancePreferences, AppearanceSemanticColors,
-    AppearanceTheme, AppearanceVariant, ApprovalContext, ApprovalDecision, ApprovalKind,
-    ApprovalRequest, ApprovalsReviewer as CoreApprovalsReviewer, ArchivedTaskDeleteKind,
-    ArtifactPreview, ArtifactPreviewKind, BackgroundTerminal, BrowserApprovalMode,
-    BrowserDownloadPreferences, BrowserDownloadState,
-    BrowserDownloadStatus as CoreBrowserDownloadStatus,
+    AccountCredits, AccountDailyUsageBucket, AccountKind, AccountProfile,
+    AccountTokenActivitySummary, Action, AgentConfigScope, AgentConfigScopeKind,
+    AgentConfigurationMutationKind, AppCard, AppDetailView, AppToolCard, AppearancePalette,
+    AppearancePreferences, AppearanceSemanticColors, AppearanceTheme, AppearanceVariant,
+    ApprovalContext, ApprovalDecision, ApprovalKind, ApprovalRequest,
+    ApprovalsReviewer as CoreApprovalsReviewer, ArchivedTaskDeleteKind, ArtifactPreview,
+    ArtifactPreviewKind, BackgroundTerminal, BrowserApprovalMode, BrowserDownloadPreferences,
+    BrowserDownloadState, BrowserDownloadStatus as CoreBrowserDownloadStatus,
     BrowserMouseButton as CoreBrowserMouseButton, BrowserOriginElicitationDecision,
     BrowserPermissionResource, BrowserPermissionValue, BrowserPermissionsState,
     BrowserResourceElicitationDecision, BrowserSitePermission, BrowserTabState,
@@ -33,11 +33,12 @@ use codex_core::{
     ImportMigrationItem, ImportPluginMigration, ImportProvider, ImportProviderItems,
     ImportSessionMigration, ImportStartFailure, ImportTypeResult, ImportedConnectorCandidate,
     InspectorPane, IntegratedTerminalShell, KEYBOARD_SHORTCUT_COMMAND_IDS,
-    KeyboardShortcutPreferences, LocalProjectSummary, MAX_APPEARANCE_FONT_FAMILY_BYTES,
-    MAX_ATTACHMENT_LABEL_BYTES, MAX_BACKGROUND_TERMINALS, MAX_BROWSER_DOWNLOAD_PATH_BYTES,
-    MAX_BROWSER_PERMISSION_ORIGIN_BYTES, MAX_BROWSER_SITE_PERMISSIONS, MAX_COMPOSER_ATTACHMENTS,
-    MAX_COMPUTER_APP_ID_BYTES, MAX_FUZZY_FILE_PATH_BYTES, MAX_FUZZY_FILE_QUERY_BYTES,
-    MAX_FUZZY_FILE_RESULTS, MAX_FUZZY_FILE_ROOTS, MAX_GIT_BRANCH_PREFIX_BYTES, MAX_GIT_DIFF_BYTES,
+    KeyboardShortcutPreferences, LocalProjectSummary, MAX_ACCOUNT_DAILY_USAGE_BUCKETS,
+    MAX_APPEARANCE_FONT_FAMILY_BYTES, MAX_ATTACHMENT_LABEL_BYTES, MAX_BACKGROUND_TERMINALS,
+    MAX_BROWSER_DOWNLOAD_PATH_BYTES, MAX_BROWSER_PERMISSION_ORIGIN_BYTES,
+    MAX_BROWSER_SITE_PERMISSIONS, MAX_COMPOSER_ATTACHMENTS, MAX_COMPUTER_APP_ID_BYTES,
+    MAX_FUZZY_FILE_PATH_BYTES, MAX_FUZZY_FILE_QUERY_BYTES, MAX_FUZZY_FILE_RESULTS,
+    MAX_FUZZY_FILE_ROOTS, MAX_GIT_BRANCH_PREFIX_BYTES, MAX_GIT_DIFF_BYTES,
     MAX_GIT_INSTRUCTIONS_BYTES, MAX_GIT_SHA_BYTES, MAX_HOOK_FIELD_BYTES, MAX_HOOK_ISSUES,
     MAX_HOOK_ITEMS, MAX_HOOK_PROJECTS, MAX_IMPORT_DETAIL_ITEMS, MAX_IMPORT_FIELD_BYTES,
     MAX_IMPORT_HISTORY_ENTRIES, MAX_IMPORT_MIGRATION_ITEMS, MAX_IMPORT_RESULTS_PER_HISTORY,
@@ -78,7 +79,7 @@ use codex_core::{
     TimelineItem, TimelineKind, TimelineSource, UsageLimitWindow, UserInputAnswers,
     UserInputOption as CoreUserInputOption, UserInputQuestion as CoreUserInputQuestion,
     UserInputRequest, appearance_code_theme_supports_variant, computer_app_id_matches,
-    is_appearance_code_theme_id,
+    is_appearance_code_theme_id, is_valid_account_daily_usage_date,
 };
 use codex_platform::{
     AppServerConfig, AppServerConnection, AppServerError, AppServerEvent, ArtifactFileKind,
@@ -114,7 +115,7 @@ use codex_platform::{
     uncommitted_diff as git_uncommitted_diff,
 };
 use codex_protocol::{
-    Account as ProtocolAccount, AccountLoginCompletedNotification, AccountTokenUsageSummary,
+    Account as ProtocolAccount, AccountLoginCompletedNotification, AccountTokenUsageDailyBucket,
     AppInfo, AppSummary, ApprovalsReviewer as ProtocolApprovalsReviewer, AppsListParams,
     AppsReadParams, CancelLoginAccountParams, ClientInfo, CollaborationMode, CollaborationModeKind,
     CollaborationModeSettings, CommandAction, CommandExecutionApprovalDecision,
@@ -136,17 +137,18 @@ use codex_protocol::{
     FuzzyFileSearchResult as ProtocolFuzzyFileResult, FuzzyFileSearchSessionCompletedNotification,
     FuzzyFileSearchSessionStartParams, FuzzyFileSearchSessionStopParams,
     FuzzyFileSearchSessionUpdateParams, FuzzyFileSearchSessionUpdatedNotification,
-    GetAccountParams, GetAuthStatusParams, GitDiffToRemoteParams, HistorySortDirection,
-    HookEventName as ProtocolHookEventName, HookHandlerType as ProtocolHookHandlerType,
-    HookSource as ProtocolHookSource, HookTrustStatus as ProtocolHookTrustStatus, HooksListParams,
-    InitializeCapabilities, ListMcpServerStatusParams, LoginAccountParams, LoginAccountResponse,
-    MarketplaceAddParams, MarketplaceRemoveParams, MarketplaceUpgradeParams,
-    McpAuthStatus as ProtocolMcpAuthStatus, McpElicitationArrayItems,
-    McpElicitationPrimitiveSchema, McpElicitationStringFormat, McpOpenAiElicitationFieldSchema,
-    McpOpenAiImagePickerSchema, McpResourceReadParams, McpServerConfig,
-    McpServerElicitationAction as ProtocolMcpServerElicitationAction, McpServerElicitationRequest,
-    McpServerElicitationRequestParams, McpServerElicitationRequestResponse,
-    McpServerOauthLoginCompletedNotification, McpServerOauthLoginParams,
+    GetAccountParams, GetAccountTokenUsageResponse, GetAuthStatusParams, GitDiffToRemoteParams,
+    HistorySortDirection, HookEventName as ProtocolHookEventName,
+    HookHandlerType as ProtocolHookHandlerType, HookSource as ProtocolHookSource,
+    HookTrustStatus as ProtocolHookTrustStatus, HooksListParams, InitializeCapabilities,
+    ListMcpServerStatusParams, LoginAccountParams, LoginAccountResponse, MarketplaceAddParams,
+    MarketplaceRemoveParams, MarketplaceUpgradeParams, McpAuthStatus as ProtocolMcpAuthStatus,
+    McpElicitationArrayItems, McpElicitationPrimitiveSchema, McpElicitationStringFormat,
+    McpOpenAiElicitationFieldSchema, McpOpenAiImagePickerSchema, McpResourceReadParams,
+    McpServerConfig, McpServerElicitationAction as ProtocolMcpServerElicitationAction,
+    McpServerElicitationRequest, McpServerElicitationRequestParams,
+    McpServerElicitationRequestResponse, McpServerOauthLoginCompletedNotification,
+    McpServerOauthLoginParams,
     McpServerStartupFailureReason as ProtocolMcpServerStartupFailureReason,
     McpServerStartupState as ProtocolMcpServerStartupState,
     McpServerStatus as ProtocolMcpServerStatus, McpServerStatusDetail,
@@ -5173,9 +5175,7 @@ fn run_effect(
                         };
                     let (token_activity, token_activity_error) = if supports_token_activity {
                         match app_server.read_account_token_usage() {
-                            Ok(response) => {
-                                (Some(map_account_token_activity(response.summary)), None)
-                            }
+                            Ok(response) => (Some(map_account_token_activity(response)), None),
                             Err(_) => (None, Some("Could not load token activity.".to_owned())),
                         }
                     } else {
@@ -14296,14 +14296,34 @@ fn account_supports_token_activity(account: Option<&ProtocolAccount>) -> bool {
     matches!(account, Some(ProtocolAccount::ChatGpt { .. }))
 }
 
-fn map_account_token_activity(summary: AccountTokenUsageSummary) -> AccountTokenActivitySummary {
+fn map_account_token_activity(
+    response: GetAccountTokenUsageResponse,
+) -> AccountTokenActivitySummary {
+    let summary = response.summary;
     AccountTokenActivitySummary {
         lifetime_tokens: summary.lifetime_tokens.filter(|value| *value >= 0),
         peak_daily_tokens: summary.peak_daily_tokens.filter(|value| *value >= 0),
         longest_running_turn_sec: summary.longest_running_turn_sec.filter(|value| *value >= 0),
         current_streak_days: summary.current_streak_days.filter(|value| *value >= 0),
         longest_streak_days: summary.longest_streak_days.filter(|value| *value >= 0),
+        daily_usage_buckets: response
+            .daily_usage_buckets
+            .into_iter()
+            .take(MAX_ACCOUNT_DAILY_USAGE_BUCKETS)
+            .filter_map(map_account_daily_usage_bucket)
+            .collect(),
     }
+}
+
+fn map_account_daily_usage_bucket(
+    bucket: AccountTokenUsageDailyBucket,
+) -> Option<AccountDailyUsageBucket> {
+    (bucket.tokens >= 0 && is_valid_account_daily_usage_date(&bucket.start_date)).then_some(
+        AccountDailyUsageBucket {
+            start_date: bucket.start_date,
+            tokens: bucket.tokens,
+        },
+    )
 }
 
 fn map_rate_limit_reset_credit_count(available_count: i64) -> Option<u32> {
@@ -16170,30 +16190,32 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use codex_core::{
-        AccountTokenActivitySummary, Action, AgentConfigScopeKind, AppearancePalette,
+        AccountDailyUsageBucket, Action, AgentConfigScopeKind, AppearancePalette,
         AppearancePreferences, AppearanceTheme, AppearanceVariant, ApprovalContext,
         BrowserApprovalMode, BrowserDownloadPreferences, BrowserDownloadState,
         BrowserDownloadStatus, BrowserOriginElicitationDecision, BrowserPermissionResource,
         BrowserPermissionValue, BrowserPermissionsState, BrowserResourceElicitationDecision,
         BrowserSitePermission, ComposerAttachment, ComposerAttachmentKind, DiffMarkerStyle,
         FuzzyFileMatchType, GitPreferences, GitReviewMode, ImportItemType,
-        KeyboardShortcutPreferences, MAX_MARKETPLACE_SOURCES, MAX_MCP_SERVER_FIELD_BYTES,
-        McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
-        McpElicitationContent, McpElicitationValue, McpFormElicitation, McpFormFieldKind,
-        McpServerDraft, McpServerStartupFailureReason, McpServerStartupState, McpTransportKind,
-        ModelUpgradeNotice, NetworkPolicyAction, OutputArtifactKind, PermissionFileSystemAccess,
-        PermissionRequestDetail, Personality, PluginDirectoryTab, PrimaryWindowPlacement,
-        PullRequestMergeMethod, ReducedMotionPreference, RemoteControlRuntimeStatus, RemotePairing,
-        RetryableTurnSubmission, RetryableUserMessage, ReviewDelivery, TimelineItem, TimelineKind,
-        TimelineSource, UserInputAnswer, UserInputAnswers,
+        KeyboardShortcutPreferences, MAX_ACCOUNT_DAILY_USAGE_BUCKETS, MAX_MARKETPLACE_SOURCES,
+        MAX_MCP_SERVER_FIELD_BYTES, McpBrowserOriginElicitation, McpBrowserResourceElicitation,
+        McpElicitation, McpElicitationContent, McpElicitationValue, McpFormElicitation,
+        McpFormFieldKind, McpServerDraft, McpServerStartupFailureReason, McpServerStartupState,
+        McpTransportKind, ModelUpgradeNotice, NetworkPolicyAction, OutputArtifactKind,
+        PermissionFileSystemAccess, PermissionRequestDetail, Personality, PluginDirectoryTab,
+        PrimaryWindowPlacement, PullRequestMergeMethod, ReducedMotionPreference,
+        RemoteControlRuntimeStatus, RemotePairing, RetryableTurnSubmission, RetryableUserMessage,
+        ReviewDelivery, TimelineItem, TimelineKind, TimelineSource, UserInputAnswer,
+        UserInputAnswers,
     };
     use codex_platform::{AppServerEvent, ComputerApplication, ComputerKey};
     use codex_protocol::{
-        Account as ProtocolAccount, AccountTokenUsageSummary, AppInfo, AppToolSummary,
-        ConfigReadResponse, ConnectorMetadata, FuzzyFileSearchMatchType,
-        FuzzyFileSearchResult as ProtocolFuzzyFileResult, LoginAccountResponse,
-        McpServerStatus as ProtocolMcpServerStatus, ModelSummary, ModelUpgradeInfo, PlanType,
-        PluginListMarketplaceKind, RemoteControlClient, RemoteControlConnectionStatus, UserInput,
+        Account as ProtocolAccount, AccountTokenUsageDailyBucket, AccountTokenUsageSummary,
+        AppInfo, AppToolSummary, ConfigReadResponse, ConnectorMetadata, FuzzyFileSearchMatchType,
+        FuzzyFileSearchResult as ProtocolFuzzyFileResult, GetAccountTokenUsageResponse,
+        LoginAccountResponse, McpServerStatus as ProtocolMcpServerStatus, ModelSummary,
+        ModelUpgradeInfo, PlanType, PluginListMarketplaceKind, RemoteControlClient,
+        RemoteControlConnectionStatus, UserInput,
     };
     use crossbeam_channel::bounded;
     use serde_json::{Value, json};
@@ -16658,21 +16680,66 @@ mod tests {
         )));
         assert!(!account_supports_token_activity(None));
 
-        assert_eq!(
-            map_account_token_activity(AccountTokenUsageSummary {
+        let daily_usage_buckets = (0..MAX_ACCOUNT_DAILY_USAGE_BUCKETS + 1)
+            .map(|tokens| AccountTokenUsageDailyBucket {
+                start_date: "2026-07-01".to_owned(),
+                tokens: i64::try_from(tokens).unwrap_or(i64::MAX),
+            })
+            .collect();
+        let activity = map_account_token_activity(GetAccountTokenUsageResponse {
+            summary: AccountTokenUsageSummary {
                 lifetime_tokens: Some(1_250_000),
                 peak_daily_tokens: Some(-1),
                 longest_running_turn_sec: Some(5_400),
                 current_streak_days: Some(-7),
                 longest_streak_days: Some(21),
-            }),
-            AccountTokenActivitySummary {
-                lifetime_tokens: Some(1_250_000),
+            },
+            daily_usage_buckets,
+        });
+        assert_eq!(activity.lifetime_tokens, Some(1_250_000));
+        assert_eq!(activity.peak_daily_tokens, None);
+        assert_eq!(activity.longest_running_turn_sec, Some(5_400));
+        assert_eq!(activity.current_streak_days, None);
+        assert_eq!(activity.longest_streak_days, Some(21));
+        assert_eq!(
+            activity.daily_usage_buckets.len(),
+            MAX_ACCOUNT_DAILY_USAGE_BUCKETS
+        );
+        assert!(
+            activity
+                .daily_usage_buckets
+                .iter()
+                .all(|bucket| { bucket.start_date == "2026-07-01" && bucket.tokens >= 0 })
+        );
+        let filtered = map_account_token_activity(GetAccountTokenUsageResponse {
+            summary: AccountTokenUsageSummary {
+                lifetime_tokens: None,
                 peak_daily_tokens: None,
-                longest_running_turn_sec: Some(5_400),
+                longest_running_turn_sec: None,
                 current_streak_days: None,
-                longest_streak_days: Some(21),
-            }
+                longest_streak_days: None,
+            },
+            daily_usage_buckets: vec![
+                AccountTokenUsageDailyBucket {
+                    start_date: "2026-02-30".to_owned(),
+                    tokens: 1,
+                },
+                AccountTokenUsageDailyBucket {
+                    start_date: "2026-07-01".to_owned(),
+                    tokens: -1,
+                },
+                AccountTokenUsageDailyBucket {
+                    start_date: "2026-07-01".to_owned(),
+                    tokens: 1,
+                },
+            ],
+        });
+        assert_eq!(
+            filtered.daily_usage_buckets,
+            vec![AccountDailyUsageBucket {
+                start_date: "2026-07-01".to_owned(),
+                tokens: 1,
+            }]
         );
         assert_eq!(map_rate_limit_reset_credit_count(2), Some(2));
         assert_eq!(map_rate_limit_reset_credit_count(-1), None);
