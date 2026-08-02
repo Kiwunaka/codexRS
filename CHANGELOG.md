@@ -5,6 +5,39 @@ All notable changes to codexRS are documented here. The project follows
 
 ## [Unreleased]
 
+## [0.1.0-rc.6] - 2026-08-02
+
+### Added
+
+- API-key and experimental Amazon Bedrock sign-in, plus bounded daily
+  token-usage visibility.
+- Plugin and App management now reflects installed runtime availability, exposes
+  admin-disabled plugin policy, supports keyword search, and exposes validated
+  public share links.
+- Eligible models show a bounded availability introduction, remembered after
+  dismissal.
+- The window title and Windows notification-area tooltip show the bounded count
+  of non-selected chats that are running or awaiting approval; Windows also
+  sends a quiet-hours-respecting completion notification.
+- Linux release packaging smokes the extracted archive in Xvfb, and the
+  per-user desktop entry and native windows share the `com.codexrs.CodexRS`
+  application ID.
+- Reduced-motion settings are applied by native components.
+
+### Fixed
+
+- Modal dialogs confine keyboard focus and global shortcuts do not escape
+  active modals; competing right panels are hidden when the layout becomes
+  compact.
+- Live command and file-output deltas reconnect on backpressure rather than
+  being silently dropped, and Computer Use preserves its active interruption
+  target during discovery.
+- Logout remains pending across stale account refreshes; backend shutdown
+  takes priority over queued commands; stale workspace-specific plugin catalogs
+  are ignored.
+- Switching tasks clears stale composer text, attachments, errors, and popovers
+  so prompts and `/shell` commands cannot be delivered to another task.
+
 ## [0.1.0-rc.5] - 2026-08-02
 
 ### Added
