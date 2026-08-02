@@ -546,16 +546,28 @@ fn plugin_requires_install_confirmation(policy: Option<bool>) -> bool {
 fn map_apps(apps: Vec<AppInfo>) -> Vec<AppCard> {
     apps.into_iter()
         .take(codex_core::MAX_APP_ITEMS)
-        .map(|app| AppCard {
-            id: app.id,
-            name: app.name,
-            description: app.description.unwrap_or_default(),
-            plugin_display_names: app.plugin_display_names,
-            logo_url: app.logo_url,
-            logo_url_dark: app.logo_url_dark,
-            install_url: app.install_url,
-            is_accessible: app.is_accessible,
-            enabled: app.is_enabled,
+        .map(|app| {
+            let icon_asset = app
+                .icon_assets
+                .as_ref()
+                .and_then(|assets| assets.get("256_square"))
+                .cloned();
+            let icon_dark_asset = app
+                .icon_dark_assets
+                .as_ref()
+                .and_then(|assets| assets.get("256_square"))
+                .cloned();
+            AppCard {
+                id: app.id,
+                name: app.name,
+                description: app.description.unwrap_or_default(),
+                plugin_display_names: app.plugin_display_names,
+                logo_url: app.logo_url.or(icon_asset),
+                logo_url_dark: app.logo_url_dark.or(icon_dark_asset),
+                install_url: app.install_url,
+                is_accessible: app.is_accessible,
+                enabled: app.is_enabled,
+            }
         })
         .collect()
 }
@@ -19252,6 +19264,8 @@ mod tests {
                 description: Some("Ready to use".to_owned()),
                 logo_url: None,
                 logo_url_dark: None,
+                icon_assets: None,
+                icon_dark_assets: None,
                 install_url: None,
                 is_accessible: true,
                 is_enabled: false,
@@ -19263,6 +19277,8 @@ mod tests {
                 description: None,
                 logo_url: None,
                 logo_url_dark: None,
+                icon_assets: None,
+                icon_dark_assets: None,
                 install_url: None,
                 is_accessible: false,
                 is_enabled: true,
@@ -19302,6 +19318,44 @@ mod tests {
             panic!("expected apps update action");
         };
         assert!(matches!(action, Action::AppsInvalidated));
+    }
+
+    #[test]
+    fn app_icon_assets_fall_back_to_the_documented_square_icon() {
+        let asset_only = serde_json::from_value::<AppInfo>(json!({
+            "id": "asset-only",
+            "name": "Asset only",
+            "iconAssets": { "256_square": "https://example.com/light.png" },
+            "iconDarkAssets": { "256_square": "https://example.com/dark.png" }
+        }))
+        .unwrap_or_else(|error| panic!("asset-only app should decode: {error}"));
+        let legacy = serde_json::from_value::<AppInfo>(json!({
+            "id": "legacy",
+            "name": "Legacy",
+            "logoUrl": "https://example.com/legacy-light.png",
+            "logoUrlDark": "https://example.com/legacy-dark.png",
+            "iconAssets": { "256_square": "https://example.com/ignored-light.png" },
+            "iconDarkAssets": { "256_square": "https://example.com/ignored-dark.png" }
+        }))
+        .unwrap_or_else(|error| panic!("legacy app should decode: {error}"));
+
+        let apps = map_apps(vec![asset_only, legacy]);
+        assert_eq!(
+            apps[0].logo_url.as_deref(),
+            Some("https://example.com/light.png")
+        );
+        assert_eq!(
+            apps[0].logo_url_dark.as_deref(),
+            Some("https://example.com/dark.png")
+        );
+        assert_eq!(
+            apps[1].logo_url.as_deref(),
+            Some("https://example.com/legacy-light.png")
+        );
+        assert_eq!(
+            apps[1].logo_url_dark.as_deref(),
+            Some("https://example.com/legacy-dark.png")
+        );
     }
 
     #[test]
