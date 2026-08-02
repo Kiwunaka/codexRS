@@ -2160,6 +2160,7 @@ pub struct PluginDetailView {
     pub website_url: Option<String>,
     pub privacy_policy_url: Option<String>,
     pub terms_of_service_url: Option<String>,
+    pub share_url: Option<String>,
     pub skills: Vec<PluginSkillDetail>,
     pub apps: Vec<PluginDetailItem>,
     pub app_templates: Vec<PluginDetailItem>,
@@ -26382,6 +26383,7 @@ mod tests {
             website_url: Some("https://example.test".to_owned()),
             privacy_policy_url: None,
             terms_of_service_url: None,
+            share_url: Some("https://example.test/plugins/gmail/share".to_owned()),
             skills: vec![PluginSkillDetail {
                 name: "draft-reply".to_owned(),
                 display_name: "Draft replies".to_owned(),
@@ -26465,6 +26467,7 @@ mod tests {
             website_url: None,
             privacy_policy_url: None,
             terms_of_service_url: None,
+            share_url: None,
             skills: vec![PluginSkillDetail {
                 name: "review-diff".to_owned(),
                 display_name: "Review diff".to_owned(),

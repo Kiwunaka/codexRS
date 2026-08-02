@@ -13204,6 +13204,7 @@ fn hook_state_config_value(key: &str, enabled: Option<bool>, trusted_hash: Optio
 }
 
 fn map_plugin_detail(plugin_id: String, detail: codex_protocol::PluginDetail) -> PluginDetailView {
+    let share_url = bounded_http_url(detail.share_url);
     let website_url = bounded_http_url(
         detail
             .summary
@@ -13332,6 +13333,7 @@ fn map_plugin_detail(plugin_id: String, detail: codex_protocol::PluginDetail) ->
         website_url,
         privacy_policy_url,
         terms_of_service_url,
+        share_url,
         skills,
         apps,
         app_templates,
@@ -16222,7 +16224,7 @@ mod tests {
         hook_state_config_value, index_app_logos, initialize_capabilities, is_hidden_timeline_item,
         linux_computer_use_dynamic_tools, map_account_token_activity, map_app_detail,
         map_app_server_approval, map_apps, map_fuzzy_file_search_results, map_mcp_elicitation,
-        map_mcp_resource_contents, map_mcp_runtime_catalog, map_model_options,
+        map_mcp_resource_contents, map_mcp_runtime_catalog, map_model_options, map_plugin_detail,
         map_rate_limit_reset_credit_count, map_remote_control_snapshot, map_remote_devices_page,
         map_timeline_item, map_user_input_request, mcp_elicitation_content_json,
         mcp_server_config_value, newest_review_mode_from_items, parse_appearance_preferences,
@@ -16275,6 +16277,37 @@ mod tests {
             newest_review_mode_from_items(exited.iter().rev()),
             Some(false)
         );
+    }
+
+    #[test]
+    fn plugin_share_url_is_bounded_and_http_validated() {
+        for (share_url, expected) in [
+            (
+                "https://example.test/plugins/plugin/share",
+                Some("https://example.test/plugins/plugin/share"),
+            ),
+            ("ftp://example.test/plugins/plugin/share", None),
+            ("", None),
+        ] {
+            let Ok(detail) = serde_json::from_value(json!({
+                "marketplaceName": "marketplace",
+                "marketplacePath": null,
+                "summary": {
+                    "id": "plugin@marketplace",
+                    "name": "plugin"
+                },
+                "shareUrl": share_url
+            })) else {
+                panic!("stable plugin detail must decode");
+            };
+
+            assert_eq!(
+                map_plugin_detail("plugin@marketplace".to_owned(), detail)
+                    .share_url
+                    .as_deref(),
+                expected
+            );
+        }
     }
 
     #[test]
