@@ -512,6 +512,12 @@ fn bounded_marketplace_load_error_count(errors: &[Value]) -> usize {
     errors.len().min(MAX_MARKETPLACE_SOURCES)
 }
 
+fn plugin_installability(availability: Option<&str>, install_policy: Option<&str>) -> (bool, bool) {
+    let disabled_by_admin = availability == Some("DISABLED_BY_ADMIN");
+    let installable = !disabled_by_admin && install_policy != Some("NOT_AVAILABLE");
+    (installable, disabled_by_admin)
+}
+
 fn plugin_requires_install_confirmation(policy: Option<bool>) -> bool {
     policy != Some(false)
 }
@@ -617,8 +623,10 @@ fn load_composer_plugins(
                 .take(MAX_PLUGIN_KEYWORDS)
                 .map(|keyword| bounded(keyword, MAX_PLUGIN_KEYWORD_BYTES))
                 .collect();
-            let installable = plugin.availability.as_deref() != Some("DISABLED_BY_ADMIN")
-                && plugin.install_policy.as_deref() != Some("NOT_AVAILABLE");
+            let (installable, disabled_by_admin) = plugin_installability(
+                plugin.availability.as_deref(),
+                plugin.install_policy.as_deref(),
+            );
             let requires_install_confirmation =
                 plugin_requires_install_confirmation(plugin.must_show_installation_interstitial);
             cards.push(PluginCard {
@@ -637,6 +645,7 @@ fn load_composer_plugins(
                 installed: plugin.installed,
                 enabled: plugin.enabled,
                 installable,
+                disabled_by_admin,
                 requires_install_confirmation,
                 featured: featured.contains_key(&plugin.id),
                 featured_rank: featured.get(&plugin.id).copied(),
@@ -7447,9 +7456,10 @@ fn run_effect(
                                 .take(MAX_PLUGIN_KEYWORDS)
                                 .map(|keyword| bounded(keyword, MAX_PLUGIN_KEYWORD_BYTES))
                                 .collect();
-                            let installable = plugin.availability.as_deref()
-                                != Some("DISABLED_BY_ADMIN")
-                                && plugin.install_policy.as_deref() != Some("NOT_AVAILABLE");
+                            let (installable, disabled_by_admin) = plugin_installability(
+                                plugin.availability.as_deref(),
+                                plugin.install_policy.as_deref(),
+                            );
                             let requires_install_confirmation =
                                 plugin_requires_install_confirmation(
                                     plugin.must_show_installation_interstitial,
@@ -7470,6 +7480,7 @@ fn run_effect(
                                 installed: plugin.installed,
                                 enabled: plugin.enabled,
                                 installable,
+                                disabled_by_admin,
                                 requires_install_confirmation,
                                 featured: featured.contains_key(&plugin.id),
                                 featured_rank: featured.get(&plugin.id).copied(),
@@ -16375,10 +16386,11 @@ mod tests {
         parse_generated_commit_pull_request_messages, parse_generated_pull_request_message,
         parse_git_preferences, parse_keyboard_shortcut_preferences, parse_primary_window_placement,
         personalization_snapshot, plugin_directory_includes_marketplace,
-        plugin_directory_marketplace_kinds, plugin_requires_install_confirmation,
-        pull_request_generation_prompt, pull_request_output_schema, record_retryable_steer,
-        remote_pairing_status_params, restored_browser_download, retryable_submission_inputs,
-        run_computer_tool, safety_retry_fork_point, stored_browser_download, user_input_response,
+        plugin_directory_marketplace_kinds, plugin_installability,
+        plugin_requires_install_confirmation, pull_request_generation_prompt,
+        pull_request_output_schema, record_retryable_steer, remote_pairing_status_params,
+        restored_browser_download, retryable_submission_inputs, run_computer_tool,
+        safety_retry_fork_point, stored_browser_download, user_input_response,
     };
 
     #[cfg(any(windows, target_os = "linux"))]
@@ -19119,6 +19131,14 @@ mod tests {
         assert!(plugin_requires_install_confirmation(Some(true)));
         assert!(plugin_requires_install_confirmation(None));
         assert!(!plugin_requires_install_confirmation(Some(false)));
+    }
+
+    #[test]
+    fn plugin_installability_preserves_admin_disabled_state() {
+        assert_eq!(
+            plugin_installability(Some("DISABLED_BY_ADMIN"), None),
+            (false, true)
+        );
     }
 
     #[test]
