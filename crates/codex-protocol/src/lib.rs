@@ -2877,6 +2877,30 @@ pub struct AppsListParams {
     pub force_refetch: bool,
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppsInstalledParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub force_refresh: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppsInstalledResponse {
+    pub apps: Vec<InstalledApp>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledApp {
+    pub id: String,
+    pub runtime_name: Option<String>,
+    pub enabled: bool,
+    pub callable: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppsListResponse {
@@ -3546,10 +3570,10 @@ mod tests {
 
     use super::{
         Account, AccountLoginCompletedNotification, AccountTokenUsageDailyBucket,
-        ApprovalsReviewer, AppsReadParams, AppsReadResponse, BoundedLineDecoder,
-        CancelLoginAccountParams, CancelLoginAccountResponse, CancelLoginAccountStatus, ClientInfo,
-        ClientNotification, ClientRequest, CollaborationMode, CollaborationModeKind,
-        CollaborationModeSettings, CommandExecutionApprovalDecision,
+        ApprovalsReviewer, AppsInstalledParams, AppsInstalledResponse, AppsReadParams,
+        AppsReadResponse, BoundedLineDecoder, CancelLoginAccountParams, CancelLoginAccountResponse,
+        CancelLoginAccountStatus, ClientInfo, ClientNotification, ClientRequest, CollaborationMode,
+        CollaborationModeKind, CollaborationModeSettings, CommandExecutionApprovalDecision,
         CommandExecutionApprovalDecisionValue, CommandExecutionRequestApprovalParams,
         CommandExecutionRequestApprovalResponse, ConfigBatchWriteParams, ConfigEdit,
         ConfigMergeStrategy, ConfigReadParams, ConfigReadResponse, ConfigRequirementsReadResponse,
@@ -3569,11 +3593,11 @@ mod tests {
         GetAccountTokenUsageResponse, GetAuthStatusParams, GetAuthStatusResponse,
         GitDiffToRemoteParams, GitDiffToRemoteResponse, HistorySortDirection, HookEventName,
         HookHandlerType, HookSource, HookTrustStatus, HooksListParams, HooksListResponse,
-        IncomingMessage, InitializeParams, ListMcpServerStatusParams, ListMcpServerStatusResponse,
-        LoginAccountParams, LoginAccountResponse, MarketplaceAddParams, MarketplaceRemoveParams,
-        MarketplaceUpgradeParams, McpAuthStatus, McpElicitationPrimitiveSchema,
-        McpResourceReadParams, McpResourceReadResponse, McpServerElicitationAction,
-        McpServerElicitationRequest, McpServerElicitationRequestParams,
+        IncomingMessage, InitializeParams, InstalledApp, ListMcpServerStatusParams,
+        ListMcpServerStatusResponse, LoginAccountParams, LoginAccountResponse,
+        MarketplaceAddParams, MarketplaceRemoveParams, MarketplaceUpgradeParams, McpAuthStatus,
+        McpElicitationPrimitiveSchema, McpResourceReadParams, McpResourceReadResponse,
+        McpServerElicitationAction, McpServerElicitationRequest, McpServerElicitationRequestParams,
         McpServerElicitationRequestResponse, McpServerOauthLoginParams,
         McpServerStartupFailureReason, McpServerStartupState, McpServerStatusDetail,
         McpServerStatusUpdatedNotification, MemoryResetResponse, ModelListParams,
@@ -3698,6 +3722,42 @@ mod tests {
             }),
             b"{\"method\":\"initialized\"}\n"
         );
+    }
+
+    #[test]
+    fn apps_installed_wire_shape_matches_generated_schema() {
+        assert_eq!(
+            serde_json::to_value(AppsInstalledParams {
+                thread_id: Some("thread-1".to_owned()),
+                force_refresh: false,
+            })
+            .ok(),
+            Some(json!({ "threadId": "thread-1" }))
+        );
+        assert_eq!(
+            encoded(&ClientRequest {
+                method: "app/installed",
+                id: 7,
+                params: Some(AppsInstalledParams {
+                    thread_id: Some("thread-1".to_owned()),
+                    force_refresh: true,
+                }),
+            }),
+            b"{\"method\":\"app/installed\",\"id\":7,\"params\":{\"threadId\":\"thread-1\",\"forceRefresh\":true}}\n"
+        );
+        assert!(matches!(
+            serde_json::from_value::<AppsInstalledResponse>(json!({
+                "apps": [{
+                    "id": "connector_calendar",
+                    "runtimeName": "calendar",
+                    "enabled": true,
+                    "callable": false
+                }]
+            })),
+            Ok(AppsInstalledResponse { apps })
+                if matches!(apps.as_slice(), [InstalledApp { id, runtime_name: Some(runtime_name), enabled: true, callable: false }]
+                    if id == "connector_calendar" && runtime_name == "calendar")
+        ));
     }
 
     #[test]

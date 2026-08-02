@@ -13,11 +13,12 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use codex_protocol::{
-    AppsListParams, AppsListResponse, AppsReadParams, AppsReadResponse, CancelLoginAccountParams,
-    CancelLoginAccountResponse, ClientInfo, ClientNotification, ClientRequest,
-    ConfigBatchWriteParams, ConfigReadParams, ConfigReadResponse, ConfigRequirementsReadResponse,
-    ConfigWriteResponse, DEFAULT_COMMAND_CHANNEL_CAPACITY, DEFAULT_EVENT_CHANNEL_CAPACITY,
-    DEFAULT_MAX_FRAME_BYTES, DEFAULT_MESSAGE_CHANNEL_CAPACITY, ExternalAgentConfigDetectParams,
+    AppsInstalledParams, AppsInstalledResponse, AppsListParams, AppsListResponse, AppsReadParams,
+    AppsReadResponse, CancelLoginAccountParams, CancelLoginAccountResponse, ClientInfo,
+    ClientNotification, ClientRequest, ConfigBatchWriteParams, ConfigReadParams,
+    ConfigReadResponse, ConfigRequirementsReadResponse, ConfigWriteResponse,
+    DEFAULT_COMMAND_CHANNEL_CAPACITY, DEFAULT_EVENT_CHANNEL_CAPACITY, DEFAULT_MAX_FRAME_BYTES,
+    DEFAULT_MESSAGE_CHANNEL_CAPACITY, ExternalAgentConfigDetectParams,
     ExternalAgentConfigDetectResponse, ExternalAgentConfigImportHistoriesReadResponse,
     ExternalAgentConfigImportParams, ExternalAgentConfigImportResponse, FeedbackUploadParams,
     FeedbackUploadResponse, GetAccountParams, GetAccountRateLimitsResponse, GetAccountResponse,
@@ -1473,6 +1474,14 @@ impl AppServerConnection {
             });
         }
         self.request("app/list", params)
+    }
+
+    pub fn installed_apps(
+        &self,
+        params: AppsInstalledParams,
+    ) -> Result<AppsInstalledResponse, AppServerError> {
+        self.require_initialized()?;
+        self.request("app/installed", params)
     }
 
     pub fn read_apps(&self, params: AppsReadParams) -> Result<AppsReadResponse, AppServerError> {
