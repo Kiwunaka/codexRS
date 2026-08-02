@@ -46,17 +46,18 @@ use codex_core::{
     MAX_KEYBOARD_SHORTCUTS_PER_COMMAND, MAX_LOCAL_PROJECTS, MAX_MARKETPLACE_SOURCES,
     MAX_MCP_FORM_FIELDS, MAX_MCP_FORM_IMAGE_DATA_URL_BYTES, MAX_MCP_FORM_OPTIONS,
     MAX_MCP_FORM_VALUE_BYTES, MAX_MCP_SERVER_FIELD_BYTES, MAX_MCP_SERVER_LIST_ITEMS,
-    MAX_PENDING_APPROVALS, MAX_REMOTE_CURSOR_BYTES, MAX_REMOTE_DEVICE_ID_BYTES,
-    MAX_REMOTE_DEVICE_LABEL_BYTES, MAX_REMOTE_ENVIRONMENT_ID_BYTES, MAX_REMOTE_PAIRING_CODE_BYTES,
-    MAX_RETRYABLE_TURN_MESSAGES, MAX_TERMINAL_TABS, MAX_TIMELINE_ITEMS, MAX_TURN_DIFF_BYTES,
-    MAX_USER_INPUT_OPTIONS, MAX_USER_INPUT_QUESTIONS, MAX_USER_INPUT_VALUE_BYTES,
-    MAX_VISIBLE_THREADS, MAX_WORKTREE_ROOT_BYTES, MainRoute, MarketplaceSourceCard,
-    MarketplaceUpgradeFailure, McpAuthStatus as CoreMcpAuthStatus, McpBrowserOriginElicitation,
-    McpBrowserResourceElicitation, McpElicitation, McpElicitationContent, McpElicitationDecision,
-    McpElicitationValue, McpFormElicitation, McpFormField, McpFormFieldKind,
-    McpFormImagePickerItem, McpFormOption, McpFormStringFormat, McpResourceCard,
-    McpResourceContentCard, McpResourceTemplateCard, McpServerCard, McpServerDraft,
-    McpServerInfoCard, McpServerStartupFailureReason as CoreMcpServerStartupFailureReason,
+    MAX_PENDING_APPROVALS, MAX_PLUGIN_KEYWORD_BYTES, MAX_PLUGIN_KEYWORDS, MAX_REMOTE_CURSOR_BYTES,
+    MAX_REMOTE_DEVICE_ID_BYTES, MAX_REMOTE_DEVICE_LABEL_BYTES, MAX_REMOTE_ENVIRONMENT_ID_BYTES,
+    MAX_REMOTE_PAIRING_CODE_BYTES, MAX_RETRYABLE_TURN_MESSAGES, MAX_TERMINAL_TABS,
+    MAX_TIMELINE_ITEMS, MAX_TURN_DIFF_BYTES, MAX_USER_INPUT_OPTIONS, MAX_USER_INPUT_QUESTIONS,
+    MAX_USER_INPUT_VALUE_BYTES, MAX_VISIBLE_THREADS, MAX_WORKTREE_ROOT_BYTES, MainRoute,
+    MarketplaceSourceCard, MarketplaceUpgradeFailure, McpAuthStatus as CoreMcpAuthStatus,
+    McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
+    McpElicitationContent, McpElicitationDecision, McpElicitationValue, McpFormElicitation,
+    McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpFormOption, McpFormStringFormat,
+    McpResourceCard, McpResourceContentCard, McpResourceTemplateCard, McpServerCard,
+    McpServerDraft, McpServerInfoCard,
+    McpServerStartupFailureReason as CoreMcpServerStartupFailureReason,
     McpServerStartupState as CoreMcpServerStartupState, McpToolCard, McpTransportKind,
     McpUrlElicitation, ModelOption, ModelUpgradeNotice,
     NetworkApprovalContext as CoreNetworkApprovalContext,
@@ -609,6 +610,12 @@ fn load_composer_plugins(
                     .filter(|prompt| !prompt.trim().is_empty())
             });
             let version = plugin.local_version.clone().or(plugin.version.clone());
+            let keywords = plugin
+                .keywords
+                .into_iter()
+                .take(MAX_PLUGIN_KEYWORDS)
+                .map(|keyword| bounded(keyword, MAX_PLUGIN_KEYWORD_BYTES))
+                .collect();
             let installable = plugin.availability.as_deref() != Some("DISABLED_BY_ADMIN")
                 && plugin.install_policy.as_deref() != Some("NOT_AVAILABLE");
             let requires_install_confirmation =
@@ -625,6 +632,7 @@ fn load_composer_plugins(
                 logo_url_dark,
                 default_prompt,
                 version,
+                keywords,
                 installed: plugin.installed,
                 enabled: plugin.enabled,
                 installable,
@@ -7348,6 +7356,12 @@ fn run_effect(
                                         .filter(|prompt| !prompt.trim().is_empty())
                                 });
                             let version = plugin.local_version.clone().or(plugin.version.clone());
+                            let keywords = plugin
+                                .keywords
+                                .into_iter()
+                                .take(MAX_PLUGIN_KEYWORDS)
+                                .map(|keyword| bounded(keyword, MAX_PLUGIN_KEYWORD_BYTES))
+                                .collect();
                             let installable = plugin.availability.as_deref()
                                 != Some("DISABLED_BY_ADMIN")
                                 && plugin.install_policy.as_deref() != Some("NOT_AVAILABLE");
@@ -7367,6 +7381,7 @@ fn run_effect(
                                 logo_url_dark,
                                 default_prompt,
                                 version,
+                                keywords,
                                 installed: plugin.installed,
                                 enabled: plugin.enabled,
                                 installable,

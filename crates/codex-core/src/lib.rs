@@ -26,6 +26,8 @@ pub const MAX_MCP_FORM_VALUE_BYTES: usize = 8 * 1024;
 pub const MAX_MCP_FORM_IMAGE_DATA_URL_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_MARKETPLACE_ITEMS: usize = 500;
 pub const MAX_PLUGIN_DETAIL_ITEMS: usize = 100;
+pub const MAX_PLUGIN_KEYWORDS: usize = 32;
+pub const MAX_PLUGIN_KEYWORD_BYTES: usize = 256;
 pub const MAX_MARKETPLACE_SOURCE_BYTES: usize = 4 * 1024;
 pub const MAX_MARKETPLACE_SOURCES: usize = 128;
 pub const MAX_MARKETPLACE_NAME_BYTES: usize = 256;
@@ -2110,6 +2112,7 @@ pub struct PluginCard {
     pub logo_url_dark: Option<String>,
     pub default_prompt: Option<String>,
     pub version: Option<String>,
+    pub keywords: Vec<String>,
     pub installed: bool,
     pub enabled: bool,
     pub installable: bool,
@@ -7469,6 +7472,15 @@ fn clear_plugin_install_confirmation(state: &mut AppState) {
     if let Some(plugin_id) = state.marketplace.pending_plugin_install_confirmation.take() {
         remove_composer_plugin_attachments(state, &plugin_id);
     }
+}
+
+fn normalize_plugin_keywords(keywords: &mut Vec<String>) {
+    keywords.truncate(MAX_PLUGIN_KEYWORDS);
+    let mut seen = HashSet::new();
+    keywords.retain_mut(|keyword| {
+        *keyword = bounded_string(keyword.trim().to_owned(), MAX_PLUGIN_KEYWORD_BYTES);
+        !keyword.is_empty() && seen.insert(keyword.to_lowercase())
+    });
 }
 
 fn refresh_apps_effect(state: &AppState, force_refetch: bool) -> Effect {
@@ -13814,6 +13826,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 plugin.name = bounded_string(plugin.name.trim().to_owned(), 512);
                 plugin.description =
                     bounded_string(plugin.description.trim().to_owned(), 16 * 1024);
+                normalize_plugin_keywords(&mut plugin.keywords);
             }
             let mut seen = HashSet::new();
             plugins.retain(|plugin| {
@@ -13876,6 +13889,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 plugin.name = bounded_string(plugin.name.trim().to_owned(), 512);
                 plugin.description =
                     bounded_string(plugin.description.trim().to_owned(), 16 * 1024);
+                normalize_plugin_keywords(&mut plugin.keywords);
             }
             let mut seen = HashSet::new();
             plugins.retain(|plugin| {
@@ -19941,6 +19955,7 @@ mod tests {
                 logo_url_dark: None,
                 default_prompt: None,
                 version: None,
+                keywords: Vec::new(),
                 installed: true,
                 enabled: true,
                 installable: true,
@@ -26337,6 +26352,24 @@ mod tests {
     }
 
     #[test]
+    fn plugin_keywords_are_bounded_trimmed_and_deduplicated() {
+        let mut keywords = vec![
+            " Search ".to_owned(),
+            "search".to_owned(),
+            " ".to_owned(),
+            "é".repeat(130),
+        ];
+        keywords.extend((0..=super::MAX_PLUGIN_KEYWORDS).map(|index| format!("keyword-{index}")));
+
+        super::normalize_plugin_keywords(&mut keywords);
+
+        assert_eq!(keywords[0], "Search");
+        assert_eq!(keywords[1].len(), super::MAX_PLUGIN_KEYWORD_BYTES);
+        assert_eq!(keywords.len(), super::MAX_PLUGIN_KEYWORDS - 2);
+        assert!(!keywords.iter().any(|keyword| keyword == "keyword-28"));
+    }
+
+    #[test]
     fn marketplace_section_filter_accepts_only_catalog_sections_and_resets_when_removed() {
         let plugin = PluginCard {
             id: "code@openai".to_owned(),
@@ -26350,6 +26383,7 @@ mod tests {
             logo_url_dark: None,
             default_prompt: None,
             version: None,
+            keywords: Vec::new(),
             installed: false,
             enabled: false,
             installable: true,
@@ -26419,6 +26453,7 @@ mod tests {
             logo_url_dark: None,
             default_prompt: Some("Draft replies".to_owned()),
             version: Some("1.0.0".to_owned()),
+            keywords: Vec::new(),
             installed: false,
             enabled: true,
             installable: true,
@@ -26522,6 +26557,7 @@ mod tests {
             logo_url_dark: None,
             default_prompt: None,
             version: Some("1.0.0".to_owned()),
+            keywords: Vec::new(),
             installed: true,
             enabled: true,
             installable: true,
@@ -26618,6 +26654,7 @@ mod tests {
             logo_url_dark: None,
             default_prompt: None,
             version: None,
+            keywords: Vec::new(),
             installed: false,
             enabled: false,
             installable: true,
@@ -26719,6 +26756,7 @@ mod tests {
             logo_url_dark: None,
             default_prompt: None,
             version: None,
+            keywords: Vec::new(),
             installed: false,
             enabled: false,
             installable: true,
@@ -26772,6 +26810,7 @@ mod tests {
             logo_url_dark: None,
             default_prompt: None,
             version: Some("1.0.0".to_owned()),
+            keywords: Vec::new(),
             installed: false,
             enabled: false,
             installable: true,
