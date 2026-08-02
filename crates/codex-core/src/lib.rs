@@ -11281,6 +11281,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                         Some("Open a chat before compacting context.".to_owned());
                     return Vec::new();
                 };
+                if !selected_thread_runtime_ready(state) {
+                    return Vec::new();
+                }
                 let timeline = state.timelines.entry(task_id.clone()).or_default();
                 if timeline.active_turn_id.is_some() {
                     state.composer_error =
@@ -21474,7 +21477,24 @@ mod tests {
     fn compact_slash_command_is_idle_only_and_single_flight() {
         let mut state = AppState::default();
         reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(&mut state, Action::SelectTask("t1".to_owned()));
         reduce(&mut state, Action::ComposerChanged("/compact".to_owned()));
+
+        assert!(reduce(&mut state, Action::SubmitComposer).is_empty());
+        assert_eq!(state.composer, "/compact");
+        assert!(state.composer_error.is_none());
+        assert!(!state.timelines["t1"].compaction_in_flight);
+
+        reduce(
+            &mut state,
+            Action::TaskRuntimeLoaded {
+                task_id: "t1".to_owned(),
+                generation: 1,
+                active_turn_id: None,
+                active_turn_is_review: false,
+                run_status: Some(TaskRunStatus::Idle),
+            },
+        );
 
         assert_eq!(
             reduce(&mut state, Action::SubmitComposer),
