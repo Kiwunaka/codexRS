@@ -7210,11 +7210,14 @@ impl WorkspaceView {
                 _ => None,
             };
             let previous_background_completion_task_id =
-                self.state.background_completion_task_id.clone();
+                self.state.background_completion_task_ids.back().cloned();
             self.dispatch(action, cx);
             if background_completion_notification_transition(
                 previous_background_completion_task_id.as_deref(),
-                self.state.background_completion_task_id.as_deref(),
+                self.state
+                    .background_completion_task_ids
+                    .back()
+                    .map(String::as_str),
             ) {
                 self.background_completion_notifier.notify_completed();
             }
@@ -41830,7 +41833,8 @@ impl Render for WorkspaceView {
         let main_content = self.render_main(window, cx);
         let main = h_flex().flex_1().min_w_0().h_full().child(main_content);
         let title_bar = self.render_title_bar(window, cx);
-        let background_completion_task_id = self.state.background_completion_task_id.clone();
+        let background_completion_task_id =
+            self.state.background_completion_task_ids.back().cloned();
         let background_completion_task_exists = background_completion_task_id
             .as_deref()
             .is_some_and(|task_id| self.state.tasks.iter().any(|task| task.id == task_id));
