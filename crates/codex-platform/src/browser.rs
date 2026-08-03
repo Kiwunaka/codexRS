@@ -7,6 +7,7 @@ use std::io::{self, Cursor, Read};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -398,8 +399,50 @@ pub(crate) enum BrowserCommand {
 pub struct BrowserSession {
     commands: Sender<BrowserCommand>,
     events: Receiver<BrowserEvent>,
+    latest_frame: LatestBrowserFrame,
     agent_bridge: BrowserAgentBridge,
     thread: Option<JoinHandle<()>>,
+}
+
+#[derive(Clone, Default)]
+struct LatestBrowserFrame {
+    frame: Arc<Mutex<Option<BrowserEvent>>>,
+}
+
+struct BrowserUiEvents {
+    control: Sender<BrowserEvent>,
+    latest_frame: LatestBrowserFrame,
+}
+
+impl LatestBrowserFrame {
+    fn replace(&self, frame: BrowserEvent) {
+        debug_assert!(matches!(frame, BrowserEvent::Frame { .. }));
+        *self
+            .frame
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(frame);
+    }
+
+    fn take(&self) -> Option<BrowserEvent> {
+        self.frame
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+    }
+}
+
+fn try_recv_browser_event(
+    events: &Receiver<BrowserEvent>,
+    latest_frame: &LatestBrowserFrame,
+) -> Result<Option<BrowserEvent>, BrowserCommandError> {
+    match events.try_recv() {
+        Ok(event) => Ok(Some(event)),
+        Err(TryRecvError::Empty) => Ok(latest_frame.take()),
+        Err(TryRecvError::Disconnected) => latest_frame
+            .take()
+            .map(Some)
+            .ok_or(BrowserCommandError::Disconnected),
+    }
 }
 
 impl BrowserSession {
@@ -429,6 +472,11 @@ impl BrowserSession {
         let (command_sender, command_receiver) =
             crossbeam_channel::bounded(BROWSER_COMMAND_CAPACITY);
         let (event_sender, event_receiver) = crossbeam_channel::bounded(BROWSER_EVENT_CAPACITY);
+        let latest_frame = LatestBrowserFrame::default();
+        let runtime_ui_events = BrowserUiEvents {
+            control: event_sender.clone(),
+            latest_frame: latest_frame.clone(),
+        };
         let (agent_event_sender, agent_event_receiver) =
             crossbeam_channel::bounded(BROWSER_AGENT_EVENT_CAPACITY);
         let agent_bridge = BrowserAgentBridge::spawn(command_sender.clone(), agent_event_receiver)
@@ -442,7 +490,7 @@ impl BrowserSession {
                     download_dir,
                     download_staging_root,
                     command_receiver,
-                    event_sender.clone(),
+                    runtime_ui_events,
                     agent_event_sender,
                 ) {
                     let _ = event_sender.try_send(BrowserEvent::Failed(bounded_error(error)));
@@ -454,6 +502,7 @@ impl BrowserSession {
         Ok(Self {
             commands: command_sender,
             events: event_receiver,
+            latest_frame,
             agent_bridge,
             thread: Some(thread),
         })
@@ -699,11 +748,7 @@ impl BrowserSession {
     }
 
     pub fn try_recv_event(&self) -> Result<Option<BrowserEvent>, BrowserCommandError> {
-        match self.events.try_recv() {
-            Ok(event) => Ok(Some(event)),
-            Err(TryRecvError::Empty) => Ok(None),
-            Err(TryRecvError::Disconnected) => Err(BrowserCommandError::Disconnected),
-        }
+        try_recv_browser_event(&self.events, &self.latest_frame)
     }
 
     pub fn shutdown(&mut self) {
@@ -1116,7 +1161,7 @@ fn run_browser(
     download_dir: PathBuf,
     download_staging_root: PathBuf,
     commands: Receiver<BrowserCommand>,
-    events: Sender<BrowserEvent>,
+    ui_events: BrowserUiEvents,
     agent_events: Sender<BrowserAgentNotification>,
 ) -> Result<(), String> {
     let browser_family = BrowserFamily::from_executable(&executable);
@@ -1147,7 +1192,7 @@ fn run_browser(
         &config,
         download_dir,
         download_staging_root,
-        events,
+        ui_events,
         agent_events,
     )?;
     let context_id = checked_context_id(&config.context_id).map_err(|error| error.to_string())?;
@@ -1542,7 +1587,7 @@ struct BrowserDownloadRuntime {
 struct BrowserRuntime {
     browser_family: BrowserFamily,
     cdp: CdpClient,
-    events: Sender<BrowserEvent>,
+    ui_events: BrowserUiEvents,
     agent_events: Sender<BrowserAgentNotification>,
     tabs: Vec<BrowserTabRuntime>,
     active_tab_ids: HashMap<String, String>,
@@ -1579,13 +1624,13 @@ impl BrowserRuntime {
         config: &BrowserConfig,
         download_dir: PathBuf,
         download_staging_root: PathBuf,
-        events: Sender<BrowserEvent>,
+        ui_events: BrowserUiEvents,
         agent_events: Sender<BrowserAgentNotification>,
     ) -> Result<Self, String> {
         Ok(Self {
             browser_family,
             cdp: CdpClient::connect(&endpoint)?,
-            events,
+            ui_events,
             agent_events,
             tabs: Vec::with_capacity(4),
             active_tab_ids: HashMap::new(),
@@ -1993,7 +2038,8 @@ impl BrowserRuntime {
                             "Browser visibility command requires a boolean visible",
                         )
                     })?;
-                self.events
+                self.ui_events
+                    .control
                     .try_send(BrowserEvent::VisibilityRequested {
                         context_id: context_id.clone(),
                         visible,
@@ -3838,7 +3884,7 @@ impl BrowserRuntime {
         }
         let tab_id = self.active_tab()?.public.id.clone();
         let context_id = self.active_tab()?.context_id.clone();
-        self.emit(BrowserEvent::Frame {
+        self.ui_events.latest_frame.replace(BrowserEvent::Frame {
             context_id,
             tab_id,
             jpeg,
@@ -3879,7 +3925,7 @@ impl BrowserRuntime {
     }
 
     fn emit(&self, event: BrowserEvent) {
-        let _ = self.events.try_send(event);
+        let _ = self.ui_events.control.try_send(event);
     }
 
     fn active_tab(&self) -> Result<&BrowserTabRuntime, String> {
@@ -4660,13 +4706,13 @@ mod tests {
 
     use super::{
         BROWSER_COMMAND_CAPACITY, BrowserCommandError, BrowserConfig, BrowserDownloadControl,
-        BrowserDownloadRuntime, BrowserFamily, CdpClient, DevToolsEndpoint, MAX_BROWSER_URL_BYTES,
-        browser_command, browser_origin_pattern_matches, browser_permission_for_url, cdp_key_name,
-        checked_agent_browser_id, checked_agent_viewport, checked_download_url,
-        checked_navigation_url, control_download_transfer, create_browser_job,
-        graceful_browser_exit, move_download_to_destination, normalize_browser_origin,
-        parse_devtools_marker, resolve_browser_binary, safe_download_filename,
-        wait_for_devtools_endpoint,
+        BrowserDownloadRuntime, BrowserEvent, BrowserFamily, CdpClient, DevToolsEndpoint,
+        LatestBrowserFrame, MAX_BROWSER_URL_BYTES, browser_command, browser_origin_pattern_matches,
+        browser_permission_for_url, cdp_key_name, checked_agent_browser_id, checked_agent_viewport,
+        checked_download_url, checked_navigation_url, control_download_transfer,
+        create_browser_job, graceful_browser_exit, move_download_to_destination,
+        normalize_browser_origin, parse_devtools_marker, resolve_browser_binary,
+        safe_download_filename, try_recv_browser_event, wait_for_devtools_endpoint,
     };
     use super::{
         MAX_XDG_USER_DIRS_BYTES, decode_xdg_double_quoted, linux_user_dirs_config_path,
@@ -4699,6 +4745,47 @@ mod tests {
             .pointer("/result/value")
             .cloned()
             .ok_or_else(|| io::Error::other("Chromium did not return a WebUI value"))
+    }
+
+    #[test]
+    fn browser_frames_coalesce_without_displacing_control_events() {
+        let (sender, receiver) = bounded(1);
+        let latest_frame = LatestBrowserFrame::default();
+        latest_frame.replace(BrowserEvent::Frame {
+            context_id: "task".to_owned(),
+            tab_id: "tab".to_owned(),
+            jpeg: vec![1],
+            width: 1,
+            height: 1,
+        });
+        latest_frame.replace(BrowserEvent::Frame {
+            context_id: "task".to_owned(),
+            tab_id: "tab".to_owned(),
+            jpeg: vec![2],
+            width: 1,
+            height: 1,
+        });
+        assert!(sender.try_send(BrowserEvent::Exited).is_ok());
+        drop(sender);
+
+        assert_eq!(
+            try_recv_browser_event(&receiver, &latest_frame),
+            Ok(Some(BrowserEvent::Exited))
+        );
+        assert_eq!(
+            try_recv_browser_event(&receiver, &latest_frame),
+            Ok(Some(BrowserEvent::Frame {
+                context_id: "task".to_owned(),
+                tab_id: "tab".to_owned(),
+                jpeg: vec![2],
+                width: 1,
+                height: 1,
+            }))
+        );
+        assert_eq!(
+            try_recv_browser_event(&receiver, &latest_frame),
+            Err(BrowserCommandError::Disconnected)
+        );
     }
 
     #[test]
