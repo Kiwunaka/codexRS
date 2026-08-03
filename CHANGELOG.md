@@ -5,6 +5,30 @@ All notable changes to codexRS are documented here. The project follows
 
 ## [Unreleased]
 
+## [0.1.0-rc.7] - 2026-08-03
+
+### Added
+
+- Linux sends native notifications when background chats complete.
+
+### Fixed
+
+- Reconnect recovery reloads selected timelines and goals, preserves canceled
+  login state, restores failed composer submissions in their owning chat, and
+  surfaces selected-file diff failures.
+- Stale plugin catalog results are ignored; transient Git refresh failures
+  preserve the current snapshot and branch-operation state.
+- Computer Use requires fresh state after a target switch and keeps concurrent
+  turn interruption monitors isolated.
+- MCP catalog results are scoped to the selected task and workspace generation,
+  preventing stale results after either changes.
+
+### Security
+
+- App-server ingress and derived UI events are byte-bounded through reduction;
+  semantic overload reconnects for authoritative recovery rather than silently
+  dropping state.
+
 ## [0.1.0-rc.6] - 2026-08-02
 
 ### Added
