@@ -6861,6 +6861,10 @@ impl WorkspaceView {
                 | Action::RetryPendingWorktreeFork { .. }
                 | Action::DismissPendingWorktreeFork { .. }
         );
+        let may_restore_composer = matches!(
+            &action,
+            Action::ComposerSubmissionFailed { .. } | Action::SafetyBufferedRetryFailed { .. }
+        );
         match &action {
             Action::ShowInspector(InspectorPane::Terminal) | Action::ToggleReviewPanel => {
                 self.responsive_inspector_restore = None;
@@ -6881,9 +6885,15 @@ impl WorkspaceView {
         }
         let previous_location = NavigationLocation::from_state(&self.state);
         let previous_selected_task_id = self.state.selected_task_id.clone();
+        let previous_composer = self.state.composer.clone();
         let effects = reduce(&mut self.state, action);
-        if previous_selected_task_id != self.state.selected_task_id {
+        let selected_task_changed = previous_selected_task_id != self.state.selected_task_id;
+        if selected_task_changed
+            || (may_restore_composer && previous_composer != self.state.composer)
+        {
             self.sync_composer_input_in_window(cx);
+        }
+        if selected_task_changed {
             self.composer_file_search_selected = 0;
             self.composer_file_search_dismissed_query = None;
             self.composer_mcp_status_open = false;
