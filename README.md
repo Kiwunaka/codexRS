@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="docs/assets/codexrs-hero.png" alt="codexRS native workspace" width="100%">
+  <img src="docs/assets/codexrs-hero-v2.png" alt="codexRS native workspace" width="100%">
 </p>
 
 <h1 align="center">codexRS</h1>
 
 <p align="center">
-  A native Rust replacement for Codex Desktop, targeting full behavioral and UX parity.<br>
-  Official app-server compatibility without Electron, WebView, or a browser runtime.
+  The Codex Desktop workflow, rebuilt as a native Rust application for Windows and Linux.<br>
+  Official app-server compatibility without Electron, WebView, Node.js, or a bundled browser runtime.
 </p>
 
 <p align="center">
@@ -24,76 +24,93 @@
   <img alt="Windows and Linux" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-2f81f7">
 </p>
 
-> [!IMPORTANT]
-> This tree targets a pre-release. Windows has passed an end-to-end
-> source-build smoke test against the exact stable reference. Linux is covered
-> by native CI and still needs broader desktop-environment testing before a
-> stable release.
+<p align="center">
+  <a href="https://github.com/Kiwunaka/codexRS/releases/download/v0.1.0-rc.12/codexrs-v0.1.0-rc.12-windows-x86_64.zip"><img alt="Download for Windows" src="https://img.shields.io/badge/Download-Windows%20x86__64-2f81f7?style=for-the-badge&logo=windows11&logoColor=white"></a>
+  <a href="https://github.com/Kiwunaka/codexRS/releases/download/v0.1.0-rc.12/codexrs-v0.1.0-rc.12-linux-x86_64.tar.gz"><img alt="Download for Linux" src="https://img.shields.io/badge/Download-Linux%20x86__64-f0a050?style=for-the-badge&logo=linux&logoColor=white"></a>
+  <a href="https://github.com/Kiwunaka/codexRS/releases/download/v0.1.0-rc.12/SHA256SUMS.txt"><img alt="SHA-256 checksums" src="https://img.shields.io/badge/Verify-SHA--256-3fb950?style=for-the-badge"></a>
+</p>
+
+<p align="center">
+  <sub>v0.1.0-rc.12 · unsigned portable preview · official Codex CLI required</sub>
+</p>
+
+> [!WARNING]
+> codexRS is a release candidate, not a stable build. Windows is smoke-tested
+> from the packaged archive. Linux is built and started in Ubuntu CI, but still
+> needs broader desktop-environment coverage. Read the
+> [current limitations](docs/known-failures.md#active-release-candidate-limitations)
+> before enabling Computer Use.
 
 ## Why codexRS
 
-Codex Desktop is useful, but a number of workflows need a smaller, inspectable
-native client with predictable process and data boundaries. codexRS is that
-client:
+codexRS keeps the familiar Codex coding loop while replacing the desktop shell
+with a native Rust and GPUI application. It points at `~/.codex` by default,
+but only the supervised official `codex app-server` touches live Codex auth,
+history, SQLite, JSONL, or logs.
 
-- native Rust UI built with GPUI;
-- no Electron, Tauri, Wry, WebView, Node.js, or embedded browser runtime;
-- the official `codex app-server` remains the source of truth;
-- normal use points directly at `~/.codex`;
-- live Codex auth, SQLite, JSONL, and logs are never opened by codexRS itself.
+- **Native desktop shell.** No Electron, Tauri, Wry, WebView, Node.js, or
+  embedded browser runtime in the client.
+- **One Codex source of truth.** Accounts, tasks, models, approvals, plugins,
+  and history stay behind the official app-server protocol.
+- **Desktop coding workflow.** Tasks, streaming output, Git, branches,
+  worktrees, staged and unstaged diffs, pull requests, terminal, files, Browser,
+  Computer Use, Apps, plugins, and Marketplace live in one UI.
+- **Windows and Linux.** The same Rust workspace builds natively on both
+  platforms. Platform-specific process work stays behind `codex-platform`.
+- **Inspectable boundaries.** Frames, queues, pages, diffs, captures, logs, and
+  subprocess output all have explicit limits.
 
-The behavioral oracle is Codex Desktop `26.721.3996.0`, which bundled Codex CLI
-[`0.146.0-alpha.3.1`](https://github.com/openai/codex/releases/tag/rust-v0.146.0-alpha.3.1).
-That upstream binary is a compatibility reference, not something this
-repository redistributes.
+The behavior reference is Codex Desktop `26.721.3996.0`, which bundled Codex
+CLI [`0.146.0-alpha.3.1`](https://github.com/openai/codex/releases/tag/rust-v0.146.0-alpha.3.1).
+The reference is not redistributed or used as a runtime dependency.
 
-## What works
+## What works today
 
-| Area | Current behavior |
+| Area | Current release-candidate slice |
 | --- | --- |
-| Tasks | Bounded task pages, resume, fork, composer, streaming timeline, and approvals |
-| Repository | Status, staged/unstaged files, large virtualized diffs, branch switching, and safe sibling worktrees |
-| Terminal | Native PTY/ConPTY session with bounded VT output |
-| Computer Use | Windows: native window discovery and control with per-app approval, task access, and an app-server-owned always-allowed list; Linux: bounded read-only screenshot observation of X11/XWayland windows when `DISPLAY` is nonempty |
-| Plugins | Native directory tabs, bounded artwork, installed/source management, creation handoff, marketplace add/remove/upgrade, install, and uninstall through app-server methods |
-| Persistence | Single-writer codexRS SQLite for UI preferences and a bounded local-project registry with names and pins |
-| Platforms | Windows source build smoke-tested; Ubuntu UI, app-server, Git, and PTY build and test in CI; Linux Computer Use provides X11/XWayland screenshot observation when `DISPLAY` is nonempty |
+| Tasks and composer | New/resumed tasks, streaming timeline, fork, steer, stop, approvals, Plan, Goal, attachments, commands, search, and background completion notifications |
+| Repository | Branches, safe sibling worktrees, commits, staged/unstaged scopes, virtualized unified/split diffs, review, and guarded GitHub pull-request flows |
+| Terminal and files | Native PTY/ConPTY, bounded scrollback, workspace-confined file previews, outputs, and clickable assistant file citations |
+| Browser | Isolated native browser control surface, task-scoped tabs, permission policy, downloads, uploads, and agent actions |
+| Computer Use | Windows native discovery, screenshots, accessibility, input, interruption, overlay, app launch, and per-app approval; Linux currently has screenshot-only X11/XWayland observation |
+| Extensibility | Skills, plugins, MCP Apps, desktop-app mentions, and Marketplace add/remove/upgrade/install flows through app-server methods |
+| Settings and storage | Catalog-backed account/model/runtime settings plus a small single-writer codexRS database for UI preferences and local-project metadata |
 
-Computer Use is opt-in for each task. Windows provides the full discovery and
-control slice below. On Linux, it provides only bounded, read-only screenshot
-observation of X11/XWayland windows when `DISPLAY` is nonempty; text
-extraction, input, app launch, persistent approvals, the overlay, and
-interruption monitoring are unavailable, and pure Wayland without XWayland is
-unsupported. On Windows, every read or control action carries the
-exact `Window { app, id, title? }` returned by bounded discovery; codexRS
-rehydrates the opaque id and verifies its current owner before acting. The
-window selected in the native inspector is only a manual convenience. The
-first call for each real application asks for access to that application.
-On Windows, packaged apps keep their case-preserved AUMID. Executables use the
-same known-folder GUID form as stable when possible and otherwise keep their
-case-preserved absolute path; legacy `process:` values remain accepted for
-matching. Known shared hosts and oversized identifiers fail closed. Allow once
-covers the current task, while Always allow persists through the official
-app-server, but neither can override the stable product-policy block for Codex,
-terminal, password-manager, identity, or security surfaces.
-The native Windows app catalog can list and launch bounded entries from both
-Start Menu trees, execution aliases, and installed package manifests; direct
-model launches use the same per-app approval policy.
-Screenshots stay in memory and are bounded before they enter the app-server
-protocol. Each capture carries a short-lived screenshot ID so coordinates from
-a downscaled image map back to the real window. On Windows, optional
-accessibility text and indexed actions run in a supervised native Rust helper:
-the tree is capped at 512 elements and 128 KiB, each request has a 10-second
-deadline, and a stuck third-party UI Automation provider is terminated with
-the helper instead of freezing the client. Input methods foreground their
-exact target automatically, while `activate_window` remains an explicit
-recovery action matching stable Window2 behavior.
-Before guarded input, a native topmost system indicator with the stable
-`ChatGPT is using your computer` / `Esc to cancel` copy must become visible.
-It stays for the Computer Use turn, never takes focus or pointer input, and is
-excluded from screenshots; failure to show it blocks the action. On Windows the
-shipped `codex-computer-use-overlay.exe` companion owns that capture-excluded
-window and is supervised with bounded IPC and a kill-on-close Job Object.
+See the [parity matrix](docs/parity-matrix.md) for exact completed and partial
+contracts. The largest remaining gaps are full Linux Computer Use, scheduled
+tasks, signed installers and updates, complete keyboard/screen-reader coverage,
+per-hunk diff actions, and final visual parity.
+
+## Native efficiency, without made-up benchmarks
+
+| Design choice | Practical effect |
+| --- | --- |
+| No bundled Chromium or Node runtime | The client does not ship or keep a second browser application stack alive just to render its UI |
+| Paginated app-server history | Startup does not scan gigabytes of live JSONL history or materialize whole task timelines |
+| Virtualized diffs and timelines | Only the visible slice is laid out; large reviews do not require every row to remain rendered |
+| Bounded channels and byte budgets | Bursts apply backpressure or recover from the source of truth instead of growing queues indefinitely |
+| Fixed terminal scrollback and capped captures | Long terminals and Computer Use sessions cannot grow retained output without a limit |
+| Thin LTO and stripped release symbols | Portable preview archives stay compact; recent builds are roughly 15 MiB for Windows ZIP and 18 MiB for Linux tar.gz |
+
+Archive size is not RAM usage. A controlled, like-for-like memory benchmark
+against Codex Desktop is not published yet, so this project does not claim an
+invented percentage saving. The concrete optimization today is removing the
+embedded web runtime and bounding every growth path. Exact limits are listed in
+[known failures and budgets](docs/known-failures.md).
+
+## Failure modes already removed
+
+| Observed failure | codexRS behavior |
+| --- | --- |
+| Windows multi-root path handling could reach a white screen | Native `Path`/`PathBuf` handling keeps Windows drive paths out of browser shims |
+| A single JSONL line reached 594,127,437 bytes | Live history is never read directly; bounded app-server pages own history access |
+| Startup history reached about 9 GB | `thread/list` is paginated and always requests state-database-only metadata |
+| Filesystem notifications caused repeated `git.exe` spawning | Refreshes are debounced and coalesced with one backend Git operation at a time |
+| Cleanup produced `taskkill`, `conhost`, and WMI storms | Supervised process trees use graceful shutdown and one bounded fallback |
+| Late async replies overwrote newer UI state | Workspace, task, Browser, Marketplace, diff, settings, and fork results are generation-scoped |
+
+These are regression inputs, not behavior copied from the reference. The full
+evidence list lives in [docs/known-failures.md](docs/known-failures.md).
 
 ## Architecture
 
@@ -134,16 +151,19 @@ If it is not on `PATH`, set `CODEX_RS_CODEX_BIN` to the native `codex` or
 
 ### 2. Download the portable preview
 
-Download only from the [GitHub Releases](https://github.com/Kiwunaka/codexRS/releases)
-page. Each pre-release provides `codexrs-<tag>-windows-x86_64.zip` and
-`codexrs-<tag>-linux-x86_64.tar.gz`, with `SHA256SUMS.txt`; substitute the
-full tag of the release you selected for `<tag>`.
-Verify the archive checksum before extraction; for example, on Linux run
-`grep ' \./codexrs-<tag>-linux-x86_64.tar.gz$' SHA256SUMS.txt | sha256sum -c -`,
-and on Windows compare
-`(Get-FileHash .\codexrs-<tag>-windows-x86_64.zip -Algorithm SHA256).Hash`
-with the matching entry. The checksum helps detect corruption after obtaining
-it from the trusted release page; it is not an independent publisher signature.
+Current preview: **v0.1.0-rc.12**.
+
+- [Windows x86_64 ZIP](https://github.com/Kiwunaka/codexRS/releases/download/v0.1.0-rc.12/codexrs-v0.1.0-rc.12-windows-x86_64.zip)
+- [Linux x86_64 tar.gz](https://github.com/Kiwunaka/codexRS/releases/download/v0.1.0-rc.12/codexrs-v0.1.0-rc.12-linux-x86_64.tar.gz)
+- [SHA-256 checksums](https://github.com/Kiwunaka/codexRS/releases/download/v0.1.0-rc.12/SHA256SUMS.txt)
+- [All releases and release notes](https://github.com/Kiwunaka/codexRS/releases)
+
+Verify the archive before extraction. On Linux, run
+`grep 'codexrs-v0.1.0-rc.12-linux-x86_64.tar.gz$' SHA256SUMS.txt | sha256sum -c -`.
+On Windows, compare
+`(Get-FileHash .\codexrs-v0.1.0-rc.12-windows-x86_64.zip -Algorithm SHA256).Hash`
+with the matching entry. The checksum detects transfer corruption; it is not an
+independent publisher signature.
 
 These are unsigned portable technical-preview archives. They do not
 automatically install a Start Menu entry, desktop entry, URI handler,
@@ -215,12 +235,18 @@ Contributions are welcome. Start with
 focused on an observable requirement or failure. Large features should begin
 as an issue or discussion so the contract is clear before implementation.
 
+- [Good first issues](https://github.com/Kiwunaka/codexRS/labels/good%20first%20issue)
+- [Help wanted](https://github.com/Kiwunaka/codexRS/labels/help%20wanted)
+- [Discussions](https://github.com/Kiwunaka/codexRS/discussions)
 - [Roadmap](ROADMAP.md)
 - [Codex Desktop parity matrix](docs/parity-matrix.md)
 - [Support](SUPPORT.md)
 - [Security policy](SECURITY.md)
 - [Code of Conduct](CODE_OF_CONDUCT.md)
 - [Prior-art review](docs/prior-art.md)
+
+If codexRS solves a real problem for you, a GitHub star helps more contributors
+find the project.
 
 ## Contributors
 
@@ -230,7 +256,7 @@ as an issue or discussion so the contract is clear before implementation.
 
 ## Star history
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Kiwunaka/codexRS&type=Date)](https://star-history.com/#Kiwunaka/codexRS&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Kiwunaka/codexRS&type=Date)](https://www.star-history.com/?repos=Kiwunaka%2FcodexRS&type=date&legend=top-left)
 
 ## License and upstream notice
 

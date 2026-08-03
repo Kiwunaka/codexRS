@@ -11,6 +11,9 @@ All notable changes to codexRS are documented here. The project follows
 
 - Assistant file citations open through the native, workspace-confined Files
   preview while preserving their referenced line range.
+- The public project page now has a new original hero, direct Windows and Linux
+  downloads, synchronized English/Russian/Chinese entry points, contributor and
+  star-history panels, and evidence-backed footprint and regression summaries.
 
 ### Fixed
 
