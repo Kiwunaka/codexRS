@@ -151,7 +151,10 @@ Package names vary across distributions.
 The published Linux tar.gz is a portable archive, not a system package. It
 does not automatically install runtime dependencies, a desktop entry, or a URI
 handler. `codexrs --install-desktop-entry` explicitly creates a per-user entry
-for the current extracted binary and never changes an existing entry. Ubuntu CI
+for the current extracted binary. If the CLI is outside the desktop session's
+`PATH`, invoke the installer with an absolute `CODEX_RS_CODEX_BIN`; the entry
+captures that path. Existing entries are never changed, so remove and recreate
+the entry after either binary moves. Ubuntu CI
 starts the extracted archive in an isolated Xvfb session; broader
 desktop-environment smoke coverage remains pending.
 

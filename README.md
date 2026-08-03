@@ -157,7 +157,10 @@ Computer Use from an archive whose source or checksum you do not trust.
 The Linux archive is not a system package: it does not install runtime
 dependencies or desktop integration automatically. Run
 `codexrs --install-desktop-entry` to create a per-user desktop entry for the
-current extracted binary; the command never changes an existing entry. Ubuntu
+current extracted binary. If Codex CLI is outside the desktop session's
+`PATH`, run the installer with an absolute `CODEX_RS_CODEX_BIN`; the entry
+captures that path. The command never changes an existing entry, so remove and
+recreate it after either binary moves. Ubuntu
 CI starts the extracted archive in an isolated Xvfb session; broader
 desktop-environment smoke coverage remains pending. Linux Computer Use
 provides only bounded, read-only screenshot observation of X11/XWayland windows
