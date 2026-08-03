@@ -278,6 +278,10 @@ fn task_workspace_active(route: MainRoute, selected_task_id: Option<&str>) -> bo
     route == MainRoute::Tasks && selected_task_id.is_some()
 }
 
+fn sidebar_task_list_visible(route: MainRoute) -> bool {
+    route != MainRoute::Settings
+}
+
 fn find_keyboard_shortcut_available(route: MainRoute, selected_task_id: Option<&str>) -> bool {
     route == MainRoute::Settings || task_workspace_active(route, selected_task_id)
 }
@@ -13315,7 +13319,7 @@ impl WorkspaceView {
                     .min_h_0()
                     .p_2()
                     .gap_1()
-                    .when(route == MainRoute::Tasks, |sidebar| {
+                    .when(sidebar_task_list_visible(route), |sidebar| {
                         sidebar.child(task_list)
                     }),
             )
@@ -45863,10 +45867,10 @@ mod tests {
         right_panels_hide_for_width_transition, right_panels_restore_for_width_class,
         sanitize_assistant_markdown, selected_approval_request, selected_model_upgrade_notice,
         selected_task_copy_value, settings_section_matches, settings_section_refreshes_account,
-        shell_width_class, sidebar_layout_width, split_diff_rows, startup_recovery_card,
-        status_context_total_label, status_rate_limit_label, status_rate_limit_reset_metadata_at,
-        task_slot_id, task_workspace_active, terminal_tab_label,
-        thread_find_right_offset_for_shell, timeline_activity_content,
+        shell_width_class, sidebar_layout_width, sidebar_task_list_visible, split_diff_rows,
+        startup_recovery_card, status_context_total_label, status_rate_limit_label,
+        status_rate_limit_reset_metadata_at, task_slot_id, task_workspace_active,
+        terminal_tab_label, thread_find_right_offset_for_shell, timeline_activity_content,
         turn_diff_update_is_accepted, usage_limit_reset_summary_copy,
         usage_settings_requires_sign_in, validate_plugin_logo_dimensions, worktree_fork_queue_full,
         worktree_use_disabled,
@@ -48096,6 +48100,15 @@ mod tests {
             MainRoute::Repository,
             Some("task-1")
         ));
+    }
+
+    #[test]
+    fn sidebar_task_list_stays_visible_on_normal_routes() {
+        assert!(sidebar_task_list_visible(MainRoute::Tasks));
+        assert!(sidebar_task_list_visible(MainRoute::Repository));
+        assert!(sidebar_task_list_visible(MainRoute::PullRequests));
+        assert!(sidebar_task_list_visible(MainRoute::Marketplace));
+        assert!(!sidebar_task_list_visible(MainRoute::Settings));
     }
 
     #[test]
