@@ -8281,7 +8281,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }]
         }
         Action::ToggleReviewPanel => {
-            if state.selected_task_id.is_none() {
+            if state.route != MainRoute::Tasks || state.selected_task_id.is_none() {
                 return Vec::new();
             }
             if state.terminal.location == TerminalDockLocation::Right && state.terminal_dock_open {
@@ -24258,6 +24258,10 @@ mod tests {
 
         state.tasks.push(task("t1"));
         state.selected_task_id = Some("t1".to_owned());
+        state.route = MainRoute::Settings;
+        assert!(reduce(&mut state, Action::ToggleReviewPanel).is_empty());
+        assert_eq!(state.inspector, InspectorPane::Hidden);
+        state.route = MainRoute::Tasks;
         assert_eq!(
             reduce(&mut state, Action::ToggleReviewPanel),
             [Effect::PersistUiState {

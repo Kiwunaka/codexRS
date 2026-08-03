@@ -3512,6 +3512,10 @@ impl PaletteCommand {
         )
     }
 
+    const fn requires_task_workspace(self) -> bool {
+        matches!(self, Self::ToggleReviewPanel)
+    }
+
     const fn requires_repository(self) -> bool {
         matches!(
             self,
@@ -3650,6 +3654,10 @@ impl CommandPaletteView {
         }
         let query = self.query.trim().to_lowercase();
         let has_selected_chat = self.has_selected_chat(cx);
+        let has_task_workspace = self.workspace.upgrade().is_some_and(|workspace| {
+            let state = &workspace.read(cx).state;
+            task_workspace_active(state.route, state.selected_task_id.as_deref())
+        });
         let has_workspace = self.has_workspace(cx);
         let has_repository = self.has_repository(cx);
         let has_available_account = self.has_available_account(cx);
@@ -3664,6 +3672,7 @@ impl CommandPaletteView {
         PaletteCommand::ALL
             .into_iter()
             .filter(|command| !command.requires_selected_chat() || has_selected_chat)
+            .filter(|command| !command.requires_task_workspace() || has_task_workspace)
             .filter(|command| !command.requires_repository() || has_repository)
             .filter(|command| !command.requires_account() || has_available_account)
             .filter(|command| {
@@ -47020,6 +47029,7 @@ mod tests {
         assert!(PaletteCommand::ToggleChatPin.requires_selected_chat());
         assert!(PaletteCommand::OpenReviewTab.requires_selected_chat());
         assert!(!PaletteCommand::ToggleReviewPanel.requires_selected_chat());
+        assert!(PaletteCommand::ToggleReviewPanel.requires_task_workspace());
         assert!(!PaletteCommand::FindInThread.requires_selected_chat());
         assert!(PaletteCommand::ToggleTerminal.requires_selected_chat());
         assert!(PaletteCommand::LogOut.requires_account());
