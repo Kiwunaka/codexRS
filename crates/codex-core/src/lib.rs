@@ -7933,6 +7933,16 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             state.imports.active_import_ids.clear();
             state.mcp_elicitations.clear();
+            state.marketplace.pending_plugin_id = None;
+            state.marketplace.pending_app_id = None;
+            state.marketplace.pending_mcp_key = None;
+            state.marketplace.pending_mcp_auth_name = None;
+            state.marketplace.pending_skill_path = None;
+            state.marketplace.pending_plugin_skill_name = None;
+            state.marketplace.marketplace_add_pending = false;
+            state.marketplace.pending_marketplace_remove = None;
+            state.marketplace.marketplace_upgrade_pending = false;
+            state.marketplace.pending_marketplace_upgrade_name = None;
             clear_remote_control_runtime(&mut state.remote_control);
             let generation = state.fuzzy_file_search.generation;
             state.fuzzy_file_search = FuzzyFileSearchState {
@@ -31072,6 +31082,63 @@ mod tests {
                 retry_in_ms: None,
                 last_error: None,
             }
+        );
+    }
+
+    #[test]
+    fn connection_loss_releases_marketplace_mutation_locks_without_clearing_catalog() {
+        let mut state = AppState {
+            connection: ConnectionStatus::Online,
+            ..AppState::default()
+        };
+        state.marketplace.pending_plugin_id = Some("plugin".to_owned());
+        state.marketplace.pending_plugin_install_confirmation = Some("plugin".to_owned());
+        state.marketplace.pending_app_id = Some("calendar".to_owned());
+        state.marketplace.pending_mcp_key = Some("github".to_owned());
+        state.marketplace.pending_mcp_auth_name = Some("github".to_owned());
+        state.marketplace.pending_skill_path = Some(PathBuf::from("review/SKILL.md"));
+        state.marketplace.pending_plugin_skill_name = Some("review".to_owned());
+        state.marketplace.marketplace_add_pending = true;
+        state.marketplace.pending_marketplace_remove = Some("old-marketplace".to_owned());
+        state.marketplace.marketplace_upgrade_pending = true;
+        state.marketplace.pending_marketplace_upgrade_name = Some("plugins".to_owned());
+        state.marketplace.apps = vec![AppCard {
+            id: "calendar".to_owned(),
+            name: "Calendar".to_owned(),
+            description: String::new(),
+            plugin_display_names: Vec::new(),
+            logo_url: None,
+            logo_url_dark: None,
+            install_url: None,
+            is_accessible: true,
+            enabled: true,
+        }];
+
+        assert_eq!(
+            reduce(&mut state, Action::ConnectionLost),
+            [Effect::ScheduleAppServerReconnect]
+        );
+
+        assert!(state.marketplace.pending_plugin_id.is_none());
+        assert_eq!(
+            state
+                .marketplace
+                .pending_plugin_install_confirmation
+                .as_deref(),
+            Some("plugin")
+        );
+        assert!(state.marketplace.pending_app_id.is_none());
+        assert!(state.marketplace.pending_mcp_key.is_none());
+        assert!(state.marketplace.pending_mcp_auth_name.is_none());
+        assert!(state.marketplace.pending_skill_path.is_none());
+        assert!(state.marketplace.pending_plugin_skill_name.is_none());
+        assert!(!state.marketplace.marketplace_add_pending);
+        assert!(state.marketplace.pending_marketplace_remove.is_none());
+        assert!(!state.marketplace.marketplace_upgrade_pending);
+        assert!(state.marketplace.pending_marketplace_upgrade_name.is_none());
+        assert_eq!(
+            state.marketplace.apps.first().map(|app| app.id.as_str()),
+            Some("calendar")
         );
     }
 
