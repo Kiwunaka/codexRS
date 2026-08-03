@@ -29,7 +29,9 @@ use crate::browser_agent::{
 };
 
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use rustix::process::{Pid, Signal, kill_process_group};
+#[cfg(unix)]
+use std::os::unix::{fs::PermissionsExt, process::CommandExt};
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
 #[cfg(windows)]
@@ -1282,6 +1284,8 @@ fn browser_command(executable: &Path, config: &BrowserConfig) -> Command {
         .stderr(Stdio::null());
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
+    #[cfg(unix)]
+    command.process_group(0);
     command
 }
 
@@ -1403,7 +1407,19 @@ fn parse_devtools_marker(text: &str) -> Result<DevToolsEndpoint, String> {
 #[cfg(windows)]
 type BrowserJob = Job;
 
-#[cfg(not(windows))]
+#[cfg(unix)]
+struct BrowserJob {
+    process_group: Pid,
+}
+
+#[cfg(unix)]
+impl Drop for BrowserJob {
+    fn drop(&mut self) {
+        let _ = kill_process_group(self.process_group, Signal::KILL);
+    }
+}
+
+#[cfg(not(any(windows, unix)))]
 struct BrowserJob;
 
 fn release_browser_job(_job: BrowserJob) {}
@@ -1424,7 +1440,16 @@ fn create_browser_job(child: &mut Child) -> Result<BrowserJob, String> {
     Ok(job)
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
+fn create_browser_job(child: &mut Child) -> Result<BrowserJob, String> {
+    let process_group = i32::try_from(child.id())
+        .ok()
+        .and_then(Pid::from_raw)
+        .ok_or_else(|| "Browser child did not expose a process id".to_owned())?;
+    Ok(BrowserJob { process_group })
+}
+
+#[cfg(not(any(windows, unix)))]
 fn create_browser_job(_child: &mut Child) -> Result<BrowserJob, String> {
     Ok(BrowserJob)
 }
@@ -5021,7 +5046,11 @@ mod tests {
     use std::net::TcpListener;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
+    use std::os::unix::process::CommandExt;
     use std::path::{Path, PathBuf};
+    #[cfg(unix)]
+    use std::process::{Command, Stdio};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread;
@@ -5053,7 +5082,7 @@ mod tests {
         parse_xdg_download_dir, read_xdg_download_dir,
     };
     #[cfg(unix)]
-    use super::{find_path_executable_in, is_browser_executable};
+    use super::{find_path_executable_in, is_browser_executable, release_browser_job};
 
     fn runtime_value(
         cdp: &mut CdpClient,
@@ -5119,6 +5148,41 @@ mod tests {
         })();
         let _ = fs::remove_dir_all(&root);
         result?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_browser_job_kills_same_group_descendants() -> Result<(), Box<dyn Error>> {
+        let marker = std::env::temp_dir().join(format!(
+            "codexrs-browser-job-{}-{}.marker",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+        ));
+        let _ = fs::remove_file(&marker);
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "trap '' HUP; (sleep 1; printf x > \"$CODEXRS_BROWSER_JOB_MARKER\") & exit",
+            ])
+            .env("CODEXRS_BROWSER_JOB_MARKER", &marker)
+            .process_group(0)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        let job = create_browser_job(&mut child).map_err(io::Error::other)?;
+        assert!(child.wait()?.success());
+
+        release_browser_job(job);
+        thread::sleep(Duration::from_millis(1_200));
+        let descendant_ran = marker.exists();
+        let _ = fs::remove_file(&marker);
+        assert!(
+            !descendant_ran,
+            "a Browser process-group descendant ran after its job was dropped"
+        );
         Ok(())
     }
 
