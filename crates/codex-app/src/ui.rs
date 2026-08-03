@@ -278,6 +278,10 @@ fn task_workspace_active(route: MainRoute, selected_task_id: Option<&str>) -> bo
     route == MainRoute::Tasks && selected_task_id.is_some()
 }
 
+fn sidebar_task_list_visible(route: MainRoute) -> bool {
+    route != MainRoute::Settings
+}
+
 fn find_keyboard_shortcut_available(route: MainRoute, selected_task_id: Option<&str>) -> bool {
     route == MainRoute::Settings || task_workspace_active(route, selected_task_id)
 }
@@ -293,6 +297,19 @@ fn bottom_terminal_panel_toggle_available(state: &AppState) -> bool {
 
 fn repository_uses_split_diff(preference: bool, width_class: Option<ShellWidthClass>) -> bool {
     preference && width_class == Some(ShellWidthClass::Wide)
+}
+
+fn repository_file_scopes(files: &[codex_core::GitFileState]) -> Vec<(usize, GitDiffScope)> {
+    let mut scopes = Vec::with_capacity(files.len().saturating_mul(2));
+    for (index, file) in files.iter().enumerate() {
+        if file.unstaged {
+            scopes.push((index, GitDiffScope::Unstaged));
+        }
+        if file.staged {
+            scopes.push((index, GitDiffScope::Staged));
+        }
+    }
+    scopes
 }
 
 fn modal_surface_width(viewport_width: f32, preferred_width: f32) -> f32 {
@@ -6931,6 +6948,7 @@ impl WorkspaceView {
             Action::ShowInspector(_)
             | Action::OpenOutput(_)
             | Action::OpenFuzzyFileResult(_)
+            | Action::OpenAssistantFileCitation { .. }
             | Action::CloseOutput => {
                 self.responsive_inspector_restore = None;
             }
@@ -7209,11 +7227,14 @@ impl WorkspaceView {
                 _ => None,
             };
             let previous_background_completion_task_id =
-                self.state.background_completion_task_id.clone();
+                self.state.background_completion_task_ids.back().cloned();
             self.dispatch(action, cx);
             if background_completion_notification_transition(
                 previous_background_completion_task_id.as_deref(),
-                self.state.background_completion_task_id.as_deref(),
+                self.state
+                    .background_completion_task_ids
+                    .back()
+                    .map(String::as_str),
             ) {
                 self.background_completion_notifier.notify_completed();
             }
@@ -13298,7 +13319,7 @@ impl WorkspaceView {
                     .min_h_0()
                     .p_2()
                     .gap_1()
-                    .when(route == MainRoute::Tasks, |sidebar| {
+                    .when(sidebar_task_list_visible(route), |sidebar| {
                         sidebar.child(task_list)
                     }),
             )
@@ -15263,7 +15284,9 @@ impl WorkspaceView {
 
     fn render_repository(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let repository_root = self.state.git.repository_root.clone();
-        let file_count = self.state.git.files.len();
+        let file_scopes = Rc::new(repository_file_scopes(&self.state.git.files));
+        let file_count = file_scopes.len();
+        let file_scopes_for_list = Rc::clone(&file_scopes);
         let branch_count = self.state.git.branches.len();
         let worktree_count = self.state.git.worktrees.len();
         let branch_list_height = (branch_count.clamp(1, 4) as f32) * 42.0;
@@ -15453,9 +15476,14 @@ impl WorkspaceView {
                                 uniform_list(
                                     "repository-files",
                                     file_count,
-                                    cx.processor(|this, range: Range<usize>, _, cx| {
+                                    cx.processor(move |this, range: Range<usize>, _, cx| {
                                         range
-                                            .map(|index| this.render_git_file(index, cx))
+                                            .filter_map(|position| {
+                                                file_scopes_for_list.get(position).copied()
+                                            })
+                                            .map(|(index, scope)| {
+                                                this.render_scoped_git_file(index, scope, cx)
+                                            })
                                             .collect()
                                     }),
                                 )
@@ -17128,6 +17156,7 @@ impl WorkspaceView {
                 bounded_render_text(item.text.trim(), 64 * 1024)
             };
             let findings = extract_code_comment_findings(&text);
+            let file_citations = extract_assistant_file_citations(&text);
             let code_action_prefix = format!("agent-code-{task_id}-{}", item.id);
             let body = if let Some(markdown) = sanitize_assistant_markdown(&text) {
                 let source_highlights = thread_find_query
@@ -17197,6 +17226,11 @@ impl WorkspaceView {
                         .line_height(px(20.0))
                         .child(body),
                 )
+                .children(file_citations.into_iter().enumerate().map(
+                    |(citation_index, citation)| {
+                        self.render_assistant_file_citation(index, citation_index, citation, cx)
+                    },
+                ))
                 .children(
                     findings
                         .into_iter()
@@ -17590,6 +17624,37 @@ impl WorkspaceView {
                     .child(Icon::new(IconName::ExternalLink).xsmall()),
             )
             .into_any_element()
+    }
+
+    fn render_assistant_file_citation(
+        &mut self,
+        item_index: usize,
+        citation_index: usize,
+        citation: AssistantFileCitation,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let path = citation.path.clone();
+        let line_start = citation.line_start;
+        let line_end = citation.line_end;
+        Button::new(SharedString::from(format!(
+            "assistant-file-citation-{item_index}-{citation_index}"
+        )))
+        .label(citation.label())
+        .icon(IconName::File)
+        .tooltip(citation.path.display().to_string())
+        .xsmall()
+        .ghost()
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.dispatch(
+                Action::OpenAssistantFileCitation {
+                    path: path.clone(),
+                    line_start,
+                    line_end,
+                },
+                cx,
+            );
+        }))
+        .into_any_element()
     }
 
     fn render_assistant_finding(
@@ -21743,6 +21808,9 @@ impl WorkspaceView {
         let app_result_count = composer_app_commands(
             &query.query,
             &self.state.marketplace.apps,
+            &self.state.marketplace.installed_apps,
+            self.state.marketplace.installed_apps_status == Some(LoadStatus::Ready)
+                && self.state.marketplace.installed_apps_thread_id == self.state.selected_task_id,
             &self.state.marketplace.composer_plugins,
         )
         .len();
@@ -21808,6 +21876,9 @@ impl WorkspaceView {
         let app_commands = composer_app_commands(
             &query.query,
             &self.state.marketplace.apps,
+            &self.state.marketplace.installed_apps,
+            self.state.marketplace.installed_apps_status == Some(LoadStatus::Ready)
+                && self.state.marketplace.installed_apps_thread_id == self.state.selected_task_id,
             &self.state.marketplace.composer_plugins,
         );
         let skill_commands =
@@ -21964,6 +22035,9 @@ impl WorkspaceView {
         let app_commands = composer_app_commands(
             &query.query,
             &self.state.marketplace.apps,
+            &self.state.marketplace.installed_apps,
+            self.state.marketplace.installed_apps_status == Some(LoadStatus::Ready)
+                && self.state.marketplace.installed_apps_thread_id == self.state.selected_task_id,
             &self.state.marketplace.composer_plugins,
         );
         let skill_commands =
@@ -23776,11 +23850,21 @@ impl WorkspaceView {
                     )
                 })
         });
-        let metadata = format!(
+        let mut metadata = format!(
             "{} · {}",
             preview.extension.to_ascii_uppercase(),
             format_file_size(preview.size_bytes)
         );
+        if workspace_file
+            && let Some((line_start, line_end)) = self.state.artifacts.selected_line_range
+        {
+            let line_label = if line_end > line_start {
+                format!("lines {line_start}-{line_end}")
+            } else {
+                format!("line {line_start}")
+            };
+            metadata.push_str(&format!(" · {line_label}"));
+        }
         let body = match preview.kind {
             ArtifactPreviewKind::Text => v_flex()
                 .flex_1()
@@ -24641,18 +24725,6 @@ impl WorkspaceView {
             .into_any_element()
     }
 
-    fn render_git_file(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let Some(file) = self.state.git.files.get(index).cloned() else {
-            return div().into_any_element();
-        };
-        let scope = if file.unstaged {
-            GitDiffScope::Unstaged
-        } else {
-            GitDiffScope::Staged
-        };
-        self.render_git_file_row(index, file, scope, cx)
-    }
-
     fn render_scoped_git_file(
         &mut self,
         index: usize,
@@ -24677,11 +24749,13 @@ impl WorkspaceView {
         let path = file.path.clone();
         let label = file.path.display().to_string();
         let status = git_file_status(file.kind);
-        let flags = match (file.staged, file.unstaged) {
-            (true, true) => "index + tree",
-            (true, false) => "staged",
-            (false, true) => "working tree",
-            (false, false) => "",
+        let flags = match scope {
+            GitDiffScope::Unstaged => "working tree",
+            GitDiffScope::Staged => "staged",
+            GitDiffScope::LastTurn
+            | GitDiffScope::Uncommitted
+            | GitDiffScope::Committed
+            | GitDiffScope::Branch => "",
         };
         let (additions, deletions) = match scope {
             GitDiffScope::LastTurn
@@ -41782,7 +41856,8 @@ impl Render for WorkspaceView {
         let main_content = self.render_main(window, cx);
         let main = h_flex().flex_1().min_w_0().h_full().child(main_content);
         let title_bar = self.render_title_bar(window, cx);
-        let background_completion_task_id = self.state.background_completion_task_id.clone();
+        let background_completion_task_id =
+            self.state.background_completion_task_ids.back().cloned();
         let background_completion_task_exists = background_completion_task_id
             .as_deref()
             .is_some_and(|task_id| self.state.tasks.iter().any(|task| task.id == task_id));
@@ -43197,6 +43272,28 @@ struct AssistantFinding {
     priority: Option<u8>,
 }
 
+const MAX_ASSISTANT_FILE_CITATIONS: usize = 64;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AssistantFileCitation {
+    path: PathBuf,
+    line_start: u32,
+    line_end: u32,
+}
+
+impl AssistantFileCitation {
+    fn label(&self) -> String {
+        file_citation_label(&self.path.to_string_lossy(), self.line_start, self.line_end)
+    }
+}
+
+#[derive(Debug)]
+struct AssistantFileCitationMatch {
+    start: usize,
+    end: usize,
+    citation: Option<AssistantFileCitation>,
+}
+
 fn sanitize_assistant_markdown(value: &str) -> Option<String> {
     let tree = markdown::to_mdast(value, &ParseOptions::gfm()).ok()?;
     let mut link_definitions = HashMap::new();
@@ -43373,15 +43470,32 @@ fn collect_file_citation_replacements(
     base_offset: usize,
     replacements: &mut Vec<MarkdownReplacement>,
 ) {
-    collect_legacy_file_citations(text, base_offset, replacements);
-    collect_directive_file_citations(text, base_offset, replacements);
+    replacements.extend(
+        assistant_file_citation_matches(text)
+            .into_iter()
+            .map(|citation| MarkdownReplacement {
+                start: base_offset + citation.start,
+                end: base_offset + citation.end,
+                text: citation.citation.map_or_else(String::new, |citation| {
+                    file_citation_markdown(
+                        &citation.path.to_string_lossy(),
+                        citation.line_start,
+                        citation.line_end,
+                    )
+                }),
+            }),
+    );
 }
 
-fn collect_legacy_file_citations(
-    text: &str,
-    base_offset: usize,
-    replacements: &mut Vec<MarkdownReplacement>,
-) {
+fn assistant_file_citation_matches(text: &str) -> Vec<AssistantFileCitationMatch> {
+    let mut citations = legacy_file_citation_matches(text);
+    citations.extend(directive_file_citation_matches(text));
+    citations.sort_unstable_by_key(|citation| citation.start);
+    citations
+}
+
+fn legacy_file_citation_matches(text: &str) -> Vec<AssistantFileCitationMatch> {
+    let mut citations = Vec::new();
     let mut cursor = 0;
     while let Some(relative_start) = text[cursor..].find('【') {
         let start = cursor + relative_start;
@@ -43390,20 +43504,21 @@ fn collect_legacy_file_citations(
             break;
         };
         let end = content_start + relative_end + '】'.len_utf8();
-        if let Some((path, line_start, line_end)) =
+        if let Some(citation) =
             parse_legacy_file_citation(&text[content_start..content_start + relative_end])
         {
-            replacements.push(MarkdownReplacement {
-                start: base_offset + start,
-                end: base_offset + end,
-                text: file_citation_markdown(path, line_start, line_end),
+            citations.push(AssistantFileCitationMatch {
+                start,
+                end,
+                citation: Some(citation),
             });
         }
         cursor = end;
     }
+    citations
 }
 
-fn parse_legacy_file_citation(value: &str) -> Option<(&str, u32, u32)> {
+fn parse_legacy_file_citation(value: &str) -> Option<AssistantFileCitation> {
     if value.contains(['\n', '\r']) {
         return None;
     }
@@ -43417,15 +43532,16 @@ fn parse_legacy_file_citation(value: &str) -> Option<(&str, u32, u32)> {
         let line = lines.parse::<u32>().ok()?;
         (line, line)
     };
-    (line_start > 0 && line_end >= line_start).then_some((path, line_start, line_end))
+    (line_start > 0 && line_end >= line_start).then(|| AssistantFileCitation {
+        path: PathBuf::from(path),
+        line_start,
+        line_end,
+    })
 }
 
-fn collect_directive_file_citations(
-    text: &str,
-    base_offset: usize,
-    replacements: &mut Vec<MarkdownReplacement>,
-) {
+fn directive_file_citation_matches(text: &str) -> Vec<AssistantFileCitationMatch> {
     const PREFIX: &str = "::codex-file-citation{";
+    let mut citations = Vec::new();
     let mut cursor = 0;
     while let Some(relative_start) = text[cursor..].find(PREFIX) {
         let start = cursor + relative_start;
@@ -43446,24 +43562,29 @@ fn collect_directive_file_citations(
         if purpose.as_deref() == Some("output")
             && path.as_deref().is_some_and(|path| !path.trim().is_empty())
         {
-            replacements.push(MarkdownReplacement {
-                start: base_offset + start,
-                end: base_offset + end,
-                text: String::new(),
+            citations.push(AssistantFileCitationMatch {
+                start,
+                end,
+                citation: None,
             });
         } else if let (Some(path), Some(line_start), Some(line_end)) = (path, line_start, line_end)
             && !path.trim().is_empty()
             && line_start > 0
             && line_end >= line_start
         {
-            replacements.push(MarkdownReplacement {
-                start: base_offset + start,
-                end: base_offset + end,
-                text: file_citation_markdown(&path, line_start, line_end),
+            citations.push(AssistantFileCitationMatch {
+                start,
+                end,
+                citation: Some(AssistantFileCitation {
+                    path: PathBuf::from(path),
+                    line_start,
+                    line_end,
+                }),
             });
         }
         cursor = end;
     }
+    citations
 }
 
 fn find_directive_attributes_end(value: &str) -> Option<usize> {
@@ -43571,6 +43692,47 @@ fn parse_directive_attribute_value(value: &str, start: usize) -> Option<(String,
     }
 }
 
+fn extract_assistant_file_citations(value: &str) -> Vec<AssistantFileCitation> {
+    let Ok(tree) = markdown::to_mdast(value, &ParseOptions::gfm()) else {
+        return Vec::new();
+    };
+    let mut citations = Vec::new();
+    collect_assistant_file_citations(value, &tree, &mut citations);
+    citations
+}
+
+fn collect_assistant_file_citations(
+    source: &str,
+    node: &Node,
+    citations: &mut Vec<AssistantFileCitation>,
+) {
+    if citations.len() >= MAX_ASSISTANT_FILE_CITATIONS {
+        return;
+    }
+    if matches!(node, Node::Text(_))
+        && let Some(position) = node.position()
+        && position.start.offset <= position.end.offset
+        && position.end.offset <= source.len()
+        && source.is_char_boundary(position.start.offset)
+        && source.is_char_boundary(position.end.offset)
+    {
+        citations.extend(
+            assistant_file_citation_matches(&source[position.start.offset..position.end.offset])
+                .into_iter()
+                .filter_map(|citation| citation.citation)
+                .take(MAX_ASSISTANT_FILE_CITATIONS - citations.len()),
+        );
+    }
+    if let Some(children) = node.children() {
+        for child in children {
+            collect_assistant_file_citations(source, child, citations);
+            if citations.len() >= MAX_ASSISTANT_FILE_CITATIONS {
+                break;
+            }
+        }
+    }
+}
+
 fn extract_code_comment_findings(value: &str) -> Vec<AssistantFinding> {
     let Ok(tree) = markdown::to_mdast(value, &ParseOptions::gfm()) else {
         return Vec::new();
@@ -43662,6 +43824,10 @@ fn code_comment_directives(text: &str) -> Vec<(usize, usize, AssistantFinding)> 
 }
 
 fn file_citation_markdown(path: &str, line_start: u32, line_end: u32) -> String {
+    format!("`{}`", file_citation_label(path, line_start, line_end))
+}
+
+fn file_citation_label(path: &str, line_start: u32, line_end: u32) -> String {
     let file_name = path
         .rsplit(['/', '\\'])
         .find(|part| !part.is_empty())
@@ -43676,7 +43842,7 @@ fn file_citation_markdown(path: &str, line_start: u32, line_end: u32) -> String 
     } else {
         format!("line {line_start}")
     };
-    format!("`{file_name} ({line_label})`")
+    format!("{file_name} ({line_label})")
 }
 
 fn timeline_style(kind: TimelineKind, cx: &App) -> (&'static str, gpui::Hsla, gpui::Hsla) {
@@ -44308,6 +44474,8 @@ fn installed_app_indices(
 fn composer_app_commands(
     query: &str,
     apps: &[AppCard],
+    installed_apps: &[InstalledAppRuntime],
+    installed_apps_current: bool,
     plugins: &[PluginCard],
 ) -> Vec<ComposerCatalogMention> {
     let search = query.trim().to_lowercase();
@@ -44325,7 +44493,14 @@ fn composer_app_commands(
     let mut matches = apps
         .iter()
         .filter(|app| {
-            app.is_accessible && app.enabled && !app.id.is_empty() && !app.name.is_empty()
+            installed_apps_current
+                && app.is_accessible
+                && app.enabled
+                && !app.id.is_empty()
+                && !app.name.is_empty()
+                && installed_apps
+                    .iter()
+                    .any(|runtime| runtime.id == app.id && runtime.enabled && runtime.callable)
         })
         .filter(|app| {
             std::iter::once(&app.name)
@@ -45671,31 +45846,31 @@ mod tests {
         composer_service_tier_commands, composer_skill_command_for_query, composer_skill_commands,
         composer_slash_command_for_prefix, connection_send_failure, decode_mcp_form_image_data_url,
         default_branch_name, diff_file_review_rows, diff_file_sections,
-        extract_code_comment_findings, fetch_plugin_logo_blocking,
-        find_keyboard_shortcut_available, find_timeline_matches, first_run_account_load_error,
-        first_run_sign_in_visible, format_decimal_grouped, format_token_activity_days,
-        format_token_activity_duration, initial_app_state, input_position_for_offset,
-        installed_app_indices, integrated_terminal_shell_label, is_navigation_back_key,
-        is_navigation_forward_key, is_next_chat_bracket_key, is_previous_chat_bracket_key,
-        is_settings_shortcut_key, is_stable_composer_photo, is_supported_external_url,
-        is_supported_plugin_logo_url, is_terminal_shortcut_key, keyboard_shortcut_search_matches,
-        keyboard_shortcut_settings_matches, keyboard_shortcut_stable_order,
-        linked_pull_request_merge_command_enabled, mcp_auth_status_label,
-        mcp_authentication_start_is_accepted, modal_surface_max_height, modal_surface_width,
-        model_availability_nux_candidate, model_upgrade_learn_more_visible, normalized_accelerator,
-        output_artifact_type_label, parse_appearance_theme_share_string, parse_mcp_list,
-        parse_mcp_record, parse_unified_diff, plugin_logo_format,
+        extract_assistant_file_citations, extract_code_comment_findings,
+        fetch_plugin_logo_blocking, find_keyboard_shortcut_available, find_timeline_matches,
+        first_run_account_load_error, first_run_sign_in_visible, format_decimal_grouped,
+        format_token_activity_days, format_token_activity_duration, initial_app_state,
+        input_position_for_offset, installed_app_indices, integrated_terminal_shell_label,
+        is_navigation_back_key, is_navigation_forward_key, is_next_chat_bracket_key,
+        is_previous_chat_bracket_key, is_settings_shortcut_key, is_stable_composer_photo,
+        is_supported_external_url, is_supported_plugin_logo_url, is_terminal_shortcut_key,
+        keyboard_shortcut_search_matches, keyboard_shortcut_settings_matches,
+        keyboard_shortcut_stable_order, linked_pull_request_merge_command_enabled,
+        mcp_auth_status_label, mcp_authentication_start_is_accepted, modal_surface_max_height,
+        modal_surface_width, model_availability_nux_candidate, model_upgrade_learn_more_visible,
+        normalized_accelerator, output_artifact_type_label, parse_appearance_theme_share_string,
+        parse_mcp_list, parse_mcp_record, parse_unified_diff, plugin_logo_format,
         process_manager_auto_refresh_allowed, project_trigger_matches, project_workspace_options,
         pull_request_merge_submission_enabled, reasoning_effort_target, reduced_motion_enabled,
         remote_control_status_label, render_conversation_markdown, replace_composer_file_query,
-        repository_uses_split_diff, reserve_thread_find_history_page,
+        repository_file_scopes, repository_uses_split_diff, reserve_thread_find_history_page,
         right_panels_hide_for_width_transition, right_panels_restore_for_width_class,
         sanitize_assistant_markdown, selected_approval_request, selected_model_upgrade_notice,
         selected_task_copy_value, settings_section_matches, settings_section_refreshes_account,
-        shell_width_class, sidebar_layout_width, split_diff_rows, startup_recovery_card,
-        status_context_total_label, status_rate_limit_label, status_rate_limit_reset_metadata_at,
-        task_slot_id, task_workspace_active, terminal_tab_label,
-        thread_find_right_offset_for_shell, timeline_activity_content,
+        shell_width_class, sidebar_layout_width, sidebar_task_list_visible, split_diff_rows,
+        startup_recovery_card, status_context_total_label, status_rate_limit_label,
+        status_rate_limit_reset_metadata_at, task_slot_id, task_workspace_active,
+        terminal_tab_label, thread_find_right_offset_for_shell, timeline_activity_content,
         turn_diff_update_is_accepted, usage_limit_reset_summary_copy,
         usage_settings_requires_sign_in, validate_plugin_logo_dimensions, worktree_fork_queue_full,
         worktree_use_disabled,
@@ -45704,12 +45879,13 @@ mod tests {
         AccountAuthOperation, AccountDailyUsageBucket, AccountKind, AccountProfile, AccountState,
         AppCard, AppState, AppearancePalette, AppearanceVariant, ApprovalContext, ApprovalKind,
         ApprovalRequest, ComposerAttachment, ComposerAttachmentKind, ComputerApplicationState,
-        ConnectionStatus, GitPullRequestState, GitWorktreeState, InstalledAppRuntime,
-        IntegratedTerminalShell, KEYBOARD_SHORTCUT_COMMAND_IDS, LoadStatus,
-        MAX_PENDING_WORKTREE_FORKS, MainRoute, McpAuthStatus, ModelOption, ModelUpgradeNotice,
-        PendingWorktreeFork, PendingWorktreeForkPhase, PluginCard, ProcessManagerState,
-        PullRequestCiStatus, PullRequestDetail, PullRequestIdentity, PullRequestMutationKind,
-        PullRequestState, PullRequestSummary, ReasoningEffortOption, ReducedMotionPreference,
+        ConnectionStatus, GitDiffScope, GitFileKind, GitFileState, GitPullRequestState,
+        GitWorktreeState, InstalledAppRuntime, IntegratedTerminalShell,
+        KEYBOARD_SHORTCUT_COMMAND_IDS, LoadStatus, MAX_PENDING_WORKTREE_FORKS, MainRoute,
+        McpAuthStatus, ModelOption, ModelUpgradeNotice, PendingWorktreeFork,
+        PendingWorktreeForkPhase, PluginCard, ProcessManagerState, PullRequestCiStatus,
+        PullRequestDetail, PullRequestIdentity, PullRequestMutationKind, PullRequestState,
+        PullRequestSummary, ReasoningEffortOption, ReducedMotionPreference,
         RemoteControlRuntimeStatus, ServiceTierOption, SkillCard, SkillScope, TaskRunStatus,
         TaskSummary, TerminalDockLocation, TerminalTabState, TimelineItem, TimelineKind,
         TurnDiffState,
@@ -46767,23 +46943,49 @@ mod tests {
             is_running: true,
             window_count: 1,
         }];
+        let installed_apps = [
+            InstalledAppRuntime {
+                id: "calendar".to_owned(),
+                enabled: true,
+                callable: true,
+            },
+            InstalledAppRuntime {
+                id: "drive".to_owned(),
+                enabled: true,
+                callable: true,
+            },
+            InstalledAppRuntime {
+                id: "mail".to_owned(),
+                enabled: true,
+                callable: false,
+            },
+            InstalledAppRuntime {
+                id: "notes".to_owned(),
+                enabled: true,
+                callable: true,
+            },
+        ];
 
         let plugin_commands = composer_plugin_commands("", &plugins);
         assert_eq!(plugin_commands.len(), 1);
         assert_eq!(plugin_commands[0].title, "Computer");
 
-        let app_commands = composer_app_commands("", &apps, &plugins);
+        let app_commands = composer_app_commands("", &apps, &installed_apps, true, &plugins);
         assert_eq!(app_commands.len(), 3);
         assert_eq!(
             app_commands
                 .iter()
                 .map(|command| command.title.as_str())
                 .collect::<Vec<_>>(),
-            ["Calendar", "Drive", "Mail"]
+            ["Calendar", "Drive", "Notes"]
         );
         assert_eq!(
-            composer_app_commands("notes", &apps, &plugins)[0].id,
+            composer_app_commands("notes", &apps, &installed_apps, true, &plugins)[0].id,
             "notes"
+        );
+        assert!(composer_app_commands("mail", &apps, &installed_apps, true, &plugins).is_empty());
+        assert!(
+            composer_app_commands("calendar", &apps, &installed_apps, false, &plugins).is_empty()
         );
 
         assert!(composer_desktop_app_commands("", &desktop_apps, &plugins).is_empty());
@@ -47901,6 +48103,15 @@ mod tests {
     }
 
     #[test]
+    fn sidebar_task_list_stays_visible_on_normal_routes() {
+        assert!(sidebar_task_list_visible(MainRoute::Tasks));
+        assert!(sidebar_task_list_visible(MainRoute::Repository));
+        assert!(sidebar_task_list_visible(MainRoute::PullRequests));
+        assert!(sidebar_task_list_visible(MainRoute::Marketplace));
+        assert!(!sidebar_task_list_visible(MainRoute::Settings));
+    }
+
+    #[test]
     fn find_shortcut_requires_settings_or_an_active_task_workspace() {
         assert!(find_keyboard_shortcut_available(MainRoute::Settings, None));
         assert!(find_keyboard_shortcut_available(
@@ -47966,6 +48177,31 @@ mod tests {
             Some(ShellWidthClass::Narrow)
         ));
         assert!(!repository_uses_split_diff(true, None));
+    }
+
+    #[test]
+    fn repository_file_scopes_expose_each_available_file_scope() {
+        let file = |staged, unstaged| GitFileState {
+            path: PathBuf::from("src/lib.rs"),
+            old_path: None,
+            kind: GitFileKind::Modified,
+            staged,
+            unstaged,
+            staged_additions: 0,
+            staged_deletions: 0,
+            unstaged_additions: 0,
+            unstaged_deletions: 0,
+        };
+
+        assert_eq!(
+            repository_file_scopes(&[file(true, true), file(false, true), file(true, false)]),
+            [
+                (0, GitDiffScope::Unstaged),
+                (0, GitDiffScope::Staged),
+                (1, GitDiffScope::Unstaged),
+                (2, GitDiffScope::Staged),
+            ]
+        );
     }
 
     #[test]
@@ -48646,6 +48882,21 @@ mod tests {
         assert!(sanitized.contains("`ui.rs (lines 40-44)`"));
         assert!(sanitized.contains("`parity matrix.md (line 7)`"));
         assert!(sanitized.contains("```text\n【keep.rs†L1-L2】\n```"));
+    }
+
+    #[test]
+    fn assistant_file_citations_keep_workspace_paths_and_line_ranges_for_native_opening() {
+        let markdown = "【crates/codex-app/src/ui.rs†L40-L44】 ::codex-file-citation{path=\"docs/parity matrix.md\" line_range_start=\"7\"}.\n\n```text\n【ignored.rs†L1】\n```";
+        let citations = extract_assistant_file_citations(markdown);
+
+        assert_eq!(citations.len(), 2);
+        assert_eq!(
+            citations[0].path,
+            PathBuf::from("crates/codex-app/src/ui.rs")
+        );
+        assert_eq!((citations[0].line_start, citations[0].line_end), (40, 44));
+        assert_eq!(citations[1].path, PathBuf::from("docs/parity matrix.md"));
+        assert_eq!((citations[1].line_start, citations[1].line_end), (7, 7));
     }
 
     #[test]

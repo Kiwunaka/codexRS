@@ -5,6 +5,25 @@ All notable changes to codexRS are documented here. The project follows
 
 ## [Unreleased]
 
+## [0.1.0-rc.12] - 2026-08-03
+
+### Added
+
+- Assistant file citations open through the native, workspace-confined Files
+  preview while preserving their referenced line range.
+
+### Fixed
+
+- Multiple background chat completions remain queued instead of overwriting
+  one another.
+- Repository files with both staged and unstaged changes expose both scoped
+  diffs.
+- Composer app mentions require the selected task's current enabled and
+  callable runtime state.
+- Chat navigation remains visible on Repository, Pull requests, and Marketplace
+  routes.
+- Linux desktop launch entries preserve valid backslashes in executable paths.
+
 ## [0.1.0-rc.11] - 2026-08-03
 
 ### Added

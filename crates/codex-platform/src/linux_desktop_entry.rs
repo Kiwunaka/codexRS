@@ -213,7 +213,7 @@ fn escape_desktop_exec_argument(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for character in value.chars() {
         if character == '\\' {
-            escaped.push_str(r"\\\\");
+            escaped.push_str(r"\\");
         } else {
             if matches!(character, '"' | '`' | '$') {
                 escaped.push('\\');
@@ -345,7 +345,7 @@ mod tests {
             .expect("render desktop entry");
         let entry = String::from_utf8(entry).expect("desktop entry is UTF-8");
 
-        assert!(entry.contains("Exec=\"/opt/Codex RS/\\$\\`\\\"\\\\\\\\codexrs\"\n"));
+        assert!(entry.contains("Exec=\"/opt/Codex RS/\\$\\`\\\"\\\\codexrs\"\n"));
         assert!(!entry.contains("sh -c"));
         assert!(!entry.contains('%'));
         assert!(matches!(
@@ -368,7 +368,7 @@ mod tests {
         let entry = String::from_utf8(entry).expect("desktop entry is UTF-8");
 
         assert!(entry.contains(
-            "Exec=\"/usr/bin/env\" \"CODEX_RS_CODEX_BIN=/opt/Codex CLI/\\$\\`\\\"\\\\\\\\codex\" \"/opt/Codex RS/codexrs\"\n"
+            "Exec=\"/usr/bin/env\" \"CODEX_RS_CODEX_BIN=/opt/Codex CLI/\\$\\`\\\"\\\\codex\" \"/opt/Codex RS/codexrs\"\n"
         ));
         assert!(!entry.contains("sh -c"));
         assert!(!entry.contains('%'));

@@ -3700,6 +3700,7 @@ pub struct ArtifactPreview {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactState {
     pub selected_path: Option<PathBuf>,
+    pub selected_line_range: Option<(u32, u32)>,
     pub status: LoadStatus,
     pub preview: Option<ArtifactPreview>,
     pub error: Option<String>,
@@ -3709,6 +3710,7 @@ impl Default for ArtifactState {
     fn default() -> Self {
         Self {
             selected_path: None,
+            selected_line_range: None,
             status: LoadStatus::Idle,
             preview: None,
             error: None,
@@ -4259,7 +4261,7 @@ pub struct AppState {
     pub chat_memory: ChatMemoryState,
     pub agent_configuration: AgentConfigurationState,
     pub feedback: FeedbackUploadState,
-    pub background_completion_task_id: Option<String>,
+    pub background_completion_task_ids: VecDeque<String>,
     pub status_message: Option<String>,
 }
 
@@ -4330,7 +4332,7 @@ impl Default for AppState {
             chat_memory: ChatMemoryState::default(),
             agent_configuration: AgentConfigurationState::default(),
             feedback: FeedbackUploadState::default(),
-            background_completion_task_id: None,
+            background_completion_task_ids: VecDeque::new(),
             status_message: None,
         }
     }
@@ -4375,6 +4377,11 @@ pub enum Action {
     ShowInspector(InspectorPane),
     OpenOutput(PathBuf),
     OpenFuzzyFileResult(PathBuf),
+    OpenAssistantFileCitation {
+        path: PathBuf,
+        line_start: u32,
+        line_end: u32,
+    },
     CloseOutput,
     OutputPreviewLoaded {
         task_id: String,
@@ -7937,12 +7944,6 @@ fn reload_mcp_servers_effect(state: &mut AppState, cwd: Option<PathBuf>) -> Effe
     }
 }
 
-fn installed_apps_needed(state: &AppState) -> bool {
-    state.marketplace.manage_mode
-        && (state.marketplace.selected_manage_tab == MarketplaceManageTab::Apps
-            || state.marketplace.installed_apps_status.is_some())
-}
-
 fn installed_apps_current_for_selected_task(state: &AppState) -> bool {
     state.marketplace.installed_apps_status == Some(LoadStatus::Ready)
         && state.marketplace.installed_apps_thread_id == state.selected_task_id
@@ -8000,14 +8001,12 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 refresh_skills_effect(state, composer_workspace_roots(state), false),
                 refresh_composer_plugins_effect(state, composer_workspace_roots(state), false),
                 refresh_apps_effect(state, false),
+                refresh_installed_apps_effect(state, false),
                 Effect::LoadComposerDesktopApps,
                 Effect::LoadComputerUsePolicy,
                 Effect::LoadAccount,
             ];
-            if installed_apps_needed(state) {
-                state.marketplace.installed_apps_status = Some(LoadStatus::Loading);
-                effects.push(refresh_installed_apps_effect(state, false));
-            }
+            state.marketplace.installed_apps_status = Some(LoadStatus::Loading);
             if let Some(effect) = load_pinned_tasks_effect(state) {
                 effects.push(effect);
             }
@@ -8354,6 +8353,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.terminal_dock_open = false;
             }
             state.artifacts.selected_path = Some(path.clone());
+            state.artifacts.selected_line_range = None;
             state.artifacts.status = LoadStatus::Loading;
             state.artifacts.preview = None;
             state.artifacts.error = None;
@@ -8404,6 +8404,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.terminal_dock_open = false;
             }
             state.artifacts.selected_path = Some(result.path.clone());
+            state.artifacts.selected_line_range = None;
             state.artifacts.status = LoadStatus::Loading;
             state.artifacts.preview = None;
             state.artifacts.error = None;
@@ -8416,6 +8417,43 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     root,
                     path: result.path,
                 },
+            ]
+        }
+        Action::OpenAssistantFileCitation {
+            path,
+            line_start,
+            line_end,
+        } => {
+            let Some(root) = state
+                .selected_task_id
+                .as_deref()
+                .and_then(|task_id| state.tasks.iter().find(|task| task.id == task_id))
+                .map(|task| task.cwd.clone())
+            else {
+                state.status_message = Some("The selected chat has no workspace.".to_owned());
+                return Vec::new();
+            };
+            if line_start == 0 || line_end < line_start {
+                state.status_message =
+                    Some("This file citation has an invalid line range.".to_owned());
+                return Vec::new();
+            }
+            state.inspector = InspectorPane::Files;
+            state.last_side_panel = InspectorPane::Files;
+            if state.terminal.location == TerminalDockLocation::Right {
+                state.terminal_dock_open = false;
+            }
+            state.artifacts.selected_path = Some(path.clone());
+            state.artifacts.selected_line_range = Some((line_start, line_end));
+            state.artifacts.status = LoadStatus::Loading;
+            state.artifacts.preview = None;
+            state.artifacts.error = None;
+            vec![
+                Effect::PersistUiState {
+                    route: state.route,
+                    inspector: state.inspector,
+                },
+                Effect::LoadWorkspaceFilePreview { root, path },
             ]
         }
         Action::CloseOutput => {
@@ -9265,9 +9303,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
         }
         Action::TaskArchived(task_id) => {
-            if state.background_completion_task_id.as_deref() == Some(task_id.as_str()) {
-                state.background_completion_task_id = None;
-            }
+            state
+                .background_completion_task_ids
+                .retain(|completed_task_id| completed_task_id != &task_id);
             let pinned_before = state.pinned_task_ids.len();
             state
                 .pinned_task_ids
@@ -9694,6 +9732,10 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.tasks = tasks;
             }
             state.tasks.truncate(MAX_VISIBLE_THREADS);
+            let tasks = &state.tasks;
+            state
+                .background_completion_task_ids
+                .retain(|completed_task_id| tasks.iter().any(|task| task.id == *completed_task_id));
             state.next_task_cursor = (state.tasks.len() < MAX_VISIBLE_THREADS)
                 .then_some(next_cursor)
                 .flatten();
@@ -9766,9 +9808,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::SelectTask(task_id) => {
-            if state.background_completion_task_id.as_deref() == Some(task_id.as_str()) {
-                state.background_completion_task_id = None;
-            }
+            state
+                .background_completion_task_ids
+                .retain(|completed_task_id| completed_task_id != &task_id);
             let previous_cwds = composer_workspace_roots(state);
             let previous_task_id = state.selected_task_id.clone();
             let task_changed = previous_task_id.as_deref() != Some(task_id.as_str());
@@ -9851,11 +9893,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             if task_changed {
                 state.marketplace.apps_status = Some(LoadStatus::Loading);
+                state.marketplace.installed_apps_status = Some(LoadStatus::Loading);
                 effects.push(refresh_apps_effect(state, false));
-                if installed_apps_needed(state) {
-                    state.marketplace.installed_apps_status = Some(LoadStatus::Loading);
-                    effects.push(refresh_installed_apps_effect(state, false));
-                }
+                effects.push(refresh_installed_apps_effect(state, false));
                 if state.marketplace.mcp_status.is_some() {
                     state.marketplace.mcp_status = Some(LoadStatus::Loading);
                     let cwd = selected_task_cwds(state).into_iter().next();
@@ -9894,7 +9934,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             effects
         }
         Action::OpenBackgroundCompletion => {
-            let Some(task_id) = state.background_completion_task_id.take() else {
+            let Some(task_id) = state.background_completion_task_ids.pop_back() else {
                 return Vec::new();
             };
             if !state.tasks.iter().any(|task| task.id == task_id) {
@@ -9903,7 +9943,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             reduce(state, Action::SelectTask(task_id))
         }
         Action::DismissBackgroundCompletion => {
-            state.background_completion_task_id = None;
+            state.background_completion_task_ids.pop_back();
             Vec::new()
         }
         Action::TaskSettingsLoaded {
@@ -11779,6 +11819,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 ));
                 return Vec::new();
             }
+            if !installed_apps_current_for_selected_task(state) {
+                return Vec::new();
+            }
             let Some(app) = state
                 .marketplace
                 .apps
@@ -11788,6 +11831,14 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             else {
                 return Vec::new();
             };
+            if !state
+                .marketplace
+                .installed_apps
+                .iter()
+                .any(|runtime| runtime.id == app.id && runtime.enabled && runtime.callable)
+            {
+                return Vec::new();
+            }
             let path = PathBuf::from(composer_app_uri(&app.id));
             if !state.composer_attachments.iter().any(|attachment| {
                 attachment.kind == ComposerAttachmentKind::App && attachment.path == path
@@ -12279,9 +12330,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             effects
         }
         Action::TurnStarted { task_id, turn_id } => {
-            if state.background_completion_task_id.as_deref() == Some(task_id.as_str()) {
-                state.background_completion_task_id = None;
-            }
+            state
+                .background_completion_task_ids
+                .retain(|completed_task_id| completed_task_id != &task_id);
             let timeline = state.timelines.entry(task_id.clone()).or_default();
             if timeline.active_turn_id.as_deref() != Some(turn_id.as_str()) {
                 timeline.retryable_turn = None;
@@ -12414,7 +12465,15 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 && state.selected_task_id.as_deref() != Some(task_id.as_str())
                 && let Some(known_task_id) = known_task_id
             {
-                state.background_completion_task_id = Some(known_task_id);
+                state
+                    .background_completion_task_ids
+                    .retain(|completed_task_id| completed_task_id != &known_task_id);
+                if state.background_completion_task_ids.len() >= MAX_VISIBLE_THREADS {
+                    state.background_completion_task_ids.pop_front();
+                }
+                state
+                    .background_completion_task_ids
+                    .push_back(known_task_id);
             }
             schedule_goal_continuation(state, task_id)
         }
@@ -19862,12 +19921,20 @@ mod tests {
                     force_refetch: false,
                     thread_id: None,
                 },
+                Effect::RefreshInstalledApps {
+                    force_refresh: false,
+                    thread_id: None,
+                },
                 Effect::LoadComposerDesktopApps,
                 Effect::LoadComputerUsePolicy,
                 Effect::LoadAccount,
             ]
         );
         assert_eq!(state.composer_controls.models_status, LoadStatus::Loading);
+        assert_eq!(
+            state.marketplace.installed_apps_status,
+            Some(LoadStatus::Loading)
+        );
         assert_eq!(state.account.status, LoadStatus::Loading);
         assert_eq!(
             state.composer_controls.permission_profiles_status,
@@ -20488,6 +20555,40 @@ mod tests {
                 path: directory,
             }]
         );
+    }
+
+    #[test]
+    fn assistant_file_citation_opens_a_bounded_workspace_preview_at_its_line_range() {
+        let root = repository_path();
+        let path = PathBuf::from("crates/codex-core/src/lib.rs");
+        let mut state = AppState::default();
+        state.tasks.push(task_in_repository("t1"));
+        state.selected_task_id = Some("t1".to_owned());
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::OpenAssistantFileCitation {
+                    path: path.clone(),
+                    line_start: 40,
+                    line_end: 44,
+                },
+            ),
+            [
+                Effect::PersistUiState {
+                    route: MainRoute::Tasks,
+                    inspector: InspectorPane::Files,
+                },
+                Effect::LoadWorkspaceFilePreview {
+                    root,
+                    path: path.clone(),
+                },
+            ]
+        );
+        assert_eq!(state.inspector, InspectorPane::Files);
+        assert_eq!(state.artifacts.selected_path, Some(path));
+        assert_eq!(state.artifacts.selected_line_range, Some((40, 44)));
+        assert_eq!(state.artifacts.status, LoadStatus::Loading);
     }
 
     #[test]
@@ -21174,7 +21275,10 @@ mod tests {
             },
         );
         assert_eq!(
-            state.background_completion_task_id.as_deref(),
+            state
+                .background_completion_task_ids
+                .back()
+                .map(String::as_str),
             Some("background")
         );
         assert_eq!(state.status_message, None);
@@ -21186,7 +21290,7 @@ mod tests {
                 turn_id: "background-second-success".to_owned(),
             },
         );
-        assert_eq!(state.background_completion_task_id, None);
+        assert!(state.background_completion_task_ids.is_empty());
         reduce(
             &mut state,
             Action::TurnCompleted {
@@ -21197,14 +21301,20 @@ mod tests {
             },
         );
         assert_eq!(
-            state.background_completion_task_id.as_deref(),
+            state
+                .background_completion_task_ids
+                .back()
+                .map(String::as_str),
             Some("background")
         );
 
         reduce(&mut state, Action::SetStatus("Unrelated status".to_owned()));
         reduce(&mut state, Action::ClearStatus);
         assert_eq!(
-            state.background_completion_task_id.as_deref(),
+            state
+                .background_completion_task_ids
+                .back()
+                .map(String::as_str),
             Some("background")
         );
         reduce(&mut state, Action::DismissBackgroundCompletion);
@@ -21217,7 +21327,7 @@ mod tests {
                 failed: false,
             },
         );
-        assert_eq!(state.background_completion_task_id, None);
+        assert!(state.background_completion_task_ids.is_empty());
         reduce(
             &mut state,
             Action::TurnStarted {
@@ -21234,7 +21344,7 @@ mod tests {
                 failed: false,
             },
         );
-        assert_eq!(state.background_completion_task_id, None);
+        assert!(state.background_completion_task_ids.is_empty());
 
         let oversized_task_id = "x".repeat(MAX_PINNED_TASK_ID_BYTES + 1);
         reduce(&mut state, Action::TaskCreated(task(&oversized_task_id)));
@@ -21255,7 +21365,7 @@ mod tests {
                 failed: false,
             },
         );
-        assert_eq!(state.background_completion_task_id, None);
+        assert!(state.background_completion_task_ids.is_empty());
 
         reduce(
             &mut state,
@@ -21273,7 +21383,7 @@ mod tests {
                 failed: false,
             },
         );
-        assert_eq!(state.background_completion_task_id, None);
+        assert!(state.background_completion_task_ids.is_empty());
 
         reduce(
             &mut state,
@@ -21291,7 +21401,7 @@ mod tests {
                 failed: true,
             },
         );
-        assert_eq!(state.background_completion_task_id, None);
+        assert!(state.background_completion_task_ids.is_empty());
 
         reduce(
             &mut state,
@@ -21307,7 +21417,7 @@ mod tests {
                 turn_id: "background-interrupted".to_owned(),
             },
         );
-        assert_eq!(state.background_completion_task_id, None);
+        assert!(state.background_completion_task_ids.is_empty());
     }
 
     #[test]
@@ -21317,27 +21427,148 @@ mod tests {
         reduce(&mut state, Action::TaskCreated(task("background")));
         reduce(&mut state, Action::SelectTask("selected".to_owned()));
 
-        state.background_completion_task_id = Some("background".to_owned());
+        state
+            .background_completion_task_ids
+            .push_back("background".to_owned());
         state.status_message = Some("Unrelated status".to_owned());
         reduce(&mut state, Action::DismissBackgroundCompletion);
-        assert_eq!(state.background_completion_task_id, None);
+        assert!(state.background_completion_task_ids.is_empty());
         assert_eq!(state.status_message.as_deref(), Some("Unrelated status"));
 
-        state.background_completion_task_id = Some("background".to_owned());
+        state
+            .background_completion_task_ids
+            .push_back("background".to_owned());
         reduce(&mut state, Action::OpenBackgroundCompletion);
-        assert_eq!(state.background_completion_task_id, None);
+        assert!(state.background_completion_task_ids.is_empty());
         assert_eq!(state.selected_task_id.as_deref(), Some("background"));
 
         reduce(&mut state, Action::SelectTask("selected".to_owned()));
-        state.background_completion_task_id = Some("background".to_owned());
+        state
+            .background_completion_task_ids
+            .push_back("background".to_owned());
         reduce(&mut state, Action::SelectTask("background".to_owned()));
-        assert_eq!(state.background_completion_task_id, None);
+        assert!(state.background_completion_task_ids.is_empty());
 
         reduce(&mut state, Action::SelectTask("selected".to_owned()));
-        state.background_completion_task_id = Some("missing".to_owned());
+        state
+            .background_completion_task_ids
+            .push_back("missing".to_owned());
         reduce(&mut state, Action::OpenBackgroundCompletion);
-        assert_eq!(state.background_completion_task_id, None);
+        assert!(state.background_completion_task_ids.is_empty());
         assert_eq!(state.selected_task_id.as_deref(), Some("selected"));
+    }
+
+    #[test]
+    fn background_completion_queue_preserves_multiple_chats_and_cleans_up_per_chat() {
+        let mut state = AppState::default();
+        for task_id in ["selected", "first", "second"] {
+            reduce(&mut state, Action::TaskCreated(task(task_id)));
+        }
+        reduce(&mut state, Action::SelectTask("selected".to_owned()));
+
+        for (task_id, turn_id) in [("first", "turn-first"), ("second", "turn-second")] {
+            reduce(
+                &mut state,
+                Action::TurnStarted {
+                    task_id: task_id.to_owned(),
+                    turn_id: turn_id.to_owned(),
+                },
+            );
+            reduce(
+                &mut state,
+                Action::TurnCompleted {
+                    task_id: task_id.to_owned(),
+                    turn_id: turn_id.to_owned(),
+                    completed: true,
+                    failed: false,
+                },
+            );
+        }
+        assert_eq!(
+            state
+                .background_completion_task_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["first", "second"]
+        );
+
+        reduce(&mut state, Action::OpenBackgroundCompletion);
+        assert_eq!(state.selected_task_id.as_deref(), Some("second"));
+        assert_eq!(
+            state
+                .background_completion_task_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["first"]
+        );
+        reduce(&mut state, Action::DismissBackgroundCompletion);
+        assert!(state.background_completion_task_ids.is_empty());
+
+        state
+            .background_completion_task_ids
+            .extend(["first".to_owned(), "second".to_owned()]);
+        reduce(&mut state, Action::SelectTask("first".to_owned()));
+        assert_eq!(
+            state
+                .background_completion_task_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["second"]
+        );
+        reduce(
+            &mut state,
+            Action::TurnStarted {
+                task_id: "second".to_owned(),
+                turn_id: "turn-next".to_owned(),
+            },
+        );
+        assert!(state.background_completion_task_ids.is_empty());
+
+        state
+            .background_completion_task_ids
+            .extend(["first".to_owned(), "second".to_owned()]);
+        reduce(&mut state, Action::TaskArchived("first".to_owned()));
+        assert_eq!(
+            state
+                .background_completion_task_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["second"]
+        );
+    }
+
+    #[test]
+    fn tasks_loaded_prunes_missing_background_completion_chats() {
+        let mut state = AppState {
+            tasks: vec![task("kept"), task("missing")],
+            ..AppState::default()
+        };
+        state
+            .background_completion_task_ids
+            .extend(["kept".to_owned(), "missing".to_owned()]);
+
+        reduce(
+            &mut state,
+            Action::TasksLoaded {
+                generation: 0,
+                tasks: vec![task("kept")],
+                next_cursor: None,
+                append: false,
+            },
+        );
+
+        assert_eq!(
+            state
+                .background_completion_task_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["kept"]
+        );
     }
 
     #[test]
@@ -21703,6 +21934,31 @@ mod tests {
         );
 
         reduce(&mut state, Action::AddComposerApp("calendar".to_owned()));
+        assert!(state.composer_attachments.is_empty());
+        reduce(
+            &mut state,
+            Action::InstalledAppsLoaded {
+                thread_id: None,
+                apps: vec![InstalledAppRuntime {
+                    id: "calendar".to_owned(),
+                    enabled: true,
+                    callable: false,
+                }],
+            },
+        );
+        reduce(&mut state, Action::AddComposerApp("calendar".to_owned()));
+        assert!(state.composer_attachments.is_empty());
+        reduce(
+            &mut state,
+            Action::InstalledAppsLoaded {
+                thread_id: None,
+                apps: vec![InstalledAppRuntime {
+                    id: "calendar".to_owned(),
+                    enabled: true,
+                    callable: true,
+                }],
+            },
+        );
         reduce(&mut state, Action::AddComposerApp("calendar".to_owned()));
         reduce(&mut state, Action::AddComposerApp("disabled".to_owned()));
         reduce(
@@ -22327,6 +22583,10 @@ mod tests {
                 },
                 Effect::RefreshApps {
                     force_refetch: false,
+                    thread_id: Some("t1".to_owned()),
+                },
+                Effect::RefreshInstalledApps {
+                    force_refresh: false,
                     thread_id: Some("t1".to_owned()),
                 },
             ]
@@ -28348,7 +28608,9 @@ mod tests {
     fn archive_removes_only_after_app_server_confirmation() {
         let mut state = AppState::default();
         reduce(&mut state, Action::TaskCreated(task("t1")));
-        state.background_completion_task_id = Some("t1".to_owned());
+        state
+            .background_completion_task_ids
+            .push_back("t1".to_owned());
         state.browser.entry("t1".to_owned()).or_default();
 
         assert_eq!(
@@ -28365,7 +28627,7 @@ mod tests {
         assert!(state.timelines.is_empty());
         assert!(state.browser.is_empty());
         assert_eq!(state.selected_task_id, None);
-        assert_eq!(state.background_completion_task_id, None);
+        assert!(state.background_completion_task_ids.is_empty());
     }
 
     #[test]
@@ -29629,11 +29891,10 @@ mod tests {
             force_refetch: false,
             thread_id: Some("t1".to_owned()),
         }));
-        assert!(
-            !effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::RefreshInstalledApps { .. }))
-        );
+        assert!(effects.contains(&Effect::RefreshInstalledApps {
+            force_refresh: false,
+            thread_id: Some("t1".to_owned()),
+        }));
         assert_eq!(state.marketplace.apps_status, Some(LoadStatus::Loading));
 
         assert!(
