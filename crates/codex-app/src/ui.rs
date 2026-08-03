@@ -36268,6 +36268,37 @@ impl WorkspaceView {
                 "Loading usage settings…",
                 cx,
             ));
+        } else if usage_settings_requires_sign_in(&account) {
+            cards.push(
+                v_flex()
+                    .max_w(px(760.0))
+                    .p_4()
+                    .gap_3()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().sidebar)
+                    .child(
+                        div()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("Sign in to view usage and billing"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Connect your OpenAI account to load its usage limits."),
+                    )
+                    .child(
+                        Button::new("open-profile-from-usage")
+                            .label("Go to Profile")
+                            .small()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.open_settings_section(SettingsSection::Profile, cx);
+                            })),
+                    )
+                    .into_any_element(),
+            );
         } else {
             if let Some(credits) = account.credits {
                 let balance = if credits.unlimited {
@@ -45110,6 +45141,10 @@ const fn settings_section_refreshes_account(section: SettingsSection) -> bool {
     matches!(section, SettingsSection::Profile | SettingsSection::Usage)
 }
 
+fn usage_settings_requires_sign_in(account: &AccountState) -> bool {
+    account.status == LoadStatus::Ready && account.profile.is_none() && account.requires_openai_auth
+}
+
 const fn remote_control_status_label(status: RemoteControlRuntimeStatus) -> &'static str {
     match status {
         RemoteControlRuntimeStatus::Disabled => "Disabled",
@@ -45547,7 +45582,8 @@ mod tests {
         status_context_total_label, status_rate_limit_label, status_rate_limit_reset_metadata_at,
         task_slot_id, task_workspace_active, terminal_tab_label, timeline_activity_content,
         turn_diff_update_is_accepted, usage_limit_reset_summary_copy,
-        validate_plugin_logo_dimensions, worktree_fork_queue_full, worktree_use_disabled,
+        usage_settings_requires_sign_in, validate_plugin_logo_dimensions, worktree_fork_queue_full,
+        worktree_use_disabled,
     };
     use codex_core::{
         AccountAuthOperation, AccountDailyUsageBucket, AccountKind, AccountProfile, AccountState,
@@ -48045,6 +48081,23 @@ mod tests {
         assert!(!settings_section_refreshes_account(
             SettingsSection::Personalization
         ));
+
+        let mut account = AccountState {
+            status: LoadStatus::Ready,
+            requires_openai_auth: true,
+            ..AccountState::default()
+        };
+        assert!(usage_settings_requires_sign_in(&account));
+        account.requires_openai_auth = false;
+        assert!(!usage_settings_requires_sign_in(&account));
+        account.requires_openai_auth = true;
+        account.profile = Some(AccountProfile {
+            kind: AccountKind::ChatGpt,
+            email: None,
+            plan: None,
+            uses_codex_managed_credentials: None,
+        });
+        assert!(!usage_settings_requires_sign_in(&account));
     }
 
     #[test]
