@@ -144,14 +144,14 @@ use codex_protocol::{
     HistorySortDirection, HookEventName as ProtocolHookEventName,
     HookHandlerType as ProtocolHookHandlerType, HookSource as ProtocolHookSource,
     HookTrustStatus as ProtocolHookTrustStatus, HooksListParams, InitializeCapabilities,
-    ListMcpServerStatusParams, LoginAccountParams, LoginAccountResponse, MarketplaceAddParams,
-    MarketplaceRemoveParams, MarketplaceUpgradeParams, McpAuthStatus as ProtocolMcpAuthStatus,
-    McpElicitationArrayItems, McpElicitationPrimitiveSchema, McpElicitationStringFormat,
-    McpOpenAiElicitationFieldSchema, McpOpenAiImagePickerSchema, McpResourceReadParams,
-    McpServerConfig, McpServerElicitationAction as ProtocolMcpServerElicitationAction,
-    McpServerElicitationRequest, McpServerElicitationRequestParams,
-    McpServerElicitationRequestResponse, McpServerOauthLoginCompletedNotification,
-    McpServerOauthLoginParams,
+    ListMcpServerStatusParams, ListMcpServerStatusResponse, LoginAccountParams,
+    LoginAccountResponse, MarketplaceAddParams, MarketplaceRemoveParams, MarketplaceUpgradeParams,
+    McpAuthStatus as ProtocolMcpAuthStatus, McpElicitationArrayItems,
+    McpElicitationPrimitiveSchema, McpElicitationStringFormat, McpOpenAiElicitationFieldSchema,
+    McpOpenAiImagePickerSchema, McpResourceReadParams, McpServerConfig,
+    McpServerElicitationAction as ProtocolMcpServerElicitationAction, McpServerElicitationRequest,
+    McpServerElicitationRequestParams, McpServerElicitationRequestResponse,
+    McpServerOauthLoginCompletedNotification, McpServerOauthLoginParams,
     McpServerStartupFailureReason as ProtocolMcpServerStartupFailureReason,
     McpServerStartupState as ProtocolMcpServerStartupState,
     McpServerStatus as ProtocolMcpServerStatus, McpServerStatusDetail,
@@ -282,6 +282,7 @@ const FUZZY_FILE_SEARCH_EXCLUDED_COMPONENTS: &[&str] = &[
 const APP_LIST_PAGE_LIMIT: u32 = 100;
 const MAX_APP_LIST_PAGES: usize = 5;
 const MCP_STATUS_PAGE_LIMIT: u32 = 100;
+const MAX_MCP_STATUS_PAGES: usize = 5;
 const CURATED_MARKETPLACE_NAMES: &[&str] = &[
     "codex-official",
     "openai-bundled",
@@ -704,18 +705,14 @@ fn load_mcp_servers(
         include_layers: false,
         cwd: cwd.map(|path| path.to_string_lossy().into_owned()),
     })?;
-    let (statuses, warnings) = match app_server.list_mcp_server_status(ListMcpServerStatusParams {
-        cursor: None,
-        limit: MCP_STATUS_PAGE_LIMIT,
-        detail: Some(McpServerStatusDetail::Full),
-        thread_id: None,
-    }) {
-        Ok(response) => (response.data, Vec::new()),
-        Err(error) => (
-            Vec::new(),
-            vec![format!("failed to load MCP runtime status: {error}")],
-        ),
-    };
+    let (statuses, warnings) =
+        match load_mcp_server_status_pages(|params| app_server.list_mcp_server_status(params)) {
+            Ok(statuses) => (statuses, Vec::new()),
+            Err(error) => (
+                Vec::new(),
+                vec![format!("failed to load MCP runtime status: {error}")],
+            ),
+        };
     let mut runtime_by_name = statuses
         .into_iter()
         .map(|status| (status.name.clone(), status))
@@ -836,6 +833,34 @@ fn load_mcp_servers(
         plugin_servers,
         warnings,
     })
+}
+
+fn load_mcp_server_status_pages(
+    mut fetch: impl FnMut(
+        ListMcpServerStatusParams,
+    ) -> Result<ListMcpServerStatusResponse, codex_platform::AppServerError>,
+) -> Result<Vec<ProtocolMcpServerStatus>, codex_platform::AppServerError> {
+    let mut statuses = Vec::new();
+    let mut cursor = None;
+    for _ in 0..MAX_MCP_STATUS_PAGES {
+        let response = fetch(ListMcpServerStatusParams {
+            cursor: cursor.clone(),
+            limit: MCP_STATUS_PAGE_LIMIT,
+            detail: Some(McpServerStatusDetail::Full),
+            thread_id: None,
+        })?;
+        let remaining = codex_core::MAX_MCP_SERVER_ITEMS.saturating_sub(statuses.len());
+        statuses.extend(response.data.into_iter().take(remaining));
+        if statuses.len() == codex_core::MAX_MCP_SERVER_ITEMS {
+            break;
+        }
+        let next_cursor = response.next_cursor.filter(|next| !next.is_empty());
+        if next_cursor.is_none() || next_cursor == cursor {
+            break;
+        }
+        cursor = next_cursor;
+    }
+    Ok(statuses)
 }
 
 fn empty_mcp_runtime_catalog() -> McpRuntimeCatalog {
@@ -16737,8 +16762,9 @@ mod tests {
         Account as ProtocolAccount, AccountTokenUsageDailyBucket, AccountTokenUsageSummary,
         AppInfo, AppToolSummary, ConfigReadResponse, ConnectorMetadata, FuzzyFileSearchMatchType,
         FuzzyFileSearchResult as ProtocolFuzzyFileResult, GetAccountTokenUsageResponse,
-        LoginAccountResponse, McpServerStatus as ProtocolMcpServerStatus, ModelAvailabilityNux,
-        ModelSummary, ModelUpgradeInfo, PlanType, PluginListMarketplaceKind, RemoteControlClient,
+        ListMcpServerStatusResponse, LoginAccountResponse,
+        McpServerStatus as ProtocolMcpServerStatus, ModelAvailabilityNux, ModelSummary,
+        ModelUpgradeInfo, PlanType, PluginListMarketplaceKind, RemoteControlClient,
         RemoteControlConnectionStatus, UserInput,
     };
     use crossbeam_channel::bounded;
@@ -16771,17 +16797,17 @@ mod tests {
         encode_browser_permissions, encode_git_preferences, encode_keyboard_shortcut_preferences,
         encode_primary_window_placement, forbidden_computer_target_message, handle_notification,
         hook_state_config_value, index_app_logos, initialize_capabilities, is_hidden_timeline_item,
-        linux_computer_use_dynamic_tools, map_account_profile, map_account_token_activity,
-        map_app_detail, map_app_server_approval, map_apps, map_fuzzy_file_search_results,
-        map_mcp_elicitation, map_mcp_resource_contents, map_mcp_runtime_catalog, map_model_options,
-        map_plugin_detail, map_rate_limit_reset_credit_count, map_remote_control_snapshot,
-        map_remote_devices_page, map_timeline_item, map_user_input_request,
-        mcp_elicitation_content_json, mcp_server_config_value, newest_review_mode_from_items,
-        next_backend_command, parse_appearance_preferences, parse_appearance_theme,
-        parse_browser_download_preferences, parse_browser_permissions, parse_computer_key_chord,
-        parse_generated_commit_message, parse_generated_commit_pull_request_messages,
-        parse_generated_pull_request_message, parse_git_preferences,
-        parse_keyboard_shortcut_preferences, parse_primary_window_placement,
+        linux_computer_use_dynamic_tools, load_mcp_server_status_pages, map_account_profile,
+        map_account_token_activity, map_app_detail, map_app_server_approval, map_apps,
+        map_fuzzy_file_search_results, map_mcp_elicitation, map_mcp_resource_contents,
+        map_mcp_runtime_catalog, map_model_options, map_plugin_detail,
+        map_rate_limit_reset_credit_count, map_remote_control_snapshot, map_remote_devices_page,
+        map_timeline_item, map_user_input_request, mcp_elicitation_content_json,
+        mcp_server_config_value, newest_review_mode_from_items, next_backend_command,
+        parse_appearance_preferences, parse_appearance_theme, parse_browser_download_preferences,
+        parse_browser_permissions, parse_computer_key_chord, parse_generated_commit_message,
+        parse_generated_commit_pull_request_messages, parse_generated_pull_request_message,
+        parse_git_preferences, parse_keyboard_shortcut_preferences, parse_primary_window_placement,
         personalization_snapshot, plugin_directory_includes_marketplace,
         plugin_directory_marketplace_kinds, plugin_installability,
         plugin_requires_install_confirmation, pull_request_generation_prompt,
@@ -18094,6 +18120,48 @@ mod tests {
             Some(MAX_MCP_SERVER_FIELD_BYTES)
         );
         assert!(catalog.truncated);
+    }
+
+    #[test]
+    fn mcp_runtime_status_pages_follow_cursors_and_stop_at_the_catalog_bound() {
+        let mut requested_cursors = Vec::new();
+        let mut page_number = 0;
+
+        let result = load_mcp_server_status_pages(|params| {
+            requested_cursors.push(params.cursor);
+            page_number += 1;
+            let status = serde_json::from_value::<ProtocolMcpServerStatus>(json!({
+                "name": format!("server-{page_number}"),
+                "authStatus": "unsupported",
+                "serverInfo": null,
+                "tools": {},
+                "resources": [],
+                "resourceTemplates": []
+            }));
+            let Ok(status) = status else {
+                panic!("status fixture should deserialize");
+            };
+            Ok(ListMcpServerStatusResponse {
+                data: vec![status],
+                next_cursor: Some(format!("cursor-{page_number}")),
+            })
+        });
+        let Ok(statuses) = result else {
+            panic!("status pages should load");
+        };
+
+        assert_eq!(page_number, 5);
+        assert_eq!(statuses.len(), 5);
+        assert_eq!(
+            requested_cursors,
+            [
+                None,
+                Some("cursor-1".to_owned()),
+                Some("cursor-2".to_owned()),
+                Some("cursor-3".to_owned()),
+                Some("cursor-4".to_owned()),
+            ]
+        );
     }
 
     #[test]
