@@ -3513,7 +3513,7 @@ impl PaletteCommand {
     }
 
     const fn requires_task_workspace(self) -> bool {
-        matches!(self, Self::ToggleReviewPanel)
+        matches!(self, Self::FindInThread | Self::ToggleReviewPanel)
     }
 
     const fn requires_repository(self) -> bool {
@@ -47031,6 +47031,7 @@ mod tests {
         assert!(!PaletteCommand::ToggleReviewPanel.requires_selected_chat());
         assert!(PaletteCommand::ToggleReviewPanel.requires_task_workspace());
         assert!(!PaletteCommand::FindInThread.requires_selected_chat());
+        assert!(PaletteCommand::FindInThread.requires_task_workspace());
         assert!(PaletteCommand::ToggleTerminal.requires_selected_chat());
         assert!(PaletteCommand::LogOut.requires_account());
         assert!(!PaletteCommand::Feedback.requires_account());
