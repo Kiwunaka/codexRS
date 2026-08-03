@@ -278,6 +278,10 @@ fn task_workspace_active(route: MainRoute, selected_task_id: Option<&str>) -> bo
     route == MainRoute::Tasks && selected_task_id.is_some()
 }
 
+fn find_keyboard_shortcut_available(route: MainRoute, selected_task_id: Option<&str>) -> bool {
+    route == MainRoute::Settings || task_workspace_active(route, selected_task_id)
+}
+
 fn bottom_terminal_panel_toggle_available(state: &AppState) -> bool {
     task_workspace_active(state.route, state.selected_task_id.as_deref())
         && state.terminal.location == TerminalDockLocation::Bottom
@@ -3530,7 +3534,18 @@ impl PaletteCommand {
     }
 
     const fn requires_task_workspace(self) -> bool {
-        matches!(self, Self::FindInThread | Self::ToggleReviewPanel)
+        matches!(
+            self,
+            Self::FindInThread
+                | Self::ToggleBottomPanel
+                | Self::OpenReviewTab
+                | Self::ToggleReviewPanel
+                | Self::ToggleTerminal
+                | Self::OpenBrowserTab
+                | Self::ToggleBrowserPanel
+                | Self::FocusBrowserAddressBar
+                | Self::ShowComputerUse
+        )
     }
 
     const fn requires_repository(self) -> bool {
@@ -9715,6 +9730,10 @@ impl WorkspaceView {
                 selected_task_copy_value(&self.state, TaskCopyKind::WorkingDirectory).is_some()
             }
             "forkThread" => self.state.selected_task_id.is_some(),
+            "findInThread" => find_keyboard_shortcut_available(
+                self.state.route,
+                self.state.selected_task_id.as_deref(),
+            ),
             "openReviewTab" | "toggleReviewTab" => {
                 task_workspace_active(self.state.route, self.state.selected_task_id.as_deref())
                     && self.state.git.repository_root.is_some()
@@ -45652,19 +45671,20 @@ mod tests {
         composer_service_tier_commands, composer_skill_command_for_query, composer_skill_commands,
         composer_slash_command_for_prefix, connection_send_failure, decode_mcp_form_image_data_url,
         default_branch_name, diff_file_review_rows, diff_file_sections,
-        extract_code_comment_findings, fetch_plugin_logo_blocking, find_timeline_matches,
-        first_run_account_load_error, first_run_sign_in_visible, format_decimal_grouped,
-        format_token_activity_days, format_token_activity_duration, initial_app_state,
-        input_position_for_offset, installed_app_indices, integrated_terminal_shell_label,
-        is_navigation_back_key, is_navigation_forward_key, is_next_chat_bracket_key,
-        is_previous_chat_bracket_key, is_settings_shortcut_key, is_stable_composer_photo,
-        is_supported_external_url, is_supported_plugin_logo_url, is_terminal_shortcut_key,
-        keyboard_shortcut_search_matches, keyboard_shortcut_settings_matches,
-        keyboard_shortcut_stable_order, linked_pull_request_merge_command_enabled,
-        mcp_auth_status_label, mcp_authentication_start_is_accepted, modal_surface_max_height,
-        modal_surface_width, model_availability_nux_candidate, model_upgrade_learn_more_visible,
-        normalized_accelerator, output_artifact_type_label, parse_appearance_theme_share_string,
-        parse_mcp_list, parse_mcp_record, parse_unified_diff, plugin_logo_format,
+        extract_code_comment_findings, fetch_plugin_logo_blocking,
+        find_keyboard_shortcut_available, find_timeline_matches, first_run_account_load_error,
+        first_run_sign_in_visible, format_decimal_grouped, format_token_activity_days,
+        format_token_activity_duration, initial_app_state, input_position_for_offset,
+        installed_app_indices, integrated_terminal_shell_label, is_navigation_back_key,
+        is_navigation_forward_key, is_next_chat_bracket_key, is_previous_chat_bracket_key,
+        is_settings_shortcut_key, is_stable_composer_photo, is_supported_external_url,
+        is_supported_plugin_logo_url, is_terminal_shortcut_key, keyboard_shortcut_search_matches,
+        keyboard_shortcut_settings_matches, keyboard_shortcut_stable_order,
+        linked_pull_request_merge_command_enabled, mcp_auth_status_label,
+        mcp_authentication_start_is_accepted, modal_surface_max_height, modal_surface_width,
+        model_availability_nux_candidate, model_upgrade_learn_more_visible, normalized_accelerator,
+        output_artifact_type_label, parse_appearance_theme_share_string, parse_mcp_list,
+        parse_mcp_record, parse_unified_diff, plugin_logo_format,
         process_manager_auto_refresh_allowed, project_trigger_matches, project_workspace_options,
         pull_request_merge_submission_enabled, reasoning_effort_target, reduced_motion_enabled,
         remote_control_status_label, render_conversation_markdown, replace_composer_file_query,
@@ -47109,6 +47129,13 @@ mod tests {
         assert!(PaletteCommand::ToggleReviewPanel.requires_task_workspace());
         assert!(!PaletteCommand::FindInThread.requires_selected_chat());
         assert!(PaletteCommand::FindInThread.requires_task_workspace());
+        assert!(PaletteCommand::ToggleBottomPanel.requires_task_workspace());
+        assert!(PaletteCommand::OpenReviewTab.requires_task_workspace());
+        assert!(PaletteCommand::ToggleTerminal.requires_task_workspace());
+        assert!(PaletteCommand::OpenBrowserTab.requires_task_workspace());
+        assert!(PaletteCommand::ToggleBrowserPanel.requires_task_workspace());
+        assert!(PaletteCommand::FocusBrowserAddressBar.requires_task_workspace());
+        assert!(PaletteCommand::ShowComputerUse.requires_task_workspace());
         assert!(PaletteCommand::ToggleTerminal.requires_selected_chat());
         assert!(PaletteCommand::LogOut.requires_account());
         assert!(!PaletteCommand::Feedback.requires_account());
@@ -47868,6 +47895,20 @@ mod tests {
         assert!(task_workspace_active(MainRoute::Tasks, Some("task-1")));
         assert!(!task_workspace_active(MainRoute::Tasks, None));
         assert!(!task_workspace_active(
+            MainRoute::Repository,
+            Some("task-1")
+        ));
+    }
+
+    #[test]
+    fn find_shortcut_requires_settings_or_an_active_task_workspace() {
+        assert!(find_keyboard_shortcut_available(MainRoute::Settings, None));
+        assert!(find_keyboard_shortcut_available(
+            MainRoute::Tasks,
+            Some("task-1")
+        ));
+        assert!(!find_keyboard_shortcut_available(MainRoute::Tasks, None));
+        assert!(!find_keyboard_shortcut_available(
             MainRoute::Repository,
             Some("task-1")
         ));
