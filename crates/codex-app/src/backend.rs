@@ -1363,6 +1363,7 @@ enum BackendCommand {
     Shutdown,
 }
 
+#[derive(Clone)]
 enum PendingApproval {
     Command {
         id: Value,
@@ -7602,13 +7603,26 @@ fn run_effect(
                 computer_accessibility,
                 computer_url_policy,
                 computer_overlay,
+                None,
             );
         }
-        Effect::RespondUserInput {
-            request_id,
-            answers,
-        } => {
-            respond_to_user_input(app_server, request_id, answers, events, pending_approvals);
+        Effect::RespondStandardApproval { request, decision } => {
+            respond_to_approval(
+                app_server,
+                request.request_id.clone(),
+                decision,
+                events,
+                pending_approvals,
+                computer_permissions,
+                computer_allowed_app_ids,
+                computer_accessibility,
+                computer_url_policy,
+                computer_overlay,
+                Some(request),
+            );
+        }
+        Effect::RespondUserInput { request, answers } => {
+            respond_to_user_input(app_server, request, answers, events, pending_approvals);
         }
         Effect::RespondMcpElicitation {
             request_id,
@@ -13019,12 +13033,14 @@ fn respond_to_approval(
     computer_accessibility: &mut ComputerUseAccessibilityClient,
     computer_url_policy: &mut ComputerUseUrlPolicy,
     mut computer_overlay: Option<&mut ComputerUseSystemOverlay>,
+    retry_request: Option<ApprovalRequest>,
 ) {
     #[cfg(not(windows))]
     let _ = computer_allowed_app_ids;
     let Some(pending) = pending_approvals.remove(&request_id) else {
         return;
     };
+    let retry_pending = pending.clone();
     match pending {
         PendingApproval::Command {
             id,
@@ -13085,9 +13101,13 @@ fn respond_to_approval(
                 },
             );
             if let Err(error) = response {
-                emit(
+                restore_standard_approval_after_response_failure(
                     events,
-                    Action::SetStatus(format!("failed to answer approval: {error}")),
+                    pending_approvals,
+                    request_id,
+                    retry_pending,
+                    retry_request,
+                    format!("failed to answer approval: {error}"),
                 );
             }
         }
@@ -13115,9 +13135,13 @@ fn respond_to_approval(
                 },
             );
             if let Err(error) = response {
-                emit(
+                restore_standard_approval_after_response_failure(
                     events,
-                    Action::SetStatus(format!("failed to answer approval: {error}")),
+                    pending_approvals,
+                    request_id,
+                    retry_pending,
+                    retry_request,
+                    format!("failed to answer approval: {error}"),
                 );
             }
         }
@@ -13137,9 +13161,13 @@ fn respond_to_approval(
                         "approval decision did not match the permission request",
                     );
                     if let Err(error) = response {
-                        emit(
+                        restore_standard_approval_after_response_failure(
                             events,
-                            Action::SetStatus(format!("failed to answer approval: {error}")),
+                            pending_approvals,
+                            request_id,
+                            retry_pending,
+                            retry_request,
+                            format!("failed to answer approval: {error}"),
                         );
                     }
                     return;
@@ -13153,9 +13181,13 @@ fn respond_to_approval(
                     strict_auto_review: None,
                 },
             ) {
-                emit(
+                restore_standard_approval_after_response_failure(
                     events,
-                    Action::SetStatus(format!("failed to answer approval: {error}")),
+                    pending_approvals,
+                    request_id,
+                    retry_pending,
+                    retry_request,
+                    format!("failed to answer approval: {error}"),
                 );
             }
         }
@@ -13363,13 +13395,29 @@ fn respond_to_approval(
     }
 }
 
+fn restore_standard_approval_after_response_failure(
+    events: &dyn ActionEmitter,
+    pending_approvals: &mut HashMap<String, PendingApproval>,
+    request_id: String,
+    pending: PendingApproval,
+    request: Option<ApprovalRequest>,
+    message: String,
+) {
+    pending_approvals.insert(request_id, pending);
+    if let Some(request) = request {
+        emit(events, Action::ApprovalRequested(request));
+    }
+    emit(events, Action::SetStatus(message));
+}
+
 fn respond_to_user_input(
     app_server: &AppServerConnection,
-    request_id: String,
+    request: UserInputRequest,
     answers: UserInputAnswers,
     events: &dyn ActionEmitter,
     pending_approvals: &mut HashMap<String, PendingApproval>,
 ) {
+    let request_id = request.request_id.clone();
     let response = match user_input_response(answers) {
         Ok(response) => response,
         Err(error) => {
@@ -13391,13 +13439,29 @@ fn respond_to_user_input(
         return;
     };
     if let Err(error) = app_server.respond_success(&id, &response) {
-        emit(
+        restore_user_input_after_response_failure(
             events,
-            Action::SetStatus(format!(
-                "failed to answer structured input request: {error}"
-            )),
+            pending_approvals,
+            request,
+            id,
+            format!("failed to answer structured input request: {error}"),
         );
     }
+}
+
+fn restore_user_input_after_response_failure(
+    events: &dyn ActionEmitter,
+    pending_approvals: &mut HashMap<String, PendingApproval>,
+    request: UserInputRequest,
+    id: Value,
+    message: String,
+) {
+    pending_approvals.insert(
+        request.request_id.clone(),
+        PendingApproval::UserInput { id },
+    );
+    emit(events, Action::UserInputRequested(request));
+    emit(events, Action::SetStatus(message));
 }
 
 fn user_input_response(answers: UserInputAnswers) -> Result<ToolRequestUserInputResponse, String> {
@@ -16754,12 +16818,12 @@ mod tests {
 
     use codex_core::{
         AccountDailyUsageBucket, Action, AgentConfigScopeKind, AppearancePalette,
-        AppearancePreferences, AppearanceTheme, AppearanceVariant, ApprovalContext,
-        BrowserApprovalMode, BrowserDownloadPreferences, BrowserDownloadState,
+        AppearancePreferences, AppearanceTheme, AppearanceVariant, ApprovalContext, ApprovalKind,
+        ApprovalRequest, BrowserApprovalMode, BrowserDownloadPreferences, BrowserDownloadState,
         BrowserDownloadStatus, BrowserOriginElicitationDecision, BrowserPermissionResource,
         BrowserPermissionValue, BrowserPermissionsState, BrowserResourceElicitationDecision,
-        BrowserSitePermission, ComposerAttachment, ComposerAttachmentKind, DiffMarkerStyle, Effect,
-        FuzzyFileMatchType, GitPreferences, GitReviewMode, ImportItemType,
+        BrowserSitePermission, CommandApprovalContext, ComposerAttachment, ComposerAttachmentKind,
+        DiffMarkerStyle, Effect, FuzzyFileMatchType, GitPreferences, GitReviewMode, ImportItemType,
         KeyboardShortcutPreferences, MAX_ACCOUNT_DAILY_USAGE_BUCKETS, MAX_MARKETPLACE_SOURCES,
         MAX_MCP_SERVER_FIELD_BYTES, McpBrowserOriginElicitation, McpBrowserResourceElicitation,
         McpElicitation, McpElicitationContent, McpElicitationValue, McpFormElicitation,
@@ -16828,8 +16892,10 @@ mod tests {
         plugin_directory_marketplace_kinds, plugin_installability,
         plugin_requires_install_confirmation, pull_request_generation_prompt,
         pull_request_output_schema, record_retryable_steer, remote_pairing_status_params,
-        restored_browser_download, retryable_submission_inputs, run_computer_tool,
-        safety_retry_fork_point, stored_browser_download, user_input_response,
+        restore_standard_approval_after_response_failure,
+        restore_user_input_after_response_failure, restored_browser_download,
+        retryable_submission_inputs, run_computer_tool, safety_retry_fork_point,
+        stored_browser_download, user_input_response,
     };
 
     #[cfg(any(windows, target_os = "linux"))]
@@ -18271,6 +18337,102 @@ mod tests {
             panic!("empty structured input response did not serialize");
         };
         assert_eq!(skipped, json!({"answers": {}}));
+    }
+
+    #[test]
+    fn response_write_failure_restores_standard_approval_and_structured_input() {
+        let (events, received) = bounded(4);
+        let approval = ApprovalRequest {
+            request_id: "approval-command-1".to_owned(),
+            task_id: "thread-1".to_owned(),
+            turn_id: Some("turn-1".to_owned()),
+            kind: ApprovalKind::Command,
+            title: "Allow command?".to_owned(),
+            detail: "cargo test".to_owned(),
+            context: ApprovalContext::Command(CommandApprovalContext {
+                item_id: "item-1".to_owned(),
+                command: "cargo test".to_owned(),
+                reason: None,
+                network_approval_context: None,
+                proposed_execpolicy_amendment: None,
+                proposed_network_policy_amendment: None,
+            }),
+        };
+        let mut pending = HashMap::from([(
+            approval.request_id.clone(),
+            PendingApproval::FileChange { id: json!(1) },
+        )]);
+        let Some(pending_approval) = pending.remove(&approval.request_id) else {
+            panic!("pending approval disappeared");
+        };
+
+        restore_standard_approval_after_response_failure(
+            &events,
+            &mut pending,
+            approval.request_id.clone(),
+            pending_approval,
+            Some(approval.clone()),
+            "failed to answer approval: write error".to_owned(),
+        );
+
+        assert!(pending.contains_key(&approval.request_id));
+        let Ok(approval_action) = received.recv() else {
+            panic!("approval restoration action was not emitted");
+        };
+        match approval_action {
+            Action::ApprovalRequested(restored) => assert_eq!(restored, approval),
+            _ => panic!("expected approval restoration action"),
+        }
+        let Ok(approval_status) = received.recv() else {
+            panic!("approval failure status was not emitted");
+        };
+        assert!(matches!(
+            approval_status,
+            Action::SetStatus(message) if message.contains("write error")
+        ));
+
+        let Ok(input) = map_user_input_request(
+            "request-input-1".to_owned(),
+            json!({
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "item-1",
+                "questions": [{
+                    "id": "scope",
+                    "header": "Scope",
+                    "question": "How broad?",
+                    "options": [],
+                    "isOther": false,
+                    "isSecret": false
+                }]
+            }),
+        ) else {
+            panic!("valid structured input request was rejected");
+        };
+
+        restore_user_input_after_response_failure(
+            &events,
+            &mut pending,
+            input.clone(),
+            json!(2),
+            "failed to answer structured input request: write error".to_owned(),
+        );
+
+        assert!(pending.contains_key(&input.request_id));
+        let Ok(input_action) = received.recv() else {
+            panic!("input restoration action was not emitted");
+        };
+        match input_action {
+            Action::UserInputRequested(restored) => assert_eq!(restored, input),
+            _ => panic!("expected structured input restoration action"),
+        }
+        let Ok(input_status) = received.recv() else {
+            panic!("input failure status was not emitted");
+        };
+        assert!(matches!(
+            input_status,
+            Action::SetStatus(message) if message.contains("write error")
+        ));
     }
 
     #[test]

@@ -5870,8 +5870,12 @@ pub enum Effect {
         request_id: String,
         decision: ApprovalDecision,
     },
+    RespondStandardApproval {
+        request: ApprovalRequest,
+        decision: ApprovalDecision,
+    },
     RespondUserInput {
-        request_id: String,
+        request: UserInputRequest,
         answers: UserInputAnswers,
     },
     RespondMcpElicitation {
@@ -12168,11 +12172,17 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 .iter()
                 .position(|request| request.request_id == request_id);
             if let Some(position) = position {
-                state.approvals.remove(position);
-                vec![Effect::RespondApproval {
-                    request_id,
-                    decision,
-                }]
+                let Some(request) = state.approvals.remove(position) else {
+                    return Vec::new();
+                };
+                if request.kind == ApprovalKind::DynamicTool {
+                    vec![Effect::RespondApproval {
+                        request_id,
+                        decision,
+                    }]
+                } else {
+                    vec![Effect::RespondStandardApproval { request, decision }]
+                }
             } else {
                 Vec::new()
             }
@@ -12219,11 +12229,10 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.status_message = Some("The structured input response is invalid.".to_owned());
                 return Vec::new();
             }
-            state.user_input_requests.remove(position);
-            vec![Effect::RespondUserInput {
-                request_id,
-                answers,
-            }]
+            let Some(request) = state.user_input_requests.remove(position) else {
+                return Vec::new();
+            };
+            vec![Effect::RespondUserInput { request, answers }]
         }
         Action::McpElicitationRequested(mut request) => {
             if state
@@ -18559,7 +18568,7 @@ mod tests {
             }),
         };
 
-        assert!(reduce(&mut state, Action::ApprovalRequested(request)).is_empty());
+        assert!(reduce(&mut state, Action::ApprovalRequested(request.clone())).is_empty());
         assert_eq!(state.tasks[0].status, TaskRunStatus::WaitingForApproval);
         assert_eq!(
             reduce(
@@ -18569,12 +18578,15 @@ mod tests {
                     decision: ApprovalDecision::AcceptWithExecpolicyAmendment(amendment.clone()),
                 },
             ),
-            vec![Effect::RespondApproval {
-                request_id: "approval-command-1".to_owned(),
+            vec![Effect::RespondStandardApproval {
+                request: request.clone(),
                 decision: ApprovalDecision::AcceptWithExecpolicyAmendment(amendment),
             }]
         );
         assert!(state.approvals.is_empty());
+
+        assert!(reduce(&mut state, Action::ApprovalRequested(request)).is_empty());
+        assert_eq!(state.approvals.len(), 1);
     }
 
     #[test]
@@ -18608,7 +18620,7 @@ mod tests {
             }],
         };
 
-        assert!(reduce(&mut state, Action::UserInputRequested(request)).is_empty());
+        assert!(reduce(&mut state, Action::UserInputRequested(request.clone())).is_empty());
         assert_eq!(state.user_input_requests.len(), 1);
         assert_eq!(state.tasks[0].status, TaskRunStatus::WaitingForApproval);
 
@@ -18627,11 +18639,25 @@ mod tests {
                 }
             ),
             vec![Effect::RespondUserInput {
-                request_id: "request-input-1".to_owned(),
-                answers,
+                request: request.clone(),
+                answers: answers.clone(),
             }]
         );
         assert!(state.user_input_requests.is_empty());
+
+        assert!(reduce(&mut state, Action::UserInputRequested(request)).is_empty());
+        assert_eq!(state.user_input_requests.len(), 1);
+        assert!(matches!(
+            reduce(
+                &mut state,
+                Action::ResolveUserInput {
+                    request_id: "request-input-1".to_owned(),
+                    answers,
+                }
+            )
+            .as_slice(),
+            [Effect::RespondUserInput { .. }]
+        ));
     }
 
     #[test]
