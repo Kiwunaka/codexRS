@@ -1697,6 +1697,10 @@ fn composer_model_placeholder(status: LoadStatus, has_models: bool) -> &'static 
     }
 }
 
+fn composer_model_retry_visible(status: LoadStatus, has_models: bool) -> bool {
+    status == LoadStatus::Failed && !has_models
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PermissionPickerItem {
     id: String,
@@ -23065,7 +23069,27 @@ impl WorkspaceView {
                                                  shell_command_mode
                                                      || !has_model_items
                                                      || !thread_runtime_ready,
-                                             ),
+                                            ),
+                                    )
+                                    .when(
+                                        composer_model_retry_visible(
+                                            self.state.composer_controls.models_status,
+                                            has_model_items,
+                                        ),
+                                        |row| {
+                                            row.child(
+                                                Button::new("retry-model-catalog")
+                                                    .label("Retry")
+                                                    .small()
+                                                    .disabled(
+                                                        self.state.connection
+                                                            != ConnectionStatus::Online,
+                                                    )
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.dispatch(Action::RefreshModels, cx);
+                                                    })),
+                                            )
+                                        },
                                     )
                                     .child(
                                         Select::new(&self.effort_picker)
@@ -45623,9 +45647,9 @@ mod tests {
         browser_surface_coordinates, build_plugin_catalog_sections, case_insensitive_match_ranges,
         command_task_slot, composer_app_commands, composer_at_skill_commands,
         composer_desktop_app_commands, composer_file_query, composer_file_search_max_height,
-        composer_model_picker_items, composer_model_placeholder, composer_plugin_commands,
-        composer_service_tier_command_for_query, composer_service_tier_commands,
-        composer_skill_command_for_query, composer_skill_commands,
+        composer_model_picker_items, composer_model_placeholder, composer_model_retry_visible,
+        composer_plugin_commands, composer_service_tier_command_for_query,
+        composer_service_tier_commands, composer_skill_command_for_query, composer_skill_commands,
         composer_slash_command_for_prefix, connection_send_failure, decode_mcp_form_image_data_url,
         default_branch_name, diff_file_review_rows, diff_file_sections,
         extract_code_comment_findings, fetch_plugin_logo_blocking, find_timeline_matches,
@@ -46012,6 +46036,13 @@ mod tests {
         ] {
             assert_eq!(composer_model_placeholder(status, true), "Model");
         }
+    }
+
+    #[test]
+    fn composer_model_retry_is_only_visible_for_an_empty_failed_catalog() {
+        assert!(composer_model_retry_visible(LoadStatus::Failed, false));
+        assert!(!composer_model_retry_visible(LoadStatus::Failed, true));
+        assert!(!composer_model_retry_visible(LoadStatus::Loading, false));
     }
 
     #[test]

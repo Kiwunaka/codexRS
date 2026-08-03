@@ -4656,6 +4656,7 @@ pub enum Action {
         task_id: String,
         message: String,
     },
+    RefreshModels,
     ModelsLoaded(Vec<ModelOption>),
     ModelsFailed(String),
     PermissionProfilesLoaded {
@@ -10308,6 +10309,15 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             state.status_message = Some(message);
             Vec::new()
+        }
+        Action::RefreshModels => {
+            if state.connection != ConnectionStatus::Online
+                || state.composer_controls.models_status == LoadStatus::Loading
+            {
+                return Vec::new();
+            }
+            state.composer_controls.models_status = LoadStatus::Loading;
+            vec![Effect::LoadModels]
         }
         Action::ModelsLoaded(mut models) => {
             models.truncate(MAX_COMPOSER_OPTIONS);
@@ -20129,6 +20139,26 @@ mod tests {
                 path: directory,
             }]
         );
+    }
+
+    #[test]
+    fn refresh_models_requires_online_connection_and_coalesces_while_loading() {
+        let mut state = AppState::default();
+        state.composer_controls.models = vec![model("gpt-existing", true, "medium")];
+        state.composer_controls.models_status = LoadStatus::Failed;
+
+        assert!(reduce(&mut state, Action::RefreshModels).is_empty());
+        assert_eq!(state.composer_controls.models_status, LoadStatus::Failed);
+        assert_eq!(state.composer_controls.models.len(), 1);
+
+        state.connection = ConnectionStatus::Online;
+        assert_eq!(
+            reduce(&mut state, Action::RefreshModels),
+            [Effect::LoadModels]
+        );
+        assert_eq!(state.composer_controls.models_status, LoadStatus::Loading);
+        assert_eq!(state.composer_controls.models.len(), 1);
+        assert!(reduce(&mut state, Action::RefreshModels).is_empty());
     }
 
     #[test]
