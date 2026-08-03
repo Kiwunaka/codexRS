@@ -6551,7 +6551,13 @@ fn run_effect(
                     if computer_use_attached {
                         computer_capable_threads.insert(task_id.clone());
                     }
-                    emit(events, Action::TaskCreated(task));
+                    emit(
+                        events,
+                        Action::NewChatTaskCreated {
+                            task,
+                            new_chat_draft_generation,
+                        },
+                    );
                     if let Some(preferences) = memory_preferences {
                         emit(
                             events,

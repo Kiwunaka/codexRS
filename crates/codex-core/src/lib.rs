@@ -4491,6 +4491,10 @@ pub enum Action {
         kind: ArchivedTaskDeleteKind,
     },
     TaskCreated(TaskSummary),
+    NewChatTaskCreated {
+        task: TaskSummary,
+        new_chat_draft_generation: u64,
+    },
     TasksLoaded {
         generation: u64,
         tasks: Vec<TaskSummary>,
@@ -9253,6 +9257,49 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     format!("Deleted {deleted_count} archived chats")
                 }
             });
+            Vec::new()
+        }
+        Action::NewChatTaskCreated {
+            task,
+            new_chat_draft_generation,
+        } => {
+            if state.selected_task_id.is_none()
+                && state.new_chat_draft_generation == new_chat_draft_generation
+            {
+                return reduce(state, Action::TaskCreated(task));
+            }
+
+            let selected_task = state
+                .selected_task_id
+                .as_deref()
+                .and_then(|selected_task_id| {
+                    state
+                        .tasks
+                        .iter()
+                        .find(|existing| existing.id == selected_task_id)
+                        .cloned()
+                });
+            let task_id = task.id.clone();
+            state.tasks.retain(|existing| existing.id != task_id);
+            state.tasks.insert(0, task);
+            state.tasks.truncate(MAX_VISIBLE_THREADS);
+            if let Some(selected_task) = selected_task
+                && !state
+                    .tasks
+                    .iter()
+                    .any(|existing| existing.id == selected_task.id)
+                && let Some(last_task) = state.tasks.last_mut()
+            {
+                *last_task = selected_task;
+            }
+            state
+                .timelines
+                .entry(task_id.clone())
+                .or_insert(TimelineState {
+                    runtime_status_loaded: true,
+                    ..TimelineState::default()
+                });
+            state.goals.entry(task_id).or_default();
             Vec::new()
         }
         Action::TaskCreated(task) => {
@@ -22374,6 +22421,156 @@ mod tests {
         );
         assert_eq!(untouched.composer, "retry A");
         assert_eq!(untouched.composer_attachments, [attachment]);
+    }
+
+    #[test]
+    fn stale_new_chat_creation_keeps_the_newer_draft_and_initializes_the_task() {
+        let workspace_a = repository_path();
+        let workspace_b = workspace_a.with_file_name("newer-workspace");
+        let attachment_a = workspace_a.join("request-a.md");
+        let attachment_b = workspace_b.join("draft-b.md");
+        let mut state = AppState::default();
+        state.composer_controls.selected_model = Some("gpt-fast".to_owned());
+        state.new_chat_cwd = Some(workspace_a.clone());
+        reduce(
+            &mut state,
+            Action::AddComposerAttachments(vec![attachment_a]),
+        );
+        reduce(&mut state, Action::ComposerChanged("request A".to_owned()));
+        let submission_generation = match reduce(&mut state, Action::SubmitComposer).as_slice() {
+            [
+                Effect::CreateTask {
+                    new_chat_draft_generation,
+                    ..
+                },
+            ] => *new_chat_draft_generation,
+            _ => panic!("new-chat submission should create a task"),
+        };
+
+        reduce(&mut state, Action::TogglePlanMode);
+        reduce(
+            &mut state,
+            Action::SelectComposerWorkspace(workspace_b.clone()),
+        );
+        reduce(
+            &mut state,
+            Action::AddComposerAttachments(vec![attachment_b.clone()]),
+        );
+        reduce(&mut state, Action::ComposerChanged("draft B".to_owned()));
+        state.artifacts.selected_path = Some(workspace_b.join("artifact.txt"));
+        state.chat_memory.new_chat_preferences = Some(ChatMemoryPreferences {
+            generate_memories: false,
+            use_memories: true,
+        });
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::NewChatTaskCreated {
+                    task: task_in_repository("created-a"),
+                    new_chat_draft_generation: submission_generation,
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(state.selected_task_id, None);
+        assert_eq!(state.composer, "draft B");
+        assert_eq!(state.composer_attachments.len(), 1);
+        assert_eq!(state.composer_attachments[0].path, attachment_b);
+        assert_eq!(state.new_chat_cwd.as_ref(), Some(&workspace_b));
+        assert!(state.composer_controls.plan_mode);
+        assert_eq!(
+            state.chat_memory.new_chat_preferences,
+            Some(ChatMemoryPreferences {
+                generate_memories: false,
+                use_memories: true,
+            })
+        );
+        assert_eq!(
+            state.artifacts.selected_path,
+            Some(workspace_b.join("artifact.txt"))
+        );
+        assert!(state.tasks.iter().any(|task| task.id == "created-a"));
+        assert!(state.timelines["created-a"].runtime_status_loaded);
+        assert!(state.goals.contains_key("created-a"));
+
+        let Some(timeline) = state.timelines.get_mut("created-a") else {
+            panic!("stale task creation initializes its timeline");
+        };
+        timeline.active_turn_id = Some("already-started".to_owned());
+        let preserved_goal = ThreadGoalState {
+            status: LoadStatus::Ready,
+            goal: Some(ThreadGoal {
+                task_id: "created-a".to_owned(),
+                objective: "Preserve this goal".to_owned(),
+                status: ThreadGoalStatus::Active,
+                tokens_used: 1,
+                token_budget: Some(10),
+                time_used_seconds: 2,
+                created_at: 3,
+                updated_at: 4,
+            }),
+            completed_goal: None,
+            completed_goal_turn_id: None,
+        };
+        state
+            .goals
+            .insert("created-a".to_owned(), preserved_goal.clone());
+        assert!(
+            reduce(
+                &mut state,
+                Action::NewChatTaskCreated {
+                    task: task_in_repository("created-a"),
+                    new_chat_draft_generation: submission_generation,
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.timelines["created-a"].active_turn_id.as_deref(),
+            Some("already-started")
+        );
+        assert_eq!(state.goals["created-a"], preserved_goal);
+
+        let selected_task = task("selected-tail");
+        let mut saturated = AppState {
+            tasks: (0..MAX_VISIBLE_THREADS - 1)
+                .map(|index| task(&format!("visible-{index}")))
+                .chain(std::iter::once(selected_task.clone()))
+                .collect(),
+            selected_task_id: Some(selected_task.id.clone()),
+            ..AppState::default()
+        };
+        reduce(
+            &mut saturated,
+            Action::NewChatTaskCreated {
+                task: task("created-at-cap"),
+                new_chat_draft_generation: 0,
+            },
+        );
+        assert_eq!(saturated.tasks.len(), MAX_VISIBLE_THREADS);
+        assert_eq!(saturated.selected_task_id, Some(selected_task.id.clone()));
+        assert!(saturated.tasks.contains(&selected_task));
+
+        let mut matching = AppState::default();
+        let effects = reduce(
+            &mut matching,
+            Action::NewChatTaskCreated {
+                task: task_in_repository("created-matching"),
+                new_chat_draft_generation: 0,
+            },
+        );
+        assert_eq!(
+            matching.selected_task_id.as_deref(),
+            Some("created-matching")
+        );
+        assert!(matching.new_chat_cwd.is_none());
+        assert!(matching.timelines["created-matching"].runtime_status_loaded);
+        assert!(matching.goals.contains_key("created-matching"));
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::RefreshGit { .. } | Effect::RefreshApps { .. }
+        )));
     }
 
     #[test]
