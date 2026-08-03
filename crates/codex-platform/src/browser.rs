@@ -4737,17 +4737,8 @@ fn open_platform_path(path: &Path, reveal: bool) -> Result<(), String> {
         return Err("Opening Browser downloads is not supported on this platform.".to_owned());
     };
 
-    command
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("could not open the Browser download: {error}"))?;
-    thread::spawn(move || {
-        let _ = child.wait();
-    });
-    Ok(())
+    crate::process::spawn_detached_bounded(&mut command)
+        .map_err(|error| format!("could not open the Browser download: {error}"))
 }
 
 fn checked_agent_target_id(value: Option<&Value>) -> Result<String, BrowserAgentRpcError> {
