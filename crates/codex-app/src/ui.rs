@@ -13442,8 +13442,8 @@ impl WorkspaceView {
             )
             .selected(selected)
             .on_click(cx.listener(move |this, _, _, cx| {
+                this.navigate(MainRoute::Tasks, cx);
                 this.dispatch(Action::SelectTask(task_id.clone()), cx);
-                this.close_narrow_sidebar();
             }))
             .child(
                 h_flex()
