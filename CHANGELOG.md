@@ -5,6 +5,26 @@ All notable changes to codexRS are documented here. The project follows
 
 ## [Unreleased]
 
+## [0.1.0-rc.11] - 2026-08-03
+
+### Added
+
+- Windows release archives now launch the packaged desktop with an isolated
+  Codex home before publication.
+
+### Fixed
+
+- Marketplace skill catalogs, skill mutations, and plugin details ignore late
+  results from an older workspace or request.
+- Task settings ignore stale resume snapshots and update failures after a newer
+  local edit or task selection.
+- Browser viewport overrides stay scoped to their task, and archiving a task
+  releases its browser tabs and runtime state.
+- Normal chat forks no longer steal navigation, drafts, or status when their
+  completion arrives after the user moved elsewhere or started a newer fork.
+- Computer Use launches mixed-case Windows application identifiers through the
+  same canonical matching used by discovery and permissions.
+
 ## [0.1.0-rc.10] - 2026-08-03
 
 ### Fixed
