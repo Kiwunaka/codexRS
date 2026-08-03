@@ -258,6 +258,10 @@ fn right_panels_hide_for_width_transition(
             && matches!(previous, None | Some(ShellWidthClass::Wide)))
 }
 
+fn right_panels_restore_for_width_class(current: ShellWidthClass) -> bool {
+    current == ShellWidthClass::Wide
+}
+
 fn task_workspace_active(route: MainRoute, selected_task_id: Option<&str>) -> bool {
     route == MainRoute::Tasks && selected_task_id.is_some()
 }
@@ -8114,11 +8118,7 @@ impl WorkspaceView {
 
         if right_panels_hide_for_width_transition(previous, current) {
             self.hide_right_panels_for_resize();
-        } else if current == ShellWidthClass::Wide
-            || (current == ShellWidthClass::Compact
-                && previous == Some(ShellWidthClass::Narrow)
-                && !self.sidebar_visible)
-        {
+        } else if right_panels_restore_for_width_class(current) {
             self.restore_right_panels_after_resize();
         }
     }
@@ -45538,12 +45538,12 @@ mod tests {
         pull_request_merge_submission_enabled, reasoning_effort_target, reduced_motion_enabled,
         remote_control_status_label, render_conversation_markdown, replace_composer_file_query,
         repository_uses_split_diff, reserve_thread_find_history_page,
-        right_panels_hide_for_width_transition, sanitize_assistant_markdown,
-        selected_approval_request, selected_model_upgrade_notice, selected_task_copy_value,
-        settings_section_matches, settings_section_refreshes_account, shell_width_class,
-        sidebar_layout_width, split_diff_rows, startup_recovery_card, status_context_total_label,
-        status_rate_limit_label, status_rate_limit_reset_metadata_at, task_slot_id,
-        task_workspace_active, terminal_tab_label, timeline_activity_content,
+        right_panels_hide_for_width_transition, right_panels_restore_for_width_class,
+        sanitize_assistant_markdown, selected_approval_request, selected_model_upgrade_notice,
+        selected_task_copy_value, settings_section_matches, settings_section_refreshes_account,
+        shell_width_class, sidebar_layout_width, split_diff_rows, startup_recovery_card,
+        status_context_total_label, status_rate_limit_label, status_rate_limit_reset_metadata_at,
+        task_slot_id, task_workspace_active, terminal_tab_label, timeline_activity_content,
         turn_diff_update_is_accepted, usage_limit_reset_summary_copy,
         validate_plugin_logo_dimensions, worktree_fork_queue_full, worktree_use_disabled,
     };
@@ -47698,6 +47698,13 @@ mod tests {
         assert!(!right_panels_hide_for_width_transition(
             Some(ShellWidthClass::Compact),
             ShellWidthClass::Compact,
+        ));
+        assert!(right_panels_restore_for_width_class(ShellWidthClass::Wide));
+        assert!(!right_panels_restore_for_width_class(
+            ShellWidthClass::Compact
+        ));
+        assert!(!right_panels_restore_for_width_class(
+            ShellWidthClass::Narrow
         ));
     }
 
