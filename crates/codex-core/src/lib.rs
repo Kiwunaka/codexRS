@@ -21954,6 +21954,8 @@ mod tests {
     fn shell_slash_command_is_explicit_and_preserves_shell_syntax() {
         let mut state = AppState::default();
         reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(&mut state, Action::TaskCreated(task("t2")));
+        reduce(&mut state, Action::SelectTask("t1".to_owned()));
         state
             .timelines
             .entry("t1".to_owned())
@@ -21972,6 +21974,32 @@ mod tests {
             }]
         );
         assert!(state.composer.is_empty());
+
+        let prompt = RetryableUserMessage {
+            text: "/shell git status --short | rg src".to_owned(),
+            attachments: Vec::new(),
+        };
+        reduce(
+            &mut state,
+            Action::ComposerSubmissionFailed {
+                task_id: Some("t1".to_owned()),
+                prompt: prompt.clone(),
+                message: "Could not run the shell command.".to_owned(),
+            },
+        );
+        assert_eq!(state.composer, prompt.text);
+
+        reduce(&mut state, Action::SelectTask("t2".to_owned()));
+        state.composer = "keep this other draft".to_owned();
+        reduce(
+            &mut state,
+            Action::ComposerSubmissionFailed {
+                task_id: Some("t1".to_owned()),
+                prompt,
+                message: "late failure".to_owned(),
+            },
+        );
+        assert_eq!(state.composer, "keep this other draft");
 
         reduce(&mut state, Action::ComposerChanged("/shell".to_owned()));
         assert!(reduce(&mut state, Action::SubmitComposer).is_empty());

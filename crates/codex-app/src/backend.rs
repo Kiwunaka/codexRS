@@ -7398,6 +7398,10 @@ fn run_effect(
             }
         }
         Effect::RunThreadShellCommand { task_id, command } => {
+            let prompt = RetryableUserMessage {
+                text: format!("/shell {command}"),
+                attachments: Vec::new(),
+            };
             if app_server
                 .run_thread_shell_command(ThreadShellCommandParams {
                     thread_id: task_id.clone(),
@@ -7407,8 +7411,9 @@ fn run_effect(
             {
                 emit(
                     events,
-                    Action::ThreadShellCommandFailed {
-                        task_id,
+                    Action::ComposerSubmissionFailed {
+                        task_id: Some(task_id),
+                        prompt,
                         message: "Could not run the shell command.".to_owned(),
                     },
                 );
