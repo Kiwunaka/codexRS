@@ -52,6 +52,7 @@ const CDP_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const DEVTOOLS_PORT_TIMEOUT: Duration = Duration::from_secs(10);
 const GRACEFUL_BROWSER_EXIT: Duration = Duration::from_secs(1);
 const MAX_CDP_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_CDP_PENDING_EVENT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_BROWSER_KEY_BYTES: usize = 64;
 const MAX_BROWSER_TEXT_BYTES: usize = 256;
 const MAX_CACHED_AGENT_EXPRESSIONS: usize = 32;
@@ -1361,7 +1362,53 @@ fn create_browser_job(_child: &mut Child) -> Result<BrowserJob, String> {
 struct CdpClient {
     socket: WebSocket<TcpStream>,
     next_id: u64,
-    pending_events: VecDeque<Value>,
+    pending_events: PendingCdpEvents,
+}
+
+struct PendingCdpEvent {
+    value: Value,
+    frame_bytes: usize,
+}
+
+struct PendingCdpEvents {
+    events: VecDeque<PendingCdpEvent>,
+    retained_bytes: usize,
+}
+
+impl PendingCdpEvents {
+    fn new() -> Self {
+        Self {
+            events: VecDeque::with_capacity(BROWSER_EVENT_CAPACITY),
+            retained_bytes: 0,
+        }
+    }
+
+    fn push(&mut self, value: Value, frame_bytes: usize) -> Vec<Value> {
+        let mut evicted = Vec::new();
+        if frame_bytes > MAX_CDP_PENDING_EVENT_BYTES {
+            evicted.push(value);
+            return evicted;
+        }
+        while self.events.len() >= BROWSER_EVENT_CAPACITY
+            || self.retained_bytes.saturating_add(frame_bytes) > MAX_CDP_PENDING_EVENT_BYTES
+        {
+            let Some(event) = self.events.pop_front() else {
+                break;
+            };
+            self.retained_bytes = self.retained_bytes.saturating_sub(event.frame_bytes);
+            evicted.push(event.value);
+        }
+        self.retained_bytes = self.retained_bytes.saturating_add(frame_bytes);
+        self.events
+            .push_back(PendingCdpEvent { value, frame_bytes });
+        evicted
+    }
+
+    fn pop(&mut self) -> Option<Value> {
+        let event = self.events.pop_front()?;
+        self.retained_bytes = self.retained_bytes.saturating_sub(event.frame_bytes);
+        Some(event.value)
+    }
 }
 
 impl CdpClient {
@@ -1389,7 +1436,7 @@ impl CdpClient {
         Ok(Self {
             socket,
             next_id: 1,
-            pending_events: VecDeque::with_capacity(BROWSER_EVENT_CAPACITY),
+            pending_events: PendingCdpEvents::new(),
         })
     }
 
@@ -1399,6 +1446,39 @@ impl CdpClient {
         params: Value,
         session_id: Option<&str>,
     ) -> Result<Value, String> {
+        let id = self.send_request(method, params, session_id)?;
+
+        let deadline = Instant::now() + CDP_REQUEST_TIMEOUT;
+        loop {
+            if Instant::now() >= deadline {
+                return Err(format!("Browser command {method} timed out"));
+            }
+            match self.read_value()? {
+                Some((value, _)) if value.get("id").and_then(Value::as_u64) == Some(id) => {
+                    if let Some(error) = value.get("error") {
+                        let message = error
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("Browser command failed");
+                        return Err(bounded_text(message, MAX_ERROR_BYTES));
+                    }
+                    return Ok(value.get("result").cloned().unwrap_or(Value::Null));
+                }
+                Some((value, frame_bytes)) if value.get("method").is_some() => {
+                    let evicted = self.pending_events.push(value, frame_bytes);
+                    self.acknowledge_evicted_screencast_frames(evicted)?;
+                }
+                Some(_) | None => {}
+            }
+        }
+    }
+
+    fn send_request(
+        &mut self,
+        method: &str,
+        params: Value,
+        session_id: Option<&str>,
+    ) -> Result<u64, String> {
         let id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
         let mut request = json!({
@@ -1417,55 +1497,57 @@ impl CdpClient {
         self.socket
             .send(Message::text(serialized))
             .map_err(|error| format!("could not send Browser command: {error}"))?;
-
-        let deadline = Instant::now() + CDP_REQUEST_TIMEOUT;
-        loop {
-            if Instant::now() >= deadline {
-                return Err(format!("Browser command {method} timed out"));
-            }
-            match self.read_value()? {
-                Some(value) if value.get("id").and_then(Value::as_u64) == Some(id) => {
-                    if let Some(error) = value.get("error") {
-                        let message = error
-                            .get("message")
-                            .and_then(Value::as_str)
-                            .unwrap_or("Browser command failed");
-                        return Err(bounded_text(message, MAX_ERROR_BYTES));
-                    }
-                    return Ok(value.get("result").cloned().unwrap_or(Value::Null));
-                }
-                Some(value) if value.get("method").is_some() => {
-                    if self.pending_events.len() == BROWSER_EVENT_CAPACITY {
-                        self.pending_events.pop_front();
-                    }
-                    self.pending_events.push_back(value);
-                }
-                Some(_) | None => {}
-            }
-        }
+        Ok(id)
     }
 
+    fn acknowledge_evicted_screencast_frames(&mut self, events: Vec<Value>) -> Result<(), String> {
+        for event in events {
+            let Some((session_id, frame_session_id)) = screencast_frame_ack(&event) else {
+                continue;
+            };
+            self.send_request(
+                "Page.screencastFrameAck",
+                json!({"sessionId": frame_session_id}),
+                Some(session_id),
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn screencast_frame_ack(event: &Value) -> Option<(&str, u64)> {
+    if event.get("method").and_then(Value::as_str) != Some("Page.screencastFrame") {
+        return None;
+    }
+    Some((
+        event.get("sessionId")?.as_str()?,
+        event.get("params")?.get("sessionId")?.as_u64()?,
+    ))
+}
+
+impl CdpClient {
     fn poll_event(&mut self) -> Result<Option<Value>, String> {
-        if let Some(event) = self.pending_events.pop_front() {
+        if let Some(event) = self.pending_events.pop() {
             return Ok(Some(event));
         }
         loop {
             match self.read_value()? {
-                Some(value) if value.get("method").is_some() => return Ok(Some(value)),
+                Some((value, _)) if value.get("method").is_some() => return Ok(Some(value)),
                 Some(_) => {}
                 None => return Ok(None),
             }
         }
     }
 
-    fn read_value(&mut self) -> Result<Option<Value>, String> {
+    fn read_value(&mut self) -> Result<Option<(Value, usize)>, String> {
         match self.socket.read() {
             Ok(Message::Text(text)) => {
                 if text.len() > MAX_CDP_MESSAGE_BYTES {
                     return Err("Browser event exceeded its size limit".to_owned());
                 }
+                let frame_bytes = text.len();
                 serde_json::from_str(text.as_str())
-                    .map(Some)
+                    .map(|value| Some((value, frame_bytes)))
                     .map_err(|error| format!("could not decode Browser event: {error}"))
             }
             Ok(Message::Ping(payload)) => {
@@ -4707,12 +4789,13 @@ mod tests {
     use super::{
         BROWSER_COMMAND_CAPACITY, BrowserCommandError, BrowserConfig, BrowserDownloadControl,
         BrowserDownloadRuntime, BrowserEvent, BrowserFamily, CdpClient, DevToolsEndpoint,
-        LatestBrowserFrame, MAX_BROWSER_URL_BYTES, browser_command, browser_origin_pattern_matches,
-        browser_permission_for_url, cdp_key_name, checked_agent_browser_id, checked_agent_viewport,
-        checked_download_url, checked_navigation_url, control_download_transfer,
-        create_browser_job, graceful_browser_exit, move_download_to_destination,
-        normalize_browser_origin, parse_devtools_marker, resolve_browser_binary,
-        safe_download_filename, try_recv_browser_event, wait_for_devtools_endpoint,
+        LatestBrowserFrame, MAX_BROWSER_URL_BYTES, MAX_CDP_PENDING_EVENT_BYTES, PendingCdpEvents,
+        browser_command, browser_origin_pattern_matches, browser_permission_for_url, cdp_key_name,
+        checked_agent_browser_id, checked_agent_viewport, checked_download_url,
+        checked_navigation_url, control_download_transfer, create_browser_job,
+        graceful_browser_exit, move_download_to_destination, normalize_browser_origin,
+        parse_devtools_marker, resolve_browser_binary, safe_download_filename,
+        screencast_frame_ack, try_recv_browser_event, wait_for_devtools_endpoint,
     };
     use super::{
         MAX_XDG_USER_DIRS_BYTES, decode_xdg_double_quoted, linux_user_dirs_config_path,
@@ -4996,6 +5079,48 @@ mod tests {
         assert_eq!(cdp_key_name("left"), "ArrowLeft");
         assert_eq!(cdp_key_name("ENTER"), "Enter");
         assert_eq!(cdp_key_name("a"), "a");
+    }
+
+    #[test]
+    fn cdp_pending_events_evict_oldest_to_stay_within_byte_budget() {
+        let mut events = PendingCdpEvents::new();
+        let quarter_budget = MAX_CDP_PENDING_EVENT_BYTES / 4;
+        let half_budget = MAX_CDP_PENDING_EVENT_BYTES / 2;
+
+        assert!(
+            events
+                .push(json!({"method": "first"}), quarter_budget)
+                .is_empty()
+        );
+        assert!(
+            events
+                .push(json!({"method": "second"}), half_budget)
+                .is_empty()
+        );
+        let evicted = events.push(json!({"method": "third"}), half_budget);
+
+        assert_eq!(events.retained_bytes, MAX_CDP_PENDING_EVENT_BYTES);
+        assert_eq!(evicted, vec![json!({"method": "first"})]);
+        assert_eq!(events.pop(), Some(json!({"method": "second"})));
+        assert_eq!(events.pop(), Some(json!({"method": "third"})));
+        assert_eq!(events.retained_bytes, 0);
+        assert_eq!(events.pop(), None);
+    }
+
+    #[test]
+    fn evicted_screencast_frames_extract_ack_details_only() {
+        assert_eq!(
+            screencast_frame_ack(&json!({
+                "method": "Page.screencastFrame",
+                "sessionId": "tab-session",
+                "params": {"sessionId": 42},
+            })),
+            Some(("tab-session", 42)),
+        );
+        assert_eq!(
+            screencast_frame_ack(&json!({"method": "Runtime.consoleAPICalled"})),
+            None,
+        );
     }
 
     #[test]
