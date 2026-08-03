@@ -6687,6 +6687,7 @@ fn run_effect(
             }
         }
         Effect::ForkTask {
+            request_id,
             task_id,
             cwd,
             title,
@@ -6696,12 +6697,16 @@ fn run_effect(
                 &task_id,
                 cwd.clone(),
                 &title,
+                Some(request_id),
                 computer_capable_threads,
                 events,
             ) {
                 emit(
                     events,
-                    Action::SetStatus(format!("Failed to create chat: {error}")),
+                    Action::ForkTaskFailed {
+                        request_id,
+                        message: bounded(error.to_string(), MAX_STATUS_BYTES),
+                    },
                 );
             }
         }
@@ -6717,6 +6722,7 @@ fn run_effect(
                 &task_id,
                 Some(cwd),
                 &title,
+                None,
                 computer_capable_threads,
                 events,
             ) {
@@ -8719,6 +8725,7 @@ fn fork_app_server_task(
     task_id: &str,
     cwd: Option<PathBuf>,
     source_title: &str,
+    normal_fork_request_id: Option<u64>,
     computer_capable_threads: &mut HashSet<String>,
     events: &dyn ActionEmitter,
 ) -> Result<(), AppServerError> {
@@ -8750,19 +8757,32 @@ fn fork_app_server_task(
     if inherits_computer_use {
         computer_capable_threads.insert(fork_id.clone());
     }
-    emit(events, Action::TaskCreated(task));
-    emit(events, Action::SelectTask(fork_id.clone()));
+    if let Some(request_id) = normal_fork_request_id {
+        emit(
+            events,
+            Action::ForkTaskCompleted {
+                request_id,
+                task,
+                title_copy_error: title_error.as_ref().map(ToString::to_string),
+            },
+        );
+    } else {
+        emit(events, Action::TaskCreated(task));
+        emit(events, Action::SelectTask(fork_id.clone()));
+    }
     if inherits_computer_use {
         emit(events, Action::ComputerUseAvailable { task_id: fork_id });
     }
-    if let Some(error) = title_error {
+    if normal_fork_request_id.is_none()
+        && let Some(error) = title_error
+    {
         emit(
             events,
             Action::SetStatus(format!(
                 "Chat created, but its title could not be copied: {error}"
             )),
         );
-    } else {
+    } else if normal_fork_request_id.is_none() {
         emit(events, Action::ClearStatus);
     }
     Ok(())

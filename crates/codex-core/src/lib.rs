@@ -928,6 +928,13 @@ pub struct PendingWorktreeFork {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingTaskFork {
+    pub request_id: u64,
+    pub selection_task_id: Option<String>,
+    pub selection_generation: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskSearchResult {
     pub task: TaskSummary,
     pub snippet: String,
@@ -4199,6 +4206,8 @@ pub struct AppState {
     pub tasks: Vec<TaskSummary>,
     pub next_task_cursor: Option<String>,
     pub task_search: TaskSearchState,
+    pub pending_task_fork: Option<PendingTaskFork>,
+    pub next_task_fork_request_id: u64,
     pub pending_worktree_fork: Option<PendingWorktreeFork>,
     pub queued_worktree_forks: VecDeque<PendingWorktreeFork>,
     pub next_worktree_fork_request_id: u64,
@@ -4207,6 +4216,7 @@ pub struct AppState {
     pub seen_model_upgrade_ids: Vec<String>,
     pub local_projects: Vec<LocalProjectSummary>,
     pub selected_task_id: Option<String>,
+    pub task_selection_generation: u64,
     pub new_chat_cwd: Option<PathBuf>,
     pub new_chat_draft_generation: u64,
     pub composer_draft_generation: u64,
@@ -4267,6 +4277,8 @@ impl Default for AppState {
             tasks: Vec::new(),
             next_task_cursor: None,
             task_search: TaskSearchState::default(),
+            pending_task_fork: None,
+            next_task_fork_request_id: 1,
             pending_worktree_fork: None,
             queued_worktree_forks: VecDeque::new(),
             next_worktree_fork_request_id: 1,
@@ -4275,6 +4287,7 @@ impl Default for AppState {
             seen_model_upgrade_ids: Vec::new(),
             local_projects: Vec::new(),
             selected_task_id: None,
+            task_selection_generation: 0,
             new_chat_cwd: None,
             new_chat_draft_generation: 0,
             composer_draft_generation: 0,
@@ -4518,6 +4531,15 @@ pub enum Action {
         kind: ArchivedTaskDeleteKind,
     },
     TaskCreated(TaskSummary),
+    ForkTaskCompleted {
+        request_id: u64,
+        task: TaskSummary,
+        title_copy_error: Option<String>,
+    },
+    ForkTaskFailed {
+        request_id: u64,
+        message: String,
+    },
     NewChatTaskCreated {
         task: TaskSummary,
         new_chat_draft_generation: u64,
@@ -5757,6 +5779,7 @@ pub enum Effect {
         new_chat_draft_generation: u64,
     },
     ForkTask {
+        request_id: u64,
         task_id: String,
         cwd: Option<PathBuf>,
         title: String,
@@ -6982,6 +7005,10 @@ fn prepare_new_chat(state: &mut AppState, cwd: Option<PathBuf>) -> Vec<Effect> {
     }
     let mut effects = clear_fuzzy_file_search(state);
     state.route = MainRoute::Tasks;
+    if state.selected_task_id.is_some() {
+        advance_task_selection_generation(state);
+        clear_pending_task_fork_status(state);
+    }
     state.selected_task_id = None;
     if departing_task_id.is_some() {
         state.marketplace.mcp_generation = state.marketplace.mcp_generation.saturating_add(1);
@@ -7023,6 +7050,18 @@ fn prepare_new_chat(state: &mut AppState, cwd: Option<PathBuf>) -> Vec<Effect> {
 fn advance_new_chat_draft_generation(state: &mut AppState) {
     if state.selected_task_id.is_none() {
         advance_composer_draft_generation(state);
+    }
+}
+
+fn advance_task_selection_generation(state: &mut AppState) {
+    state.task_selection_generation = state.task_selection_generation.wrapping_add(1);
+}
+
+fn clear_pending_task_fork_status(state: &mut AppState) {
+    if state.pending_task_fork.is_some()
+        && state.status_message.as_deref() == Some("Creating chat…")
+    {
+        state.status_message = None;
     }
 }
 
@@ -7089,13 +7128,55 @@ fn fork_task(state: &mut AppState, task_id: &str, new_worktree: bool) -> Vec<Eff
             Vec::new()
         }
     } else {
+        let request_id = state.next_task_fork_request_id;
+        state.next_task_fork_request_id = request_id.checked_add(1).unwrap_or(1);
+        state.pending_task_fork = Some(PendingTaskFork {
+            request_id,
+            selection_task_id: state.selected_task_id.clone(),
+            selection_generation: state.task_selection_generation,
+        });
         state.status_message = Some("Creating chat…".to_owned());
         vec![Effect::ForkTask {
+            request_id,
             task_id: task_id.to_owned(),
             cwd,
             title,
         }]
     }
+}
+
+fn record_task_without_selecting(state: &mut AppState, task: TaskSummary) {
+    let selected_task = state
+        .selected_task_id
+        .as_deref()
+        .and_then(|selected_task_id| {
+            state
+                .tasks
+                .iter()
+                .find(|existing| existing.id == selected_task_id)
+                .cloned()
+        });
+    let task_id = task.id.clone();
+    state.tasks.retain(|existing| existing.id != task_id);
+    state.tasks.insert(0, task);
+    state.tasks.truncate(MAX_VISIBLE_THREADS);
+    if let Some(selected_task) = selected_task
+        && !state
+            .tasks
+            .iter()
+            .any(|existing| existing.id == selected_task.id)
+        && let Some(last_task) = state.tasks.last_mut()
+    {
+        *last_task = selected_task;
+    }
+    state
+        .timelines
+        .entry(task_id.clone())
+        .or_insert(TimelineState {
+            runtime_status_loaded: true,
+            ..TimelineState::default()
+        });
+    state.goals.entry(task_id).or_default();
 }
 
 fn start_next_worktree_fork(state: &mut AppState) -> Vec<Effect> {
@@ -9222,6 +9303,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 .retain(|approval| approval.task_id != task_id);
             if state.selected_task_id.as_deref() == Some(task_id.as_str()) {
                 clear_mcp_auth_for_context_change(state, Some(task_id.as_str()));
+                advance_task_selection_generation(state);
+                clear_pending_task_fork_status(state);
                 state.selected_task_id = None;
                 state.artifacts = ArtifactState::default();
                 clear_active_composer_draft(state);
@@ -9471,37 +9554,62 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 return reduce(state, Action::TaskCreated(task));
             }
 
-            let selected_task = state
-                .selected_task_id
-                .as_deref()
-                .and_then(|selected_task_id| {
-                    state
-                        .tasks
-                        .iter()
-                        .find(|existing| existing.id == selected_task_id)
-                        .cloned()
-                });
-            let task_id = task.id.clone();
-            state.tasks.retain(|existing| existing.id != task_id);
-            state.tasks.insert(0, task);
-            state.tasks.truncate(MAX_VISIBLE_THREADS);
-            if let Some(selected_task) = selected_task
-                && !state
-                    .tasks
-                    .iter()
-                    .any(|existing| existing.id == selected_task.id)
-                && let Some(last_task) = state.tasks.last_mut()
+            record_task_without_selecting(state, task);
+            Vec::new()
+        }
+        Action::ForkTaskCompleted {
+            request_id,
+            task,
+            title_copy_error,
+        } => {
+            let current = state.pending_task_fork.as_ref().is_some_and(|pending| {
+                pending.request_id == request_id
+                    && pending.selection_task_id == state.selected_task_id
+                    && pending.selection_generation == state.task_selection_generation
+            });
+            if state
+                .pending_task_fork
+                .as_ref()
+                .is_some_and(|pending| pending.request_id == request_id)
             {
-                *last_task = selected_task;
+                state.pending_task_fork = None;
             }
-            state
-                .timelines
-                .entry(task_id.clone())
-                .or_insert(TimelineState {
-                    runtime_status_loaded: true,
-                    ..TimelineState::default()
+            if current {
+                let effects = reduce(state, Action::TaskCreated(task));
+                state.status_message = title_copy_error.map(|error| {
+                    bounded_string(
+                        format!("Chat created, but its title could not be copied: {error}"),
+                        16 * 1024,
+                    )
                 });
-            state.goals.entry(task_id).or_default();
+                effects
+            } else {
+                record_task_without_selecting(state, task);
+                Vec::new()
+            }
+        }
+        Action::ForkTaskFailed {
+            request_id,
+            message,
+        } => {
+            let current = state.pending_task_fork.as_ref().is_some_and(|pending| {
+                pending.request_id == request_id
+                    && pending.selection_task_id == state.selected_task_id
+                    && pending.selection_generation == state.task_selection_generation
+            });
+            if state
+                .pending_task_fork
+                .as_ref()
+                .is_some_and(|pending| pending.request_id == request_id)
+            {
+                state.pending_task_fork = None;
+            }
+            if current {
+                state.status_message = Some(bounded_string(
+                    format!("Failed to create chat: {message}"),
+                    16 * 1024,
+                ));
+            }
             Vec::new()
         }
         Action::TaskCreated(task) => {
@@ -9512,6 +9620,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             let git_context_changed = previous_task_id.as_deref() != Some(task_id.as_str())
                 || previous_cwd.as_ref() != Some(&cwd);
             if previous_task_id.as_deref() != Some(task_id.as_str()) {
+                advance_task_selection_generation(state);
+                clear_pending_task_fork_status(state);
                 clear_active_composer_draft(state);
                 clear_mcp_auth_for_context_change(state, previous_task_id.as_deref());
             }
@@ -9675,6 +9785,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.tasks.truncate(MAX_VISIBLE_THREADS);
             }
             if task_changed {
+                advance_task_selection_generation(state);
+                clear_pending_task_fork_status(state);
                 state.artifacts = ArtifactState::default();
                 state.marketplace.mcp_resource_read = McpResourceReadState::default();
                 clear_mcp_auth_for_context_change(state, previous_task_id.as_deref());
@@ -23725,6 +23837,7 @@ mod tests {
         assert_eq!(
             reduce(&mut state, Action::SubmitComposer),
             [Effect::ForkTask {
+                request_id: 1,
                 task_id: "t1".to_owned(),
                 cwd: Some(repository.clone()),
                 title: "Task".to_owned(),
@@ -23798,11 +23911,116 @@ mod tests {
                 Action::ForkTaskInCurrentWorkspace("t1".to_owned())
             ),
             [Effect::ForkTask {
+                request_id: 1,
                 task_id: "t1".to_owned(),
                 cwd: Some(repository),
                 title: "Task".to_owned(),
             }]
         );
+    }
+
+    #[test]
+    fn current_normal_fork_completion_selects_the_fork() {
+        let mut state = AppState::default();
+        reduce(
+            &mut state,
+            Action::TaskCreated(task_in_repository("source")),
+        );
+        reduce(
+            &mut state,
+            Action::ComposerChanged("source draft".to_owned()),
+        );
+
+        assert!(matches!(
+            reduce(&mut state, Action::ForkSelectedTask).as_slice(),
+            [Effect::ForkTask {
+                request_id: 1,
+                task_id,
+                ..
+            }] if task_id == "source"
+        ));
+
+        let effects = reduce(
+            &mut state,
+            Action::ForkTaskCompleted {
+                request_id: 1,
+                task: task_in_repository("fork"),
+                title_copy_error: None,
+            },
+        );
+
+        assert_eq!(state.selected_task_id.as_deref(), Some("fork"));
+        assert!(state.composer.is_empty());
+        assert!(state.pending_task_fork.is_none());
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::RefreshGit { .. }))
+        );
+    }
+
+    #[test]
+    fn stale_normal_fork_completion_and_failure_preserve_a_returned_task() {
+        let mut state = AppState::default();
+        reduce(
+            &mut state,
+            Action::TaskCreated(task_in_repository("source")),
+        );
+        reduce(
+            &mut state,
+            Action::TaskCreated(task_in_repository("current")),
+        );
+        reduce(&mut state, Action::SelectTask("source".to_owned()));
+        reduce(
+            &mut state,
+            Action::ComposerChanged("source draft".to_owned()),
+        );
+        reduce(&mut state, Action::ForkSelectedTask);
+        reduce(&mut state, Action::ForkSelectedTask);
+
+        reduce(&mut state, Action::SelectTask("current".to_owned()));
+        assert!(state.status_message.is_none());
+        reduce(&mut state, Action::SelectTask("source".to_owned()));
+        reduce(
+            &mut state,
+            Action::ComposerChanged("returned source draft".to_owned()),
+        );
+        reduce(
+            &mut state,
+            Action::SetStatus("Returned source status".to_owned()),
+        );
+        reduce(
+            &mut state,
+            Action::ForkTaskCompleted {
+                request_id: 1,
+                task: task_in_repository("late-fork"),
+                title_copy_error: Some("late title failure".to_owned()),
+            },
+        );
+
+        assert_eq!(state.selected_task_id.as_deref(), Some("source"));
+        assert_eq!(state.composer, "returned source draft");
+        assert_eq!(
+            state.status_message.as_deref(),
+            Some("Returned source status")
+        );
+        assert!(state.tasks.iter().any(|task| task.id == "late-fork"));
+
+        reduce(
+            &mut state,
+            Action::ForkTaskFailed {
+                request_id: 2,
+                message: "late failure".to_owned(),
+            },
+        );
+
+        assert_eq!(state.selected_task_id.as_deref(), Some("source"));
+        assert_eq!(state.composer, "returned source draft");
+        assert_eq!(
+            state.status_message.as_deref(),
+            Some("Returned source status")
+        );
+        assert!(state.pending_task_fork.is_none());
     }
 
     #[test]
