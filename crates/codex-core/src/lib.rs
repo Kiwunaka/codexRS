@@ -2524,6 +2524,7 @@ pub struct MarketplaceState {
     pub pending_app_id: Option<String>,
     pub pending_mcp_key: Option<String>,
     pub pending_mcp_auth_name: Option<String>,
+    pub mcp_auth_scopes: HashMap<String, Option<String>>,
     pub mcp_mutation_error: Option<String>,
     pub pending_skill_path: Option<PathBuf>,
     pub pending_plugin_skill_name: Option<String>,
@@ -5310,10 +5311,12 @@ pub enum Action {
         name: String,
     },
     McpServerAuthenticationStarted {
+        thread_id: Option<String>,
         name: String,
         authorization_url: String,
     },
     McpServerAuthenticationCompleted {
+        thread_id: Option<String>,
         name: String,
         success: bool,
         error: Option<String>,
@@ -5982,6 +5985,7 @@ pub enum Effect {
     },
     AuthenticateMcpServer {
         name: String,
+        thread_id: Option<String>,
     },
     ReloadMcpServers {
         generation: u64,
@@ -6860,9 +6864,50 @@ fn change_fuzzy_file_search(state: &mut AppState, query: Option<String>) -> Vec<
     effects
 }
 
+fn clear_mcp_auth_for_context_change(state: &mut AppState, departing_task_id: Option<&str>) {
+    let Some(departing_task_id) = departing_task_id else {
+        return;
+    };
+    let scoped_names = state
+        .marketplace
+        .mcp_auth_scopes
+        .iter()
+        .filter_map(|(name, scope)| {
+            (scope.as_deref() == Some(departing_task_id)).then_some(name.clone())
+        })
+        .collect::<HashSet<_>>();
+    if scoped_names.is_empty() {
+        return;
+    }
+    state
+        .marketplace
+        .mcp_auth_scopes
+        .retain(|_, scope| scope.as_deref() != Some(departing_task_id));
+    if state
+        .marketplace
+        .pending_mcp_auth_name
+        .as_deref()
+        .is_some_and(|name| scoped_names.contains(name))
+    {
+        state.marketplace.pending_mcp_auth_name = None;
+    }
+    for server in state
+        .marketplace
+        .mcp_servers
+        .iter_mut()
+        .chain(&mut state.marketplace.plugin_mcp_servers)
+    {
+        if scoped_names.contains(&server.key) {
+            server.authorization_url = None;
+        }
+    }
+}
+
 fn prepare_new_chat(state: &mut AppState, cwd: Option<PathBuf>) -> Vec<Effect> {
+    let departing_task_id = state.selected_task_id.clone();
     if state.selected_task_id.is_some() || state.new_chat_cwd != cwd {
         clear_git_for_context_change(state);
+        clear_mcp_auth_for_context_change(state, departing_task_id.as_deref());
     }
     let mut effects = clear_fuzzy_file_search(state);
     state.route = MainRoute::Tasks;
@@ -9051,6 +9096,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 .approvals
                 .retain(|approval| approval.task_id != task_id);
             if state.selected_task_id.as_deref() == Some(task_id.as_str()) {
+                clear_mcp_auth_for_context_change(state, Some(task_id.as_str()));
                 state.selected_task_id = None;
                 state.artifacts = ArtifactState::default();
                 clear_active_composer_draft(state);
@@ -9311,6 +9357,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 || previous_cwd.as_ref() != Some(&cwd);
             if previous_task_id.as_deref() != Some(task_id.as_str()) {
                 clear_active_composer_draft(state);
+                clear_mcp_auth_for_context_change(state, previous_task_id.as_deref());
             }
             remember_local_project(state, &cwd);
             state.new_chat_cwd = None;
@@ -9474,6 +9521,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             if task_changed {
                 state.artifacts = ArtifactState::default();
                 state.marketplace.mcp_resource_read = McpResourceReadState::default();
+                clear_mcp_auth_for_context_change(state, previous_task_id.as_deref());
                 state.marketplace.selected_app_id = None;
                 state.marketplace.app_detail_status = None;
                 state.marketplace.app_detail = None;
@@ -15622,18 +15670,32 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 return Vec::new();
             }
             state.marketplace.pending_mcp_auth_name = Some(name.clone());
-            vec![Effect::AuthenticateMcpServer { name }]
+            state
+                .marketplace
+                .mcp_auth_scopes
+                .insert(name.clone(), state.selected_task_id.clone());
+            vec![Effect::AuthenticateMcpServer {
+                name,
+                thread_id: state.selected_task_id.clone(),
+            }]
         }
         Action::McpServerAuthenticationStarted {
+            thread_id,
             name,
             authorization_url,
         } => {
-            if state.marketplace.pending_mcp_auth_name.as_deref() != Some(name.as_str()) {
+            if state.marketplace.pending_mcp_auth_name.as_deref() != Some(name.as_str())
+                || state.marketplace.mcp_auth_scopes.get(&name) != Some(&thread_id)
+                || thread_id
+                    .as_deref()
+                    .is_some_and(|thread_id| state.selected_task_id.as_deref() != Some(thread_id))
+            {
                 return Vec::new();
             }
             state.marketplace.pending_mcp_auth_name = None;
             let authorization_url = bounded_string(authorization_url.trim().to_owned(), 8 * 1024);
             if authorization_url.is_empty() {
+                state.marketplace.mcp_auth_scopes.remove(&name);
                 state.status_message =
                     Some("MCP server returned an empty authorization URL.".to_owned());
                 return Vec::new();
@@ -15653,10 +15715,18 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::McpServerAuthenticationCompleted {
+            thread_id,
             name,
             success,
             error,
         } => {
+            if state.marketplace.mcp_auth_scopes.get(&name) != Some(&thread_id)
+                || thread_id
+                    .as_deref()
+                    .is_some_and(|thread_id| state.selected_task_id.as_deref() != Some(thread_id))
+            {
+                return Vec::new();
+            }
             if state
                 .marketplace
                 .pending_mcp_auth_name
@@ -15665,12 +15735,13 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             {
                 state.marketplace.pending_mcp_auth_name = None;
             }
+            state.marketplace.mcp_auth_scopes.remove(&name);
             for server in state
                 .marketplace
                 .mcp_servers
                 .iter_mut()
                 .chain(&mut state.marketplace.plugin_mcp_servers)
-                .filter(|server| server.key == name || server.name == name)
+                .filter(|server| server.key == name)
             {
                 server.authorization_url = None;
             }
@@ -18606,6 +18677,35 @@ mod tests {
         TaskSummary {
             cwd: repository_path(),
             ..task(id)
+        }
+    }
+
+    fn oauth_mcp_server(key: &str) -> McpServerCard {
+        McpServerCard {
+            key: key.to_owned(),
+            name: key.to_owned(),
+            enabled: true,
+            read_only: false,
+            transport: Some(McpTransportKind::StreamableHttp),
+            command: String::new(),
+            args: Vec::new(),
+            env: Vec::new(),
+            env_vars: Vec::new(),
+            cwd: String::new(),
+            url: "https://mcp.example/mcp".to_owned(),
+            bearer_token_env_var: String::new(),
+            http_headers: Vec::new(),
+            env_http_headers: Vec::new(),
+            auth_status: McpAuthStatus::NotLoggedIn,
+            authorization_url: None,
+            startup_state: None,
+            startup_error: None,
+            startup_failure_reason: None,
+            server_info: None,
+            tools: Vec::new(),
+            resources: Vec::new(),
+            resource_templates: Vec::new(),
+            inspection_truncated: false,
         }
     }
 
@@ -28358,12 +28458,14 @@ mod tests {
             ),
             [Effect::AuthenticateMcpServer {
                 name: "calendar".to_owned(),
+                thread_id: Some("task-a".to_owned()),
             }]
         );
         assert!(
             reduce(
                 &mut state,
                 Action::McpServerAuthenticationStarted {
+                    thread_id: Some("task-a".to_owned()),
                     name: "calendar".to_owned(),
                     authorization_url: "https://example.com/oauth".to_owned(),
                 },
@@ -28389,6 +28491,7 @@ mod tests {
             reduce(
                 &mut state,
                 Action::McpServerAuthenticationCompleted {
+                    thread_id: Some("task-a".to_owned()),
                     name: "calendar".to_owned(),
                     success: true,
                     error: None,
@@ -28400,6 +28503,43 @@ mod tests {
             }]
         );
         assert!(state.marketplace.mcp_servers[0].authorization_url.is_none());
+
+        assert!(matches!(
+            reduce(
+                &mut state,
+                Action::AuthenticateMcpServer {
+                    name: "calendar".to_owned(),
+                },
+            )
+            .as_slice(),
+            [Effect::AuthenticateMcpServer { .. }]
+        ));
+        assert!(
+            reduce(
+                &mut state,
+                Action::McpServerAuthenticationStarted {
+                    thread_id: Some("task-a".to_owned()),
+                    name: "calendar".to_owned(),
+                    authorization_url: "   ".to_owned(),
+                },
+            )
+            .is_empty()
+        );
+        assert!(!state.marketplace.mcp_auth_scopes.contains_key("calendar"));
+        let rejected_message = state.status_message.clone();
+        assert!(
+            reduce(
+                &mut state,
+                Action::McpServerAuthenticationCompleted {
+                    thread_id: Some("task-a".to_owned()),
+                    name: "calendar".to_owned(),
+                    success: true,
+                    error: None,
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(state.status_message, rejected_message);
     }
 
     #[test]
@@ -28445,6 +28585,281 @@ mod tests {
             Some(LoadStatus::Loading)
         );
         assert!(state.marketplace.mcp_resource_read.contents.is_empty());
+    }
+
+    #[test]
+    fn stale_mcp_oauth_events_are_ignored_after_task_change() {
+        let mut state = AppState {
+            tasks: vec![task_in_repository("task-a"), task_in_repository("task-b")],
+            ..AppState::default()
+        };
+        state.marketplace.mcp_servers = vec![McpServerCard {
+            key: "github".to_owned(),
+            name: "GitHub".to_owned(),
+            enabled: true,
+            read_only: false,
+            transport: Some(McpTransportKind::StreamableHttp),
+            command: String::new(),
+            args: Vec::new(),
+            env: Vec::new(),
+            env_vars: Vec::new(),
+            cwd: String::new(),
+            url: "https://mcp.github.example/mcp".to_owned(),
+            bearer_token_env_var: String::new(),
+            http_headers: Vec::new(),
+            env_http_headers: Vec::new(),
+            auth_status: McpAuthStatus::NotLoggedIn,
+            authorization_url: None,
+            startup_state: None,
+            startup_error: None,
+            startup_failure_reason: None,
+            server_info: None,
+            tools: Vec::new(),
+            resources: Vec::new(),
+            resource_templates: Vec::new(),
+            inspection_truncated: false,
+        }];
+
+        reduce(&mut state, Action::SelectTask("task-a".to_owned()));
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::AuthenticateMcpServer {
+                    name: "github".to_owned(),
+                },
+            ),
+            [Effect::AuthenticateMcpServer {
+                name: "github".to_owned(),
+                thread_id: Some("task-a".to_owned()),
+            }]
+        );
+        assert_eq!(
+            state.marketplace.pending_mcp_auth_name.as_deref(),
+            Some("github")
+        );
+
+        reduce(&mut state, Action::SelectTask("task-b".to_owned()));
+        assert!(state.marketplace.pending_mcp_auth_name.is_none());
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::AuthenticateMcpServer {
+                    name: "github".to_owned(),
+                },
+            ),
+            [Effect::AuthenticateMcpServer {
+                name: "github".to_owned(),
+                thread_id: Some("task-b".to_owned()),
+            }]
+        );
+        state.marketplace.mcp_servers[0].authorization_url =
+            Some("https://mcp.github.example/task-b".to_owned());
+        state.status_message = Some("task-b status".to_owned());
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::McpServerAuthenticationStarted {
+                    thread_id: None,
+                    name: "github".to_owned(),
+                    authorization_url: "https://mcp.github.example/global".to_owned(),
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.marketplace.pending_mcp_auth_name.as_deref(),
+            Some("github")
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::McpServerAuthenticationStarted {
+                    thread_id: Some("task-a".to_owned()),
+                    name: "github".to_owned(),
+                    authorization_url: "https://mcp.github.example/task-a".to_owned(),
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.marketplace.pending_mcp_auth_name.as_deref(),
+            Some("github")
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::McpServerAuthenticationCompleted {
+                    thread_id: Some("task-a".to_owned()),
+                    name: "github".to_owned(),
+                    success: true,
+                    error: None,
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.marketplace.mcp_servers[0]
+                .authorization_url
+                .as_deref(),
+            Some("https://mcp.github.example/task-b")
+        );
+        assert_eq!(state.status_message.as_deref(), Some("task-b status"));
+    }
+
+    #[test]
+    fn global_mcp_oauth_survives_task_changes_while_scoped_oauth_is_cleared() {
+        let mut state = AppState {
+            tasks: vec![task_in_repository("task-a"), task_in_repository("task-b")],
+            ..AppState::default()
+        };
+        state.marketplace.mcp_servers = vec![oauth_mcp_server("github")];
+        state.marketplace.mcp_servers[0].name = "plugin-github".to_owned();
+        state.marketplace.plugin_mcp_servers = vec![oauth_mcp_server("plugin-github")];
+
+        let assert_global_auth_survives = |state: &AppState| {
+            assert_eq!(state.marketplace.mcp_auth_scopes.get("github"), Some(&None));
+            assert_eq!(
+                state.marketplace.mcp_servers[0]
+                    .authorization_url
+                    .as_deref(),
+                Some("https://mcp.example/global-oauth")
+            );
+        };
+        let assert_scoped_plugin_auth_cleared = |state: &AppState| {
+            assert!(state.marketplace.pending_mcp_auth_name.is_none());
+            assert!(
+                !state
+                    .marketplace
+                    .mcp_auth_scopes
+                    .contains_key("plugin-github")
+            );
+            assert!(
+                state.marketplace.plugin_mcp_servers[0]
+                    .authorization_url
+                    .is_none()
+            );
+        };
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::AuthenticateMcpServer {
+                    name: "github".to_owned(),
+                },
+            ),
+            [Effect::AuthenticateMcpServer {
+                name: "github".to_owned(),
+                thread_id: None,
+            }]
+        );
+        reduce(&mut state, Action::SelectTask("task-a".to_owned()));
+        assert_eq!(
+            state.marketplace.pending_mcp_auth_name.as_deref(),
+            Some("github")
+        );
+        assert_eq!(state.marketplace.mcp_auth_scopes.get("github"), Some(&None));
+        reduce(
+            &mut state,
+            Action::McpServerAuthenticationStarted {
+                thread_id: None,
+                name: "github".to_owned(),
+                authorization_url: "https://mcp.example/global-oauth".to_owned(),
+            },
+        );
+        reduce(&mut state, Action::SelectTask("task-b".to_owned()));
+        assert_global_auth_survives(&state);
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::AuthenticateMcpServer {
+                    name: "plugin-github".to_owned(),
+                },
+            ),
+            [Effect::AuthenticateMcpServer {
+                name: "plugin-github".to_owned(),
+                thread_id: Some("task-b".to_owned()),
+            }]
+        );
+        reduce(
+            &mut state,
+            Action::McpServerAuthenticationStarted {
+                thread_id: Some("task-b".to_owned()),
+                name: "plugin-github".to_owned(),
+                authorization_url: "https://mcp.example/task-b-oauth".to_owned(),
+            },
+        );
+        assert_global_auth_survives(&state);
+        assert_eq!(
+            state.marketplace.mcp_auth_scopes.get("plugin-github"),
+            Some(&Some("task-b".to_owned()))
+        );
+
+        reduce(&mut state, Action::SelectTask("task-a".to_owned()));
+        assert_global_auth_survives(&state);
+        assert_scoped_plugin_auth_cleared(&state);
+
+        reduce(
+            &mut state,
+            Action::AuthenticateMcpServer {
+                name: "plugin-github".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::McpServerAuthenticationStarted {
+                thread_id: Some("task-a".to_owned()),
+                name: "plugin-github".to_owned(),
+                authorization_url: "https://mcp.example/task-a-oauth".to_owned(),
+            },
+        );
+        reduce(&mut state, Action::BeginNewChat);
+        assert_eq!(state.selected_task_id, None);
+        assert_global_auth_survives(&state);
+        assert_scoped_plugin_auth_cleared(&state);
+
+        reduce(&mut state, Action::SelectTask("task-a".to_owned()));
+        reduce(
+            &mut state,
+            Action::AuthenticateMcpServer {
+                name: "plugin-github".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::McpServerAuthenticationStarted {
+                thread_id: Some("task-a".to_owned()),
+                name: "plugin-github".to_owned(),
+                authorization_url: "https://mcp.example/task-a-oauth".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::TaskCreated(task_in_repository("task-b")),
+        );
+        assert_eq!(state.selected_task_id.as_deref(), Some("task-b"));
+        assert_global_auth_survives(&state);
+        assert_scoped_plugin_auth_cleared(&state);
+
+        reduce(
+            &mut state,
+            Action::AuthenticateMcpServer {
+                name: "plugin-github".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::McpServerAuthenticationStarted {
+                thread_id: Some("task-b".to_owned()),
+                name: "plugin-github".to_owned(),
+                authorization_url: "https://mcp.example/task-b-oauth".to_owned(),
+            },
+        );
+        reduce(&mut state, Action::TaskArchived("task-b".to_owned()));
+        assert_eq!(state.selected_task_id, None);
+        assert_global_auth_survives(&state);
+        assert_scoped_plugin_auth_cleared(&state);
     }
 
     #[test]

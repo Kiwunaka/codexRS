@@ -1274,6 +1274,18 @@ fn is_supported_external_url(url: &str) -> bool {
             })
 }
 
+fn mcp_authentication_start_is_accepted(
+    name: &str,
+    pending_name: Option<&str>,
+    stored_scope: Option<Option<&str>>,
+    thread_id: Option<&str>,
+    selected_task_id: Option<&str>,
+) -> bool {
+    pending_name == Some(name)
+        && stored_scope == Some(thread_id)
+        && thread_id.is_none_or(|thread_id| selected_task_id == Some(thread_id))
+}
+
 fn selected_approval_request(state: &AppState) -> Option<&ApprovalRequest> {
     let task_id = state.selected_task_id.as_deref()?;
     state
@@ -7096,7 +7108,21 @@ impl WorkspaceView {
                 Action::McpServerAuthenticationStarted {
                     name,
                     authorization_url,
-                } => Some((name.clone(), authorization_url.clone())),
+                    thread_id,
+                } if mcp_authentication_start_is_accepted(
+                    name,
+                    self.state.marketplace.pending_mcp_auth_name.as_deref(),
+                    self.state
+                        .marketplace
+                        .mcp_auth_scopes
+                        .get(name)
+                        .map(|scope| scope.as_deref()),
+                    thread_id.as_deref(),
+                    self.state.selected_task_id.as_deref(),
+                ) =>
+                {
+                    Some((name.clone(), authorization_url.clone(), thread_id.clone()))
+                }
                 _ => None,
             };
             let account_authentication = match &action {
@@ -7263,12 +7289,13 @@ impl WorkspaceView {
             if let Some(authorization_url) = account_authentication {
                 self.open_account_login_url(&authorization_url, cx);
             }
-            if let Some((name, authorization_url)) = mcp_authentication {
+            if let Some((name, authorization_url, thread_id)) = mcp_authentication {
                 if is_supported_external_url(&authorization_url) {
                     cx.open_url(&authorization_url);
                 } else {
                     self.dispatch(
                         Action::McpServerAuthenticationCompleted {
+                            thread_id,
                             name,
                             success: false,
                             error: Some(
@@ -45591,10 +45618,10 @@ mod tests {
         is_supported_external_url, is_supported_plugin_logo_url, is_terminal_shortcut_key,
         keyboard_shortcut_search_matches, keyboard_shortcut_settings_matches,
         keyboard_shortcut_stable_order, linked_pull_request_merge_command_enabled,
-        mcp_auth_status_label, modal_surface_max_height, modal_surface_width,
-        model_availability_nux_candidate, model_upgrade_learn_more_visible, normalized_accelerator,
-        output_artifact_type_label, parse_appearance_theme_share_string, parse_mcp_list,
-        parse_mcp_record, parse_unified_diff, plugin_logo_format,
+        mcp_auth_status_label, mcp_authentication_start_is_accepted, modal_surface_max_height,
+        modal_surface_width, model_availability_nux_candidate, model_upgrade_learn_more_visible,
+        normalized_accelerator, output_artifact_type_label, parse_appearance_theme_share_string,
+        parse_mcp_list, parse_mcp_record, parse_unified_diff, plugin_logo_format,
         process_manager_auto_refresh_allowed, project_trigger_matches, project_workspace_options,
         pull_request_merge_submission_enabled, reasoning_effort_target, reduced_motion_enabled,
         remote_control_status_label, render_conversation_markdown, replace_composer_file_query,
@@ -48853,6 +48880,45 @@ mod tests {
         ));
         assert!(!is_supported_external_url("javascript:alert(1)"));
         assert!(!is_supported_external_url("file:///tmp/app.html"));
+    }
+
+    #[test]
+    fn mcp_authentication_side_effect_requires_pending_current_start() {
+        assert!(mcp_authentication_start_is_accepted(
+            "github",
+            Some("github"),
+            Some(Some("task-a")),
+            Some("task-a"),
+            Some("task-a")
+        ));
+        assert!(!mcp_authentication_start_is_accepted(
+            "github",
+            Some("github"),
+            Some(Some("task-a")),
+            Some("task-a"),
+            Some("task-b")
+        ));
+        assert!(!mcp_authentication_start_is_accepted(
+            "github",
+            Some("calendar"),
+            Some(None),
+            None,
+            Some("task-b")
+        ));
+        assert!(mcp_authentication_start_is_accepted(
+            "github",
+            Some("github"),
+            Some(None),
+            None,
+            Some("task-b")
+        ));
+        assert!(!mcp_authentication_start_is_accepted(
+            "github",
+            Some("github"),
+            Some(None),
+            Some("task-b"),
+            Some("task-b")
+        ));
     }
 
     #[test]

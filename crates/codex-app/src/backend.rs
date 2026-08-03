@@ -8441,16 +8441,17 @@ fn run_effect(
                 ),
             }
         }
-        Effect::AuthenticateMcpServer { name } => {
+        Effect::AuthenticateMcpServer { name, thread_id } => {
             match app_server.login_mcp_server(McpServerOauthLoginParams {
                 name: name.clone(),
-                thread_id: None,
+                thread_id: thread_id.clone(),
                 scopes: None,
                 timeout_secs: None,
             }) {
                 Ok(response) => emit(
                     events,
                     Action::McpServerAuthenticationStarted {
+                        thread_id,
                         name,
                         authorization_url: response.authorization_url,
                     },
@@ -8458,6 +8459,7 @@ fn run_effect(
                 Err(error) => emit(
                     events,
                     Action::McpServerAuthenticationCompleted {
+                        thread_id,
                         name,
                         success: false,
                         error: Some(format!(
@@ -12955,6 +12957,7 @@ fn handle_notification(method: &str, params: Value, events: &dyn ActionEmitter) 
                 emit(
                     events,
                     Action::McpServerAuthenticationCompleted {
+                        thread_id: notification.thread_id,
                         name: notification.name,
                         success: notification.success,
                         error: notification
@@ -20904,7 +20907,7 @@ mod tests {
             "mcpServer/oauthLogin/completed",
             json!({
                 "name": "calendar",
-                "threadId": null,
+                "threadId": "thread-1",
                 "success": false,
                 "error": "provider token=secret"
             }),
@@ -20916,10 +20919,12 @@ mod tests {
         assert!(matches!(
             action,
             Action::McpServerAuthenticationCompleted {
+                thread_id: Some(thread_id),
                 name,
                 success: false,
                 error: Some(error),
-            } if name == "calendar"
+            } if thread_id == "thread-1"
+                && name == "calendar"
                 && error == "MCP server authentication failed. Try again."
         ));
     }
