@@ -16409,6 +16409,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             let previous_repository_root = state.git.repository_root.clone();
             let previous_scope = state.git.selected_scope;
+            let previous_selected_path = state.git.selected_path.clone();
             let previous_commit_sha = state.git.selected_commit_sha.clone();
             let previous_review_base = state.git.selected_review_base.clone();
             let previous_diff_generation = state.git.diff_generation;
@@ -16460,10 +16461,37 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     }
                     GitDiffScope::Unstaged | GitDiffScope::Staged => {
                         state.git.selected_scope = previous_scope;
-                        state.git.selected_path = None;
+                        state.git.selected_path = previous_selected_path.filter(|path| {
+                            previous_repository_root == state.git.repository_root
+                                && state.git.files.iter().any(|file| {
+                                    file.path == *path
+                                        && if previous_scope == GitDiffScope::Staged {
+                                            file.staged
+                                        } else {
+                                            file.unstaged
+                                        }
+                                })
+                        });
                         state.git.unified_diff.clear();
                         state.git.diff_generation = next_diff_generation;
-                        state.git.diff_status = None;
+                        state.git.diff_status = state
+                            .git
+                            .selected_path
+                            .as_ref()
+                            .map(|_| LoadStatus::Loading);
+                        if let Some((root, path)) = state
+                            .git
+                            .repository_root
+                            .clone()
+                            .zip(state.git.selected_path.clone())
+                        {
+                            effects.push(Effect::LoadDiff {
+                                generation: next_diff_generation,
+                                root,
+                                path,
+                                staged: previous_scope == GitDiffScope::Staged,
+                            });
+                        }
                     }
                     GitDiffScope::LastTurn => {}
                 }
@@ -24443,6 +24471,60 @@ mod tests {
                 root: PathBuf::from("C:\\repo"),
             }]
         );
+    }
+
+    #[test]
+    fn git_refresh_preserves_a_selected_file_in_the_same_scope() {
+        let root = PathBuf::from("C:\\repo");
+        let path = PathBuf::from("src\\lib.rs");
+        let mut state = AppState {
+            git: GitState {
+                refresh_generation: 7,
+                repository_root: Some(root.clone()),
+                selected_scope: GitDiffScope::Unstaged,
+                selected_path: Some(path.clone()),
+                unified_diff: "old patch".to_owned(),
+                diff_generation: 3,
+                diff_status: Some(LoadStatus::Ready),
+                ..GitState::default()
+            },
+            ..AppState::default()
+        };
+        let refreshed = GitState {
+            repository_root: Some(root.clone()),
+            files: vec![super::GitFileState {
+                path: path.clone(),
+                old_path: None,
+                kind: super::GitFileKind::Modified,
+                staged: false,
+                unstaged: true,
+                staged_additions: 0,
+                staged_deletions: 0,
+                unstaged_additions: 1,
+                unstaged_deletions: 0,
+            }],
+            ..GitState::default()
+        };
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::GitSnapshotLoaded {
+                    generation: 7,
+                    git: Box::new(refreshed),
+                    error: None,
+                },
+            ),
+            [Effect::LoadDiff {
+                generation: 4,
+                root,
+                path: path.clone(),
+                staged: false,
+            }]
+        );
+        assert_eq!(state.git.selected_path.as_ref(), Some(&path));
+        assert_eq!(state.git.diff_status, Some(LoadStatus::Loading));
+        assert!(state.git.unified_diff.is_empty());
     }
 
     #[test]
