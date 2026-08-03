@@ -199,7 +199,14 @@ impl TerminalSession {
             .spawn_command(command)
             .map_err(|_| TerminalError::Spawn)?;
         let process_id = child.process_id();
-        let job = create_terminal_job(child.as_ref())?;
+        let job = match create_terminal_job(child.as_ref()) {
+            Ok(job) => job,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+        };
         drop(pair.slave);
 
         let (command_sender, command_receiver) =
