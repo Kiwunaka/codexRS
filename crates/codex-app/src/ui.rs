@@ -295,6 +295,19 @@ fn repository_uses_split_diff(preference: bool, width_class: Option<ShellWidthCl
     preference && width_class == Some(ShellWidthClass::Wide)
 }
 
+fn repository_file_scopes(files: &[codex_core::GitFileState]) -> Vec<(usize, GitDiffScope)> {
+    let mut scopes = Vec::with_capacity(files.len().saturating_mul(2));
+    for (index, file) in files.iter().enumerate() {
+        if file.unstaged {
+            scopes.push((index, GitDiffScope::Unstaged));
+        }
+        if file.staged {
+            scopes.push((index, GitDiffScope::Staged));
+        }
+    }
+    scopes
+}
+
 fn modal_surface_width(viewport_width: f32, preferred_width: f32) -> f32 {
     preferred_width.min((viewport_width * MODAL_MAX_VIEWPORT_WIDTH_RATIO).max(0.0))
 }
@@ -15267,7 +15280,9 @@ impl WorkspaceView {
 
     fn render_repository(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let repository_root = self.state.git.repository_root.clone();
-        let file_count = self.state.git.files.len();
+        let file_scopes = Rc::new(repository_file_scopes(&self.state.git.files));
+        let file_count = file_scopes.len();
+        let file_scopes_for_list = Rc::clone(&file_scopes);
         let branch_count = self.state.git.branches.len();
         let worktree_count = self.state.git.worktrees.len();
         let branch_list_height = (branch_count.clamp(1, 4) as f32) * 42.0;
@@ -15457,9 +15472,14 @@ impl WorkspaceView {
                                 uniform_list(
                                     "repository-files",
                                     file_count,
-                                    cx.processor(|this, range: Range<usize>, _, cx| {
+                                    cx.processor(move |this, range: Range<usize>, _, cx| {
                                         range
-                                            .map(|index| this.render_git_file(index, cx))
+                                            .filter_map(|position| {
+                                                file_scopes_for_list.get(position).copied()
+                                            })
+                                            .map(|(index, scope)| {
+                                                this.render_scoped_git_file(index, scope, cx)
+                                            })
                                             .collect()
                                     }),
                                 )
@@ -24692,18 +24712,6 @@ impl WorkspaceView {
             .into_any_element()
     }
 
-    fn render_git_file(&mut self, index: usize, cx: &mut Context<Self>) -> AnyElement {
-        let Some(file) = self.state.git.files.get(index).cloned() else {
-            return div().into_any_element();
-        };
-        let scope = if file.unstaged {
-            GitDiffScope::Unstaged
-        } else {
-            GitDiffScope::Staged
-        };
-        self.render_git_file_row(index, file, scope, cx)
-    }
-
     fn render_scoped_git_file(
         &mut self,
         index: usize,
@@ -24728,11 +24736,13 @@ impl WorkspaceView {
         let path = file.path.clone();
         let label = file.path.display().to_string();
         let status = git_file_status(file.kind);
-        let flags = match (file.staged, file.unstaged) {
-            (true, true) => "index + tree",
-            (true, false) => "staged",
-            (false, true) => "working tree",
-            (false, false) => "",
+        let flags = match scope {
+            GitDiffScope::Unstaged => "working tree",
+            GitDiffScope::Staged => "staged",
+            GitDiffScope::LastTurn
+            | GitDiffScope::Uncommitted
+            | GitDiffScope::Committed
+            | GitDiffScope::Branch => "",
         };
         let (additions, deletions) = match scope {
             GitDiffScope::LastTurn
@@ -45831,7 +45841,7 @@ mod tests {
         process_manager_auto_refresh_allowed, project_trigger_matches, project_workspace_options,
         pull_request_merge_submission_enabled, reasoning_effort_target, reduced_motion_enabled,
         remote_control_status_label, render_conversation_markdown, replace_composer_file_query,
-        repository_uses_split_diff, reserve_thread_find_history_page,
+        repository_file_scopes, repository_uses_split_diff, reserve_thread_find_history_page,
         right_panels_hide_for_width_transition, right_panels_restore_for_width_class,
         sanitize_assistant_markdown, selected_approval_request, selected_model_upgrade_notice,
         selected_task_copy_value, settings_section_matches, settings_section_refreshes_account,
@@ -45847,12 +45857,13 @@ mod tests {
         AccountAuthOperation, AccountDailyUsageBucket, AccountKind, AccountProfile, AccountState,
         AppCard, AppState, AppearancePalette, AppearanceVariant, ApprovalContext, ApprovalKind,
         ApprovalRequest, ComposerAttachment, ComposerAttachmentKind, ComputerApplicationState,
-        ConnectionStatus, GitPullRequestState, GitWorktreeState, InstalledAppRuntime,
-        IntegratedTerminalShell, KEYBOARD_SHORTCUT_COMMAND_IDS, LoadStatus,
-        MAX_PENDING_WORKTREE_FORKS, MainRoute, McpAuthStatus, ModelOption, ModelUpgradeNotice,
-        PendingWorktreeFork, PendingWorktreeForkPhase, PluginCard, ProcessManagerState,
-        PullRequestCiStatus, PullRequestDetail, PullRequestIdentity, PullRequestMutationKind,
-        PullRequestState, PullRequestSummary, ReasoningEffortOption, ReducedMotionPreference,
+        ConnectionStatus, GitDiffScope, GitFileKind, GitFileState, GitPullRequestState,
+        GitWorktreeState, InstalledAppRuntime, IntegratedTerminalShell,
+        KEYBOARD_SHORTCUT_COMMAND_IDS, LoadStatus, MAX_PENDING_WORKTREE_FORKS, MainRoute,
+        McpAuthStatus, ModelOption, ModelUpgradeNotice, PendingWorktreeFork,
+        PendingWorktreeForkPhase, PluginCard, ProcessManagerState, PullRequestCiStatus,
+        PullRequestDetail, PullRequestIdentity, PullRequestMutationKind, PullRequestState,
+        PullRequestSummary, ReasoningEffortOption, ReducedMotionPreference,
         RemoteControlRuntimeStatus, ServiceTierOption, SkillCard, SkillScope, TaskRunStatus,
         TaskSummary, TerminalDockLocation, TerminalTabState, TimelineItem, TimelineKind,
         TurnDiffState,
@@ -48109,6 +48120,31 @@ mod tests {
             Some(ShellWidthClass::Narrow)
         ));
         assert!(!repository_uses_split_diff(true, None));
+    }
+
+    #[test]
+    fn repository_file_scopes_expose_each_available_file_scope() {
+        let file = |staged, unstaged| GitFileState {
+            path: PathBuf::from("src/lib.rs"),
+            old_path: None,
+            kind: GitFileKind::Modified,
+            staged,
+            unstaged,
+            staged_additions: 0,
+            staged_deletions: 0,
+            unstaged_additions: 0,
+            unstaged_deletions: 0,
+        };
+
+        assert_eq!(
+            repository_file_scopes(&[file(true, true), file(false, true), file(true, false)]),
+            [
+                (0, GitDiffScope::Unstaged),
+                (0, GitDiffScope::Staged),
+                (1, GitDiffScope::Unstaged),
+                (2, GitDiffScope::Staged),
+            ]
+        );
     }
 
     #[test]
