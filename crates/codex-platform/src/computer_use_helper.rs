@@ -8,6 +8,8 @@ use crate::computer_apps::{
     ComputerLaunchTarget, discover_windows_computer_apps, explicit_executable_launch_target,
 };
 #[cfg(windows)]
+use crate::computer_use::computer_window_app_id_matches;
+#[cfg(windows)]
 use crate::inspect_computer_window;
 use crate::{
     ComputerApplication, ComputerButton, ComputerCapture, MAX_COMPUTER_APPLICATIONS,
@@ -62,6 +64,7 @@ pub enum ComputerAccessibilityError {
     TimedOut,
     Protocol,
     WindowUnavailable,
+    WindowAppChanged,
     StaleElement,
     StaleScreenshot,
     BrowserUrlUnavailable,
@@ -85,6 +88,9 @@ impl fmt::Display for ComputerAccessibilityError {
             Self::TimedOut => "the Computer Use helper timed out and was stopped",
             Self::Protocol => "the Computer Use helper returned an invalid bounded response",
             Self::WindowUnavailable => "the selected window is unavailable to accessibility APIs",
+            Self::WindowAppChanged => {
+                "the selected window no longer belongs to the approved application"
+            }
             Self::StaleElement => {
                 "the accessibility element index is stale; call get_window_state with include_text first"
             }
@@ -127,6 +133,8 @@ struct HelperRequest {
     action: Option<String>,
     #[serde(default)]
     app_id: Option<String>,
+    #[serde(default)]
+    expected_application_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -151,6 +159,7 @@ struct HelperResponse {
 enum HelperErrorCode {
     InvalidInput,
     WindowUnavailable,
+    WindowAppChanged,
     StaleElement,
     BrowserUrlUnavailable,
     AppNotFound,
@@ -164,6 +173,7 @@ impl From<HelperErrorCode> for ComputerAccessibilityError {
         match value {
             HelperErrorCode::InvalidInput => Self::InvalidInput,
             HelperErrorCode::WindowUnavailable => Self::WindowUnavailable,
+            HelperErrorCode::WindowAppChanged => Self::WindowAppChanged,
             HelperErrorCode::StaleElement => Self::StaleElement,
             HelperErrorCode::BrowserUrlUnavailable => Self::BrowserUrlUnavailable,
             HelperErrorCode::AppNotFound => Self::AppNotFound,
@@ -308,6 +318,7 @@ impl ComputerUseAccessibilityClient {
             None,
             None,
             None,
+            None,
         )?;
         let state = response.state.ok_or(ComputerAccessibilityError::Protocol)?;
         self.clear_user_input(window_id);
@@ -324,13 +335,18 @@ impl ComputerUseAccessibilityClient {
             None,
             None,
             None,
+            None,
         )?;
         response
             .browser_url
             .ok_or(ComputerAccessibilityError::Protocol)
     }
 
-    pub fn activate_window(&mut self, window_id: &str) -> Result<(), ComputerAccessibilityError> {
+    pub fn activate_window(
+        &mut self,
+        window_id: &str,
+        expected_application_id: &str,
+    ) -> Result<(), ComputerAccessibilityError> {
         self.request(
             "activate_window",
             Some(window_id),
@@ -340,6 +356,7 @@ impl ComputerUseAccessibilityClient {
             None,
             None,
             None,
+            Some(expected_application_id),
         )
         .map(|_| ())
     }
@@ -347,6 +364,7 @@ impl ComputerUseAccessibilityClient {
     pub fn click_element(
         &mut self,
         window_id: &str,
+        expected_application_id: &str,
         element_index: usize,
         mouse_button: ComputerButton,
         click_count: u8,
@@ -363,6 +381,7 @@ impl ComputerUseAccessibilityClient {
             None,
             None,
             None,
+            Some(expected_application_id),
         )
         .map(|_| ())
     }
@@ -370,6 +389,7 @@ impl ComputerUseAccessibilityClient {
     pub fn set_value(
         &mut self,
         window_id: &str,
+        expected_application_id: &str,
         element_index: usize,
         value: &str,
     ) -> Result<(), ComputerAccessibilityError> {
@@ -385,6 +405,7 @@ impl ComputerUseAccessibilityClient {
             Some(value),
             None,
             None,
+            Some(expected_application_id),
         )
         .map(|_| ())
     }
@@ -392,6 +413,7 @@ impl ComputerUseAccessibilityClient {
     pub fn perform_secondary_action(
         &mut self,
         window_id: &str,
+        expected_application_id: &str,
         element_index: usize,
         action: &str,
     ) -> Result<(), ComputerAccessibilityError> {
@@ -407,6 +429,7 @@ impl ComputerUseAccessibilityClient {
             None,
             Some(action),
             None,
+            Some(expected_application_id),
         )
         .map(|_| ())
     }
@@ -414,7 +437,7 @@ impl ComputerUseAccessibilityClient {
     pub fn list_apps(&mut self) -> Result<Vec<ComputerApplication>, ComputerAccessibilityError> {
         #[cfg(windows)]
         let applications = self
-            .request("list_apps", None, None, None, None, None, None, None)?
+            .request("list_apps", None, None, None, None, None, None, None, None)?
             .applications
             .ok_or(ComputerAccessibilityError::Protocol)?;
 
@@ -474,6 +497,7 @@ impl ComputerUseAccessibilityClient {
             None,
             None,
             Some(app_id),
+            None,
         )?
         .launch_target
         .ok_or(ComputerAccessibilityError::Protocol)
@@ -490,11 +514,15 @@ impl ComputerUseAccessibilityClient {
         value: Option<&str>,
         action: Option<&str>,
         app_id: Option<&str>,
+        expected_application_id: Option<&str>,
     ) -> Result<HelperResponse, ComputerAccessibilityError> {
         if window_id.is_some_and(|id| id.is_empty() || id.len() > MAX_ELEMENT_TEXT_BYTES) {
             return Err(ComputerAccessibilityError::InvalidInput);
         }
         if app_id.is_some_and(|id| id.trim().is_empty() || id.len() > 32 * 1024) {
+            return Err(ComputerAccessibilityError::InvalidInput);
+        }
+        if expected_application_id.is_some_and(|id| id.trim().is_empty() || id.len() > 32 * 1024) {
             return Err(ComputerAccessibilityError::InvalidInput);
         }
         let id = self.next_request_id;
@@ -509,6 +537,7 @@ impl ComputerUseAccessibilityClient {
             value: value.map(str::to_owned),
             action: action.map(str::to_owned),
             app_id: app_id.map(str::to_owned),
+            expected_application_id: expected_application_id.map(str::to_owned),
         };
 
         #[cfg(windows)]
@@ -1005,6 +1034,10 @@ impl WindowsAccessibilitySession {
                         .window_id
                         .as_deref()
                         .ok_or(HelperErrorCode::InvalidInput)?,
+                    request
+                        .expected_application_id
+                        .as_deref()
+                        .ok_or(HelperErrorCode::InvalidInput)?,
                 )?;
                 Ok(HelperPayload::Empty)
             }
@@ -1015,6 +1048,10 @@ impl WindowsAccessibilitySession {
                     .ok_or(HelperErrorCode::InvalidInput)?;
                 self.click_element(
                     window_id,
+                    request
+                        .expected_application_id
+                        .as_deref()
+                        .ok_or(HelperErrorCode::InvalidInput)?,
                     request.element_index.ok_or(HelperErrorCode::InvalidInput)?,
                     request.mouse_button.unwrap_or(ComputerButton::Left),
                     request.click_count.unwrap_or(1),
@@ -1028,6 +1065,10 @@ impl WindowsAccessibilitySession {
                     .ok_or(HelperErrorCode::InvalidInput)?;
                 self.set_value(
                     window_id,
+                    request
+                        .expected_application_id
+                        .as_deref()
+                        .ok_or(HelperErrorCode::InvalidInput)?,
                     request.element_index.ok_or(HelperErrorCode::InvalidInput)?,
                     request
                         .value
@@ -1043,6 +1084,10 @@ impl WindowsAccessibilitySession {
                     .ok_or(HelperErrorCode::InvalidInput)?;
                 self.perform_secondary_action(
                     window_id,
+                    request
+                        .expected_application_id
+                        .as_deref()
+                        .ok_or(HelperErrorCode::InvalidInput)?,
                     request.element_index.ok_or(HelperErrorCode::InvalidInput)?,
                     request
                         .action
@@ -1231,10 +1276,14 @@ impl WindowsAccessibilitySession {
         candidate.finish()
     }
 
-    fn activate_window(&self, window_id: &str) -> Result<(), HelperErrorCode> {
+    fn activate_window(
+        &self,
+        window_id: &str,
+        expected_application_id: &str,
+    ) -> Result<(), HelperErrorCode> {
         use winsafe::{self as w, prelude::*};
 
-        self.ensure_window_allowed(window_id)?;
+        self.ensure_input_window(window_id, expected_application_id)?;
         // Window handles are opaque and can be recycled. Rehydrate only from the
         // current bounded top-level window set instead of constructing an HWND
         // from the caller-provided number.
@@ -1308,9 +1357,10 @@ impl WindowsAccessibilitySession {
     fn cached_element(
         &self,
         window_id: &str,
+        expected_application_id: &str,
         element_index: usize,
     ) -> Result<&uiautomation::UIElement, HelperErrorCode> {
-        self.ensure_window_allowed(window_id)?;
+        self.ensure_input_window(window_id, expected_application_id)?;
         if self.cached_window_id.as_deref() != Some(window_id) {
             return Err(HelperErrorCode::StaleElement);
         }
@@ -1329,9 +1379,26 @@ impl WindowsAccessibilitySession {
         }
     }
 
+    fn ensure_input_window(
+        &self,
+        window_id: &str,
+        expected_application_id: &str,
+    ) -> Result<(), HelperErrorCode> {
+        let window =
+            inspect_computer_window(window_id).map_err(|_| HelperErrorCode::WindowUnavailable)?;
+        if computer_use_target_is_forbidden(&window.application_id, &window.application) {
+            Err(HelperErrorCode::ForbiddenTarget)
+        } else if computer_window_app_id_matches(expected_application_id, &window.application_id) {
+            Ok(())
+        } else {
+            Err(HelperErrorCode::WindowAppChanged)
+        }
+    }
+
     fn click_element(
         &self,
         window_id: &str,
+        expected_application_id: &str,
         element_index: usize,
         button: ComputerButton,
         click_count: u8,
@@ -1342,7 +1409,7 @@ impl WindowsAccessibilitySession {
         if click_count == 0 || click_count > 3 {
             return Err(HelperErrorCode::InvalidInput);
         }
-        let element = self.cached_element(window_id, element_index)?;
+        let element = self.cached_element(window_id, expected_application_id, element_index)?;
         let point = element
             .get_clickable_point()
             .ok()
@@ -1380,6 +1447,7 @@ impl WindowsAccessibilitySession {
     fn set_value(
         &self,
         window_id: &str,
+        expected_application_id: &str,
         element_index: usize,
         value: &str,
     ) -> Result<(), HelperErrorCode> {
@@ -1388,7 +1456,7 @@ impl WindowsAccessibilitySession {
         if value.len() > MAX_DOCUMENT_TEXT_BYTES {
             return Err(HelperErrorCode::InvalidInput);
         }
-        let element = self.cached_element(window_id, element_index)?;
+        let element = self.cached_element(window_id, expected_application_id, element_index)?;
         if element.is_password().unwrap_or(false) {
             return Err(HelperErrorCode::ActionRejected);
         }
@@ -1401,13 +1469,14 @@ impl WindowsAccessibilitySession {
     fn perform_secondary_action(
         &self,
         window_id: &str,
+        expected_application_id: &str,
         element_index: usize,
         action: &str,
     ) -> Result<(), HelperErrorCode> {
         use uiautomation::patterns::{UIExpandCollapsePattern, UIInvokePattern};
         use uiautomation::types::ScrollAmount;
 
-        let element = self.cached_element(window_id, element_index)?;
+        let element = self.cached_element(window_id, expected_application_id, element_index)?;
         match action.trim().to_ascii_lowercase().as_str() {
             "raise" | "focus" => element
                 .set_focus()

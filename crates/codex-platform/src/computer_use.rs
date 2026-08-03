@@ -400,6 +400,7 @@ pub enum ComputerUseError {
     Unsupported,
     Enumerate,
     WindowNotFound,
+    WindowAppChanged,
     WindowUnavailable,
     WindowNotFocused,
     CoordinateOutsideWindow,
@@ -416,6 +417,9 @@ impl fmt::Display for ComputerUseError {
             Self::Unsupported => "Computer Use is not supported on this platform",
             Self::Enumerate => "could not enumerate desktop windows",
             Self::WindowNotFound => "the selected window is no longer available",
+            Self::WindowAppChanged => {
+                "the selected window no longer belongs to the approved application"
+            }
             Self::WindowUnavailable => "the selected window is minimized or has no visible area",
             Self::WindowNotFocused => "the selected window must be focused before keyboard input",
             Self::CoordinateOutsideWindow => {
@@ -508,8 +512,13 @@ pub fn capture_computer_window(_id: &str) -> Result<ComputerCapture, ComputerUse
 }
 
 #[cfg(any(windows, target_os = "linux"))]
-pub fn move_over_computer_window(id: &str, x: i32, y: i32) -> Result<(), ComputerUseError> {
-    let window = inspect_computer_window(id)?;
+pub fn move_over_computer_window(
+    id: &str,
+    expected_application_id: &str,
+    x: i32,
+    y: i32,
+) -> Result<(), ComputerUseError> {
+    let window = inspect_input_window(id, expected_application_id)?;
     let (screen_x, screen_y) = relative_to_screen(&window, x, y)?;
     let mut enigo = input_connection()?;
     enigo
@@ -518,13 +527,19 @@ pub fn move_over_computer_window(id: &str, x: i32, y: i32) -> Result<(), Compute
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
-pub fn move_over_computer_window(_id: &str, _x: i32, _y: i32) -> Result<(), ComputerUseError> {
+pub fn move_over_computer_window(
+    _id: &str,
+    _expected_application_id: &str,
+    _x: i32,
+    _y: i32,
+) -> Result<(), ComputerUseError> {
     Err(ComputerUseError::Unsupported)
 }
 
 #[cfg(any(windows, target_os = "linux"))]
 pub fn click_computer_window(
     id: &str,
+    expected_application_id: &str,
     x: i32,
     y: i32,
     button: ComputerButton,
@@ -533,7 +548,7 @@ pub fn click_computer_window(
     if !(1..=3).contains(&clicks) {
         return Err(ComputerUseError::InvalidInput);
     }
-    let window = inspect_computer_window(id)?;
+    let window = inspect_input_window(id, expected_application_id)?;
     let (screen_x, screen_y) = relative_to_screen(&window, x, y)?;
     let mut enigo = input_connection()?;
     enigo
@@ -555,6 +570,7 @@ pub fn click_computer_window(
 #[cfg(not(any(windows, target_os = "linux")))]
 pub fn click_computer_window(
     _id: &str,
+    _expected_application_id: &str,
     _x: i32,
     _y: i32,
     _button: ComputerButton,
@@ -566,12 +582,13 @@ pub fn click_computer_window(
 #[cfg(any(windows, target_os = "linux"))]
 pub fn drag_computer_window(
     id: &str,
+    expected_application_id: &str,
     from_x: i32,
     from_y: i32,
     to_x: i32,
     to_y: i32,
 ) -> Result<(), ComputerUseError> {
-    let window = inspect_computer_window(id)?;
+    let window = inspect_input_window(id, expected_application_id)?;
     let (from_screen_x, from_screen_y) = relative_to_screen(&window, from_x, from_y)?;
     let (to_screen_x, to_screen_y) = relative_to_screen(&window, to_x, to_y)?;
     let mut enigo = input_connection()?;
@@ -591,6 +608,7 @@ pub fn drag_computer_window(
 #[cfg(not(any(windows, target_os = "linux")))]
 pub fn drag_computer_window(
     _id: &str,
+    _expected_application_id: &str,
     _from_x: i32,
     _from_y: i32,
     _to_x: i32,
@@ -602,6 +620,7 @@ pub fn drag_computer_window(
 #[cfg(any(windows, target_os = "linux"))]
 pub fn scroll_computer_window(
     id: &str,
+    expected_application_id: &str,
     x: i32,
     y: i32,
     delta_x: i32,
@@ -613,7 +632,7 @@ pub fn scroll_computer_window(
     {
         return Err(ComputerUseError::InvalidInput);
     }
-    let window = inspect_computer_window(id)?;
+    let window = inspect_input_window(id, expected_application_id)?;
     let (screen_x, screen_y) = relative_to_screen(&window, x, y)?;
     let mut enigo = input_connection()?;
     enigo
@@ -635,6 +654,7 @@ pub fn scroll_computer_window(
 #[cfg(not(any(windows, target_os = "linux")))]
 pub fn scroll_computer_window(
     _id: &str,
+    _expected_application_id: &str,
     _x: i32,
     _y: i32,
     _delta_x: i32,
@@ -644,11 +664,15 @@ pub fn scroll_computer_window(
 }
 
 #[cfg(any(windows, target_os = "linux"))]
-pub fn type_into_computer_window(id: &str, text: &str) -> Result<(), ComputerUseError> {
+pub fn type_into_computer_window(
+    id: &str,
+    expected_application_id: &str,
+    text: &str,
+) -> Result<(), ComputerUseError> {
     if text.len() > MAX_COMPUTER_TEXT_BYTES {
         return Err(ComputerUseError::InvalidInput);
     }
-    require_focused(id)?;
+    require_focused(id, expected_application_id)?;
     if text.is_empty() {
         return Ok(());
     }
@@ -658,13 +682,18 @@ pub fn type_into_computer_window(id: &str, text: &str) -> Result<(), ComputerUse
 }
 
 #[cfg(not(any(windows, target_os = "linux")))]
-pub fn type_into_computer_window(_id: &str, _text: &str) -> Result<(), ComputerUseError> {
+pub fn type_into_computer_window(
+    _id: &str,
+    _expected_application_id: &str,
+    _text: &str,
+) -> Result<(), ComputerUseError> {
     Err(ComputerUseError::Unsupported)
 }
 
 #[cfg(any(windows, target_os = "linux"))]
 pub fn press_computer_key(
     id: &str,
+    expected_application_id: &str,
     key: ComputerKey,
     modifiers: &[ComputerKey],
 ) -> Result<(), ComputerUseError> {
@@ -678,7 +707,7 @@ pub fn press_computer_key(
     {
         return Err(ComputerUseError::InvalidInput);
     }
-    require_focused(id)?;
+    require_focused(id, expected_application_id)?;
     let mut enigo = input_connection()?;
     for modifier in modifiers {
         enigo
@@ -708,6 +737,7 @@ pub fn press_computer_key(
 #[cfg(not(any(windows, target_os = "linux")))]
 pub fn press_computer_key(
     _id: &str,
+    _expected_application_id: &str,
     _key: ComputerKey,
     _modifiers: &[ComputerKey],
 ) -> Result<(), ComputerUseError> {
@@ -787,14 +817,36 @@ fn ensure_available(window: &ComputerWindow) -> Result<(), ComputerUseError> {
 }
 
 #[cfg(any(windows, target_os = "linux"))]
-fn require_focused(id: &str) -> Result<(), ComputerUseError> {
-    let window = inspect_computer_window(id)?;
+fn require_focused(id: &str, expected_application_id: &str) -> Result<(), ComputerUseError> {
+    let window = inspect_input_window(id, expected_application_id)?;
     ensure_available(&window)?;
     if window.focused {
         Ok(())
     } else {
         Err(ComputerUseError::WindowNotFocused)
     }
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+fn inspect_input_window(
+    id: &str,
+    expected_application_id: &str,
+) -> Result<ComputerWindow, ComputerUseError> {
+    let window = inspect_computer_window(id)?;
+    if computer_window_app_id_matches(expected_application_id, &window.application_id) {
+        Ok(window)
+    } else {
+        Err(ComputerUseError::WindowAppChanged)
+    }
+}
+
+pub(crate) fn computer_window_app_id_matches(
+    expected_application_id: &str,
+    actual_application_id: &str,
+) -> bool {
+    let expected_application_id = expected_application_id.trim();
+    !expected_application_id.is_empty()
+        && expected_application_id.eq_ignore_ascii_case(actual_application_id.trim())
 }
 
 #[cfg(any(windows, target_os = "linux"))]
@@ -1188,7 +1240,8 @@ mod tests {
     use super::{
         ComputerUseError, ComputerWindow, MAX_CAPTURE_HEIGHT, MAX_CAPTURE_WIDTH,
         bounded_dimensions, bounded_text, computer_use_target_is_forbidden,
-        normalize_application_id, relative_to_screen, x11_display_available,
+        computer_window_app_id_matches, normalize_application_id, relative_to_screen,
+        x11_display_available,
     };
     #[cfg(windows)]
     use super::{
@@ -1242,6 +1295,22 @@ mod tests {
     fn application_ids_are_stable_and_case_insensitive() {
         assert_eq!(normalize_application_id("  MSPaint.EXE "), "mspaint.exe");
         assert!(normalize_application_id(&"x".repeat(513)).is_empty());
+    }
+
+    #[test]
+    fn input_window_identity_rejects_a_recycled_hwnd_for_another_app() {
+        let first_window = window();
+        let mut recycled_window = first_window.clone();
+        recycled_window.application_id = "other.exe".to_owned();
+
+        assert!(computer_window_app_id_matches(
+            &first_window.application_id,
+            &first_window.application_id
+        ));
+        assert!(!computer_window_app_id_matches(
+            &first_window.application_id,
+            &recycled_window.application_id
+        ));
     }
 
     #[test]

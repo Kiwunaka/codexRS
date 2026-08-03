@@ -11330,6 +11330,7 @@ fn complete_computer_tool_call(
         &params.arguments,
         &params.thread_id,
         &window.id,
+        &window.application_id,
         events,
         computer_accessibility,
     ) {
@@ -11531,6 +11532,7 @@ fn run_computer_tool(
     arguments: &Value,
     task_id: &str,
     window_id: &str,
+    expected_application_id: &str,
     events: &dyn ActionEmitter,
     computer_accessibility: &mut ComputerUseAccessibilityClient,
 ) -> Result<Vec<DynamicToolCallOutputContentItem>, String> {
@@ -11591,7 +11593,11 @@ fn run_computer_tool(
             Ok(content)
         }
         "click" => {
-            activate_computer_input_target(window_id, computer_accessibility)?;
+            activate_computer_input_target(
+                window_id,
+                expected_application_id,
+                computer_accessibility,
+            )?;
             let button = match optional_string_argument(arguments, "mouse_button")?.as_deref() {
                 None | Some("left" | "l") => ComputerButton::Left,
                 Some("right" | "r") => ComputerButton::Right,
@@ -11607,7 +11613,13 @@ fn run_computer_tool(
                 .ok_or_else(|| "click_count must be 1, 2, or 3".to_owned())?;
             if let Some(element_index) = optional_usize_argument(arguments, "element_index")? {
                 computer_accessibility
-                    .click_element(window_id, element_index, button, clicks)
+                    .click_element(
+                        window_id,
+                        expected_application_id,
+                        element_index,
+                        button,
+                        clicks,
+                    )
                     .map_err(|error| error.to_string())?;
                 return Ok(vec![text_content(format!(
                     "Clicked accessibility element [{element_index}]."
@@ -11615,72 +11627,105 @@ fn run_computer_tool(
             }
             let (x, y) = computer_coordinates(arguments)?;
             let (x, y) = screenshot_point(arguments, window_id, x, y, computer_accessibility)?;
-            click_computer_window(window_id, x, y, button, clicks)
+            click_computer_window(window_id, expected_application_id, x, y, button, clicks)
                 .map_err(|error| error.to_string())?;
             Ok(vec![text_content(format!("Clicked ({x}, {y})."))])
         }
         "drag" => {
-            activate_computer_input_target(window_id, computer_accessibility)?;
+            activate_computer_input_target(
+                window_id,
+                expected_application_id,
+                computer_accessibility,
+            )?;
             let (from_x, from_y, to_x, to_y) = drag_coordinates(arguments)?;
             let (from_x, from_y) =
                 screenshot_point(arguments, window_id, from_x, from_y, computer_accessibility)?;
             let (to_x, to_y) =
                 screenshot_point(arguments, window_id, to_x, to_y, computer_accessibility)?;
-            drag_computer_window(window_id, from_x, from_y, to_x, to_y)
-                .map_err(|error| error.to_string())?;
+            drag_computer_window(
+                window_id,
+                expected_application_id,
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+            )
+            .map_err(|error| error.to_string())?;
             Ok(vec![text_content(format!(
                 "Dragged from ({from_x}, {from_y}) to ({to_x}, {to_y})."
             ))])
         }
         "scroll" => {
-            activate_computer_input_target(window_id, computer_accessibility)?;
+            activate_computer_input_target(
+                window_id,
+                expected_application_id,
+                computer_accessibility,
+            )?;
             let (x, y) = computer_coordinates(arguments)?;
             let (x, y) = screenshot_point(arguments, window_id, x, y, computer_accessibility)?;
             let delta_x = rounded_i32_argument(arguments, "scrollX")?;
             let delta_y = rounded_i32_argument(arguments, "scrollY")?;
-            scroll_computer_window(window_id, x, y, delta_x, delta_y)
+            scroll_computer_window(window_id, expected_application_id, x, y, delta_x, delta_y)
                 .map_err(|error| error.to_string())?;
             Ok(vec![text_content(format!(
                 "Scrolled at ({x}, {y}) by ({delta_x}, {delta_y})."
             ))])
         }
         "set_value" => {
-            activate_computer_input_target(window_id, computer_accessibility)?;
+            activate_computer_input_target(
+                window_id,
+                expected_application_id,
+                computer_accessibility,
+            )?;
             let element_index = usize_argument(arguments, "element_index")?;
             let value = string_argument(arguments, "value")?;
             computer_accessibility
-                .set_value(window_id, element_index, value)
+                .set_value(window_id, expected_application_id, element_index, value)
                 .map_err(|error| error.to_string())?;
             Ok(vec![text_content(format!(
                 "Set accessibility element [{element_index}]."
             ))])
         }
         "perform_secondary_action" => {
-            activate_computer_input_target(window_id, computer_accessibility)?;
+            activate_computer_input_target(
+                window_id,
+                expected_application_id,
+                computer_accessibility,
+            )?;
             let element_index = usize_argument(arguments, "element_index")?;
             let action = string_argument(arguments, "action")?;
             computer_accessibility
-                .perform_secondary_action(window_id, element_index, action)
+                .perform_secondary_action(window_id, expected_application_id, element_index, action)
                 .map_err(|error| error.to_string())?;
             Ok(vec![text_content(format!(
                 "Performed {action} on accessibility element [{element_index}]."
             ))])
         }
         "type_text" => {
-            activate_computer_input_target(window_id, computer_accessibility)?;
+            activate_computer_input_target(
+                window_id,
+                expected_application_id,
+                computer_accessibility,
+            )?;
             let text = string_argument(arguments, "text")?;
-            type_into_computer_window(window_id, text).map_err(|error| error.to_string())?;
+            type_into_computer_window(window_id, expected_application_id, text)
+                .map_err(|error| error.to_string())?;
             Ok(vec![text_content(format!("Typed {} bytes.", text.len()))])
         }
         "press_key" => {
-            activate_computer_input_target(window_id, computer_accessibility)?;
+            activate_computer_input_target(
+                window_id,
+                expected_application_id,
+                computer_accessibility,
+            )?;
             let (key, modifiers) = parse_computer_key_chord(string_argument(arguments, "key")?)?;
-            press_computer_key(window_id, key, &modifiers).map_err(|error| error.to_string())?;
+            press_computer_key(window_id, expected_application_id, key, &modifiers)
+                .map_err(|error| error.to_string())?;
             Ok(vec![text_content("Key pressed.".to_owned())])
         }
         "activate_window" => {
             computer_accessibility
-                .activate_window(window_id)
+                .activate_window(window_id, expected_application_id)
                 .map_err(|error| error.to_string())?;
             Ok(vec![text_content("Window activated.".to_owned())])
         }
@@ -11690,12 +11735,13 @@ fn run_computer_tool(
 
 fn activate_computer_input_target(
     window_id: &str,
+    expected_application_id: &str,
     computer_accessibility: &mut ComputerUseAccessibilityClient,
 ) -> Result<(), String> {
     #[cfg(windows)]
     {
         computer_accessibility
-            .activate_window(window_id)
+            .activate_window(window_id, expected_application_id)
             .map_err(|error| error.to_string())
     }
 
@@ -17419,6 +17465,7 @@ mod tests {
                 }),
                 "thread-1",
                 "7",
+                "fixture.exe",
                 &events,
                 &mut computer_accessibility,
             ),
@@ -20764,6 +20811,7 @@ mod tests {
                 &json!({"include_text": true, "include_screenshot": true}),
                 "thread-1",
                 "7",
+                "fixture.exe",
                 &events,
                 &mut computer_accessibility,
             ),
@@ -20775,6 +20823,7 @@ mod tests {
                 &json!({"include_screenshot": false}),
                 "thread-1",
                 "7",
+                "fixture.exe",
                 &events,
                 &mut computer_accessibility,
             ),
