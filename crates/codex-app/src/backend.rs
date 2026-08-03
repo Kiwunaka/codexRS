@@ -4716,6 +4716,7 @@ fn run_effect(
             return;
         }
         Effect::CommitGit {
+            generation,
             root,
             branch,
             message,
@@ -4731,6 +4732,7 @@ fn run_effect(
                     emit(
                         events,
                         Action::GitCommitFailed {
+                            generation: *generation,
                             message:
                                 "Couldn't generate a commit message: app-server is unavailable."
                                     .to_owned(),
@@ -4751,13 +4753,19 @@ fn run_effect(
                     computer_url_policy,
                 ) {
                     Ok(message) => {
-                        emit(events, Action::GitCommitMessageGenerated);
+                        emit(
+                            events,
+                            Action::GitCommitMessageGenerated {
+                                generation: *generation,
+                            },
+                        );
                         message
                     }
                     Err(error) => {
                         emit(
                             events,
                             Action::GitCommitFailed {
+                                generation: *generation,
                                 message: bounded(
                                     format!("Couldn't generate a commit message: {error}"),
                                     MAX_STATUS_BYTES,
@@ -4778,6 +4786,7 @@ fn run_effect(
                         emit(
                             events,
                             Action::GitCommitFailed {
+                                generation: *generation,
                                 message: bounded(
                                     format!("Failed to commit changes: {error}"),
                                     MAX_STATUS_BYTES,
@@ -4790,12 +4799,18 @@ fn run_effect(
             }
             if pushes {
                 if committed {
-                    emit(events, Action::GitPushStarted);
+                    emit(
+                        events,
+                        Action::GitPushStarted {
+                            generation: *generation,
+                        },
+                    );
                 }
                 if let Err(error) = git_push(root, *force_push) {
                     emit(
                         events,
                         Action::GitCommitFailed {
+                            generation: *generation,
                             message: bounded(
                                 format!("Failed to push changes: {error}"),
                                 MAX_STATUS_BYTES,
@@ -4811,6 +4826,7 @@ fn run_effect(
             emit(
                 events,
                 Action::GitCommitCompleted {
+                    generation: *generation,
                     branch: branch.clone(),
                     pushed: pushes,
                 },
@@ -4867,6 +4883,7 @@ fn run_effect(
             return;
         }
         Effect::CreateGitPullRequest {
+            generation,
             root,
             branch,
             base_branch,
@@ -4887,6 +4904,7 @@ fn run_effect(
                     emit(
                         events,
                         Action::GitPullRequestFailed {
+                            generation: *generation,
                             message: "Failed to generate pull request title and body: app-server is unavailable."
                                 .to_owned(),
                         },
@@ -4939,6 +4957,7 @@ fn run_effect(
                         emit(
                             events,
                             Action::GitPullRequestFailed {
+                                generation: *generation,
                                 message: bounded(
                                     format!(
                                         "Failed to generate pull request title and body: {error}"
@@ -4959,11 +4978,17 @@ fn run_effect(
             };
 
             if commits {
-                emit(events, Action::GitPullRequestCommitStarted);
+                emit(
+                    events,
+                    Action::GitPullRequestCommitStarted {
+                        generation: *generation,
+                    },
+                );
                 let Some(message) = generated.commit_message.as_deref() else {
                     emit(
                         events,
                         Action::GitPullRequestFailed {
+                            generation: *generation,
                             message: "Couldn't generate commit and pull request messages."
                                 .to_owned(),
                         },
@@ -4974,6 +4999,7 @@ fn run_effect(
                     emit(
                         events,
                         Action::GitPullRequestFailed {
+                            generation: *generation,
                             message: bounded(
                                 format!("Failed to commit changes: {error}"),
                                 MAX_STATUS_BYTES,
@@ -4984,11 +5010,17 @@ fn run_effect(
                 }
             }
             if pushes {
-                emit(events, Action::GitPullRequestPushStarted);
+                emit(
+                    events,
+                    Action::GitPullRequestPushStarted {
+                        generation: *generation,
+                    },
+                );
                 if let Err(error) = git_push(root, *force_push) {
                     emit(
                         events,
                         Action::GitPullRequestFailed {
+                            generation: *generation,
                             message: bounded(
                                 format!("Failed to push changes: {error}"),
                                 MAX_STATUS_BYTES,
@@ -4999,7 +5031,12 @@ fn run_effect(
                 }
             }
 
-            emit(events, Action::GitPullRequestCreateStarted);
+            emit(
+                events,
+                Action::GitPullRequestCreateStarted {
+                    generation: *generation,
+                },
+            );
             match github_create_pull_request(
                 root,
                 &GitHubCreatePullRequest {
@@ -5015,6 +5052,7 @@ fn run_effect(
                     emit(
                         events,
                         Action::GitPullRequestCompleted {
+                            generation: *generation,
                             pull_request: GitPullRequestState {
                                 number: pull_request.number,
                                 title: pull_request.title,
@@ -5039,6 +5077,7 @@ fn run_effect(
                     emit(
                         events,
                         Action::GitPullRequestFailed {
+                            generation: *generation,
                             message: bounded(message, MAX_STATUS_BYTES),
                         },
                     );
@@ -10436,6 +10475,7 @@ fn map_git_snapshot(snapshot: GitSnapshot) -> GitState {
     let staged_files = snapshot.files.iter().filter(|file| file.staged).count();
     GitState {
         refresh_generation: 0,
+        mutation_generation: 0,
         repository_root: Some(snapshot.repository_root),
         branch: snapshot.branch,
         default_branch: snapshot.default_branch,
@@ -11575,6 +11615,7 @@ fn run_computer_tool(
                 );
             }
             let window = inspect_computer_window(window_id).map_err(|error| error.to_string())?;
+            ensure_computer_window_application(expected_application_id, &window)?;
             let accessibility = include_text
                 .then(|| computer_accessibility.get_state(window_id))
                 .transpose()
@@ -11744,6 +11785,15 @@ fn run_computer_tool(
         }
         _ => Err("unsupported Computer Use tool".to_owned()),
     }
+}
+
+fn ensure_computer_window_application(
+    expected_application_id: &str,
+    window: &ComputerWindow,
+) -> Result<(), String> {
+    computer_app_id_matches(expected_application_id, &window.application_id)
+        .then_some(())
+        .ok_or_else(|| "the open window no longer belongs to the requested app".to_owned())
 }
 
 fn activate_computer_input_target(
@@ -16949,6 +16999,7 @@ mod tests {
     };
     use codex_platform::{
         AppServerEvent, ByteBudget, ComputerApplication, ComputerKey, ComputerUseTurnKey,
+        ComputerWindow,
     };
     use codex_protocol::{
         Account as ProtocolAccount, AccountTokenUsageDailyBucket, AccountTokenUsageSummary,
@@ -16988,8 +17039,8 @@ mod tests {
         device_code_account_login_started_action, drag_coordinates, encode_appearance_preferences,
         encode_browser_download_preferences, encode_browser_permissions, encode_git_preferences,
         encode_keyboard_shortcut_preferences, encode_primary_window_placement,
-        forbidden_computer_target_message, handle_notification, hook_state_config_value,
-        index_app_logos, initialize_capabilities, is_hidden_timeline_item,
+        ensure_computer_window_application, forbidden_computer_target_message, handle_notification,
+        hook_state_config_value, index_app_logos, initialize_capabilities, is_hidden_timeline_item,
         linux_computer_use_dynamic_tools, load_mcp_server_status_pages, map_account_profile,
         map_account_token_activity, map_app_detail, map_app_server_approval, map_apps,
         map_fuzzy_file_search_results, map_mcp_elicitation, map_mcp_resource_contents,
@@ -17498,6 +17549,28 @@ mod tests {
                 &mut computer_accessibility,
             ),
             Err(COMPUTER_USE_USER_INPUT_STALE_MESSAGE.to_owned())
+        );
+    }
+
+    #[test]
+    fn window_state_identity_rejects_a_recycled_window_for_another_app() {
+        let recycled_window = ComputerWindow {
+            id: "7".to_owned(),
+            process_id: 42,
+            application: "Other App".to_owned(),
+            application_id: "other.exe".to_owned(),
+            title: "Other window".to_owned(),
+            x: 0,
+            y: 0,
+            width: 800,
+            height: 600,
+            minimized: false,
+            focused: true,
+        };
+
+        assert_eq!(
+            ensure_computer_window_application("approved.exe", &recycled_window),
+            Err("the open window no longer belongs to the requested app".to_owned())
         );
     }
 

@@ -21,6 +21,7 @@ use win32job::{ExtendedLimitInfo, Job};
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const WAIT_TICK: Duration = Duration::from_millis(10);
+const PROCESS_REAP_TIMEOUT: Duration = Duration::from_secs(1);
 const DETACHED_PROCESS_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_DETACHED_PROCESS_SUPERVISORS: usize = 8;
 
@@ -239,12 +240,34 @@ fn run_bounded_inner(
     let stdout_reader = thread::Builder::new()
         .name("codex-platform-stdout".to_owned())
         .spawn(move || read_bounded(stdout, stdout_limit))
-        .map_err(ProcessError::Reader)?;
+        .map_err(ProcessError::Reader);
+    let stdout_reader = match stdout_reader {
+        Ok(stdout_reader) => stdout_reader,
+        Err(error) => {
+            #[cfg(windows)]
+            drop(job);
+            #[cfg(not(windows))]
+            terminate_process_tree(&mut child);
+            reap_process_until(&mut child, Instant::now() + PROCESS_REAP_TIMEOUT);
+            return Err(error);
+        }
+    };
     let stderr_reader = thread::Builder::new()
         .name("codex-platform-stderr".to_owned())
         .spawn(move || read_bounded(stderr, stderr_limit))
-        .map_err(ProcessError::Reader)?;
-
+        .map_err(ProcessError::Reader);
+    let stderr_reader = match stderr_reader {
+        Ok(stderr_reader) => stderr_reader,
+        Err(error) => {
+            #[cfg(windows)]
+            drop(job);
+            #[cfg(not(windows))]
+            terminate_process_tree(&mut child);
+            reap_process_until(&mut child, Instant::now() + PROCESS_REAP_TIMEOUT);
+            drop(stdout_reader);
+            return Err(error);
+        }
+    };
     let deadline = Instant::now() + timeout;
     let status = loop {
         if let Some(status) = child.try_wait().map_err(ProcessError::Wait)? {
@@ -291,6 +314,16 @@ fn run_bounded_inner(
         stdout,
         stdout_truncated,
     })
+}
+
+fn reap_process_until(child: &mut std::process::Child, deadline: Instant) {
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => return,
+            Ok(None) if Instant::now() >= deadline => return,
+            Ok(None) => thread::sleep(WAIT_TICK),
+        }
+    }
 }
 
 #[cfg(unix)]
