@@ -5879,16 +5879,16 @@ pub enum Effect {
         answers: UserInputAnswers,
     },
     RespondMcpElicitation {
-        request_id: String,
+        request: McpElicitation,
         decision: McpElicitationDecision,
         content: Option<McpElicitationContent>,
     },
     RespondBrowserOriginElicitation {
-        request_id: String,
+        request: McpElicitation,
         decision: BrowserOriginElicitationDecision,
     },
     RespondBrowserResourceElicitation {
-        request_id: String,
+        request: McpElicitation,
         decision: BrowserResourceElicitationDecision,
     },
     RefreshMarketplace {
@@ -12305,9 +12305,11 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 ) => None,
                 (_, McpElicitationDecision::Decline | McpElicitationDecision::Cancel) => None,
             };
-            state.mcp_elicitations.remove(position);
+            let Some(request) = state.mcp_elicitations.remove(position) else {
+                return Vec::new();
+            };
             vec![Effect::RespondMcpElicitation {
-                request_id,
+                request,
                 decision,
                 content,
             }]
@@ -12340,7 +12342,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                         .find(|site| site.origin == request.origin)
                         .cloned()
                         .unwrap_or(BrowserSitePermission {
-                            origin: request.origin,
+                            origin: request.origin.clone(),
                             browse: BrowserPermissionValue::Default,
                             download: BrowserPermissionValue::Default,
                             upload: BrowserPermissionValue::Default,
@@ -12373,7 +12375,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 | BrowserOriginElicitationDecision::Deny => {}
             }
             effects.push(Effect::RespondBrowserOriginElicitation {
-                request_id,
+                request: McpElicitation::BrowserOrigin(request),
                 decision,
             });
             effects
@@ -12405,7 +12407,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     .find(|site| site.origin == request.origin)
                     .cloned()
                     .unwrap_or(BrowserSitePermission {
-                        origin: request.origin,
+                        origin: request.origin.clone(),
                         browse: BrowserPermissionValue::Default,
                         download: BrowserPermissionValue::Default,
                         upload: BrowserPermissionValue::Default,
@@ -12424,7 +12426,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 }
             }
             effects.push(Effect::RespondBrowserResourceElicitation {
-                request_id,
+                request: McpElicitation::BrowserResource(request),
                 decision,
             });
             effects
@@ -18758,6 +18760,7 @@ mod tests {
             )
             .is_empty()
         );
+        let expected_request = state.mcp_elicitations[0].clone();
         assert_eq!(
             reduce(
                 &mut state,
@@ -18768,7 +18771,7 @@ mod tests {
                 }
             ),
             vec![Effect::RespondMcpElicitation {
-                request_id: "request-1".to_owned(),
+                request: expected_request,
                 decision: McpElicitationDecision::Accept,
                 content: None,
             }]
@@ -18826,7 +18829,7 @@ mod tests {
                 Effect::PersistBrowserPermissions(site_permissions.clone()),
                 Effect::ConfigureBrowserPermissions(site_permissions.clone()),
                 Effect::RespondBrowserOriginElicitation {
-                    request_id: "browser-request-site".to_owned(),
+                    request: request("browser-request-site"),
                     decision: BrowserOriginElicitationDecision::AllowSite,
                 },
             ]
@@ -18858,7 +18861,7 @@ mod tests {
                 Effect::PersistBrowserPermissions(all_permissions.clone()),
                 Effect::ConfigureBrowserPermissions(all_permissions.clone()),
                 Effect::RespondBrowserOriginElicitation {
-                    request_id: "browser-request-all".to_owned(),
+                    request: request("browser-request-all"),
                     decision: BrowserOriginElicitationDecision::AllowAll,
                 },
             ]
@@ -18920,7 +18923,10 @@ mod tests {
                 Effect::PersistBrowserPermissions(expected.clone()),
                 Effect::ConfigureBrowserPermissions(expected.clone()),
                 Effect::RespondBrowserResourceElicitation {
-                    request_id: "browser-resource-always".to_owned(),
+                    request: request(
+                        "browser-resource-always",
+                        BrowserPermissionResource::Download,
+                    ),
                     decision: BrowserResourceElicitationDecision::AlwaysAllow,
                 },
             ]
@@ -18947,7 +18953,10 @@ mod tests {
                 }
             ),
             [Effect::RespondBrowserResourceElicitation {
-                request_id: "browser-resource-session".to_owned(),
+                request: request(
+                    "browser-resource-session",
+                    BrowserPermissionResource::Upload,
+                ),
                 decision: BrowserResourceElicitationDecision::AllowConversation,
             }]
         );
@@ -19043,6 +19052,7 @@ mod tests {
         );
         assert_eq!(state.mcp_elicitations.len(), 1);
 
+        let expected_request = state.mcp_elicitations[0].clone();
         let valid = McpElicitationContent {
             fields: vec![
                 (
@@ -19066,7 +19076,7 @@ mod tests {
                 }
             ),
             vec![Effect::RespondMcpElicitation {
-                request_id: "request-form-1".to_owned(),
+                request: expected_request,
                 decision: McpElicitationDecision::Accept,
                 content: Some(valid),
             }]

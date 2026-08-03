@@ -7625,38 +7625,32 @@ fn run_effect(
             respond_to_user_input(app_server, request, answers, events, pending_approvals);
         }
         Effect::RespondMcpElicitation {
-            request_id,
+            request,
             decision,
             content,
         } => {
             respond_to_mcp_elicitation(
                 app_server,
-                request_id,
+                request,
                 decision,
                 content,
                 events,
                 pending_approvals,
             );
         }
-        Effect::RespondBrowserOriginElicitation {
-            request_id,
-            decision,
-        } => {
+        Effect::RespondBrowserOriginElicitation { request, decision } => {
             respond_to_browser_origin_elicitation(
                 app_server,
-                request_id,
+                request,
                 decision,
                 events,
                 pending_approvals,
             );
         }
-        Effect::RespondBrowserResourceElicitation {
-            request_id,
-            decision,
-        } => {
+        Effect::RespondBrowserResourceElicitation { request, decision } => {
             respond_to_browser_resource_elicitation(
                 app_server,
-                request_id,
+                request,
                 decision,
                 events,
                 pending_approvals,
@@ -13493,12 +13487,13 @@ fn user_input_response(answers: UserInputAnswers) -> Result<ToolRequestUserInput
 
 fn respond_to_mcp_elicitation(
     app_server: &AppServerConnection,
-    request_id: String,
+    request: McpElicitation,
     decision: McpElicitationDecision,
     content: Option<McpElicitationContent>,
     events: &dyn ActionEmitter,
     pending_approvals: &mut HashMap<String, PendingApproval>,
 ) {
+    let request_id = request.request_id().to_owned();
     let content = if decision == McpElicitationDecision::Accept {
         match content
             .as_ref()
@@ -13540,20 +13535,24 @@ fn respond_to_mcp_elicitation(
             metadata: None,
         },
     ) {
-        emit(
+        restore_mcp_elicitation_after_response_failure(
             events,
-            Action::SetStatus(format!("failed to answer MCP action request: {error}")),
+            pending_approvals,
+            request,
+            id,
+            format!("failed to answer MCP action request: {error}"),
         );
     }
 }
 
 fn respond_to_browser_origin_elicitation(
     app_server: &AppServerConnection,
-    request_id: String,
+    request: McpElicitation,
     decision: BrowserOriginElicitationDecision,
     events: &dyn ActionEmitter,
     pending_approvals: &mut HashMap<String, PendingApproval>,
 ) {
+    let request_id = request.request_id().to_owned();
     let Some(pending) = pending_approvals.remove(&request_id) else {
         return;
     };
@@ -13567,7 +13566,17 @@ fn respond_to_browser_origin_elicitation(
         );
         return;
     };
-    send_browser_origin_elicitation_response(app_server, &id, decision, events);
+    if let Err(error) =
+        app_server.respond_success(&id, &browser_origin_elicitation_response(decision))
+    {
+        restore_mcp_elicitation_after_response_failure(
+            events,
+            pending_approvals,
+            request,
+            id,
+            format!("failed to answer Browser website request: {error}"),
+        );
+    }
 }
 
 fn send_browser_origin_elicitation_response(
@@ -13605,11 +13614,12 @@ fn browser_origin_elicitation_response(
 
 fn respond_to_browser_resource_elicitation(
     app_server: &AppServerConnection,
-    request_id: String,
+    request: McpElicitation,
     decision: BrowserResourceElicitationDecision,
     events: &dyn ActionEmitter,
     pending_approvals: &mut HashMap<String, PendingApproval>,
 ) {
+    let request_id = request.request_id().to_owned();
     let Some(pending) = pending_approvals.remove(&request_id) else {
         return;
     };
@@ -13623,7 +13633,32 @@ fn respond_to_browser_resource_elicitation(
         );
         return;
     };
-    send_browser_resource_elicitation_response(app_server, &id, decision, events);
+    if let Err(error) =
+        app_server.respond_success(&id, &browser_resource_elicitation_response(decision))
+    {
+        restore_mcp_elicitation_after_response_failure(
+            events,
+            pending_approvals,
+            request,
+            id,
+            format!("failed to answer Browser permission request: {error}"),
+        );
+    }
+}
+
+fn restore_mcp_elicitation_after_response_failure(
+    events: &dyn ActionEmitter,
+    pending_approvals: &mut HashMap<String, PendingApproval>,
+    request: McpElicitation,
+    id: Value,
+    message: String,
+) {
+    pending_approvals.insert(
+        request.request_id().to_owned(),
+        PendingApproval::McpElicitation { id },
+    );
+    emit(events, Action::McpElicitationRequested(request));
+    emit(events, Action::SetStatus(message));
 }
 
 fn send_browser_resource_elicitation_response(
@@ -16892,6 +16927,7 @@ mod tests {
         plugin_directory_marketplace_kinds, plugin_installability,
         plugin_requires_install_confirmation, pull_request_generation_prompt,
         pull_request_output_schema, record_retryable_steer, remote_pairing_status_params,
+        restore_mcp_elicitation_after_response_failure,
         restore_standard_approval_after_response_failure,
         restore_user_input_after_response_failure, restored_browser_download,
         retryable_submission_inputs, run_computer_tool, safety_retry_fork_point,
@@ -18431,6 +18467,86 @@ mod tests {
         };
         assert!(matches!(
             input_status,
+            Action::SetStatus(message) if message.contains("write error")
+        ));
+    }
+
+    #[test]
+    fn mcp_response_write_failure_restores_exact_form_and_browser_request() {
+        let (events, received) = bounded(4);
+        let form = McpElicitation::Form(McpFormElicitation {
+            request_id: "mcp-form-1".to_owned(),
+            task_id: "thread-1".to_owned(),
+            turn_id: Some("turn-1".to_owned()),
+            server_name: "calendar".to_owned(),
+            message: "Choose a calendar.".to_owned(),
+            openai: false,
+            unsupported_openai: false,
+            fields: Vec::new(),
+        });
+        let mut pending = HashMap::new();
+
+        restore_mcp_elicitation_after_response_failure(
+            &events,
+            &mut pending,
+            form.clone(),
+            json!(3),
+            "failed to answer MCP action request: write error".to_owned(),
+        );
+
+        assert!(matches!(
+            pending.get("mcp-form-1"),
+            Some(PendingApproval::McpElicitation { id }) if id == &json!(3)
+        ));
+        let Ok(form_action) = received.recv() else {
+            panic!("MCP form restoration action was not emitted");
+        };
+        match form_action {
+            Action::McpElicitationRequested(restored) => assert_eq!(restored, form),
+            _ => panic!("expected MCP form restoration action"),
+        }
+        let Ok(form_status) = received.recv() else {
+            panic!("MCP form failure status was not emitted");
+        };
+        assert!(matches!(
+            form_status,
+            Action::SetStatus(message) if message.contains("write error")
+        ));
+
+        let browser = McpElicitation::BrowserOrigin(McpBrowserOriginElicitation {
+            request_id: "browser-origin-1".to_owned(),
+            task_id: "thread-1".to_owned(),
+            turn_id: Some("turn-1".to_owned()),
+            server_name: "node_repl".to_owned(),
+            source_name: "Browser".to_owned(),
+            origin: "https://example.com".to_owned(),
+            reason: Some("Open the requested page.".to_owned()),
+            message: "Allow Browser to access this site?".to_owned(),
+        });
+        restore_mcp_elicitation_after_response_failure(
+            &events,
+            &mut pending,
+            browser.clone(),
+            json!(4),
+            "failed to answer Browser website request: write error".to_owned(),
+        );
+
+        assert!(matches!(
+            pending.get("browser-origin-1"),
+            Some(PendingApproval::McpElicitation { id }) if id == &json!(4)
+        ));
+        let Ok(browser_action) = received.recv() else {
+            panic!("Browser request restoration action was not emitted");
+        };
+        match browser_action {
+            Action::McpElicitationRequested(restored) => assert_eq!(restored, browser),
+            _ => panic!("expected Browser request restoration action"),
+        }
+        let Ok(browser_status) = received.recv() else {
+            panic!("Browser request failure status was not emitted");
+        };
+        assert!(matches!(
+            browser_status,
             Action::SetStatus(message) if message.contains("write error")
         ));
     }
