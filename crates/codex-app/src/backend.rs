@@ -7913,10 +7913,11 @@ fn run_effect(
                 ),
             }
         }
-        Effect::RefreshMcpServers { cwd } => match load_mcp_servers(app_server, cwd) {
+        Effect::RefreshMcpServers { generation, cwd } => match load_mcp_servers(app_server, cwd) {
             Ok(catalog) => emit(
                 events,
                 Action::McpServersLoaded {
+                    generation,
                     servers: catalog.servers,
                     plugin_servers: catalog.plugin_servers,
                     warnings: catalog.warnings,
@@ -7924,7 +7925,10 @@ fn run_effect(
             ),
             Err(error) => emit(
                 events,
-                Action::McpServersFailed(format!("failed to load MCP servers: {error}")),
+                Action::McpServersFailed {
+                    generation,
+                    message: format!("failed to load MCP servers: {error}"),
+                },
             ),
         },
         Effect::ReadMcpResource { server, uri } => {
@@ -8404,11 +8408,12 @@ fn run_effect(
                 ),
             }
         }
-        Effect::ReloadMcpServers { cwd } => match app_server.reload_mcp_servers() {
+        Effect::ReloadMcpServers { generation, cwd } => match app_server.reload_mcp_servers() {
             Ok(()) => match load_mcp_servers(app_server, cwd) {
                 Ok(catalog) => emit(
                     events,
                     Action::McpServersLoaded {
+                        generation,
                         servers: catalog.servers,
                         plugin_servers: catalog.plugin_servers,
                         warnings: catalog.warnings,
@@ -8416,12 +8421,18 @@ fn run_effect(
                 ),
                 Err(error) => emit(
                     events,
-                    Action::McpServersFailed(format!("failed to reload MCP servers: {error}")),
+                    Action::McpServersFailed {
+                        generation,
+                        message: format!("failed to reload MCP servers: {error}"),
+                    },
                 ),
             },
             Err(error) => emit(
                 events,
-                Action::McpServersFailed(format!("failed to restart MCP servers: {error}")),
+                Action::McpServersFailed {
+                    generation,
+                    message: format!("failed to restart MCP servers: {error}"),
+                },
             ),
         },
         Effect::SetPluginSkillEnabled {

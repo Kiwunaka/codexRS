@@ -2499,6 +2499,7 @@ pub struct MarketplaceState {
     pub installed_apps_status: Option<LoadStatus>,
     pub installed_apps_thread_id: Option<String>,
     pub mcp_status: Option<LoadStatus>,
+    mcp_generation: u64,
     pub skills_status: Option<LoadStatus>,
     pub query: String,
     pub selected_section: Option<MarketplaceSectionFilter>,
@@ -5239,11 +5240,15 @@ pub enum Action {
     },
     RefreshMcpServers,
     McpServersLoaded {
+        generation: u64,
         servers: Vec<McpServerCard>,
         plugin_servers: Vec<McpServerCard>,
         warnings: Vec<String>,
     },
-    McpServersFailed(String),
+    McpServersFailed {
+        generation: u64,
+        message: String,
+    },
     ReadMcpResource {
         server: String,
         uri: String,
@@ -5934,6 +5939,7 @@ pub enum Effect {
         enabled: bool,
     },
     RefreshMcpServers {
+        generation: u64,
         cwd: Option<PathBuf>,
     },
     ReadMcpResource {
@@ -5957,6 +5963,7 @@ pub enum Effect {
         name: String,
     },
     ReloadMcpServers {
+        generation: u64,
         cwd: Option<PathBuf>,
     },
     InstallPlugin {
@@ -7629,6 +7636,22 @@ fn refresh_installed_apps_effect(state: &AppState, force_refresh: bool) -> Effec
     Effect::RefreshInstalledApps {
         force_refresh,
         thread_id: state.selected_task_id.clone(),
+    }
+}
+
+fn refresh_mcp_servers_effect(state: &mut AppState, cwd: Option<PathBuf>) -> Effect {
+    state.marketplace.mcp_generation = state.marketplace.mcp_generation.saturating_add(1);
+    Effect::RefreshMcpServers {
+        generation: state.marketplace.mcp_generation,
+        cwd,
+    }
+}
+
+fn reload_mcp_servers_effect(state: &mut AppState, cwd: Option<PathBuf>) -> Effect {
+    state.marketplace.mcp_generation = state.marketplace.mcp_generation.saturating_add(1);
+    Effect::ReloadMcpServers {
+        generation: state.marketplace.mcp_generation,
+        cwd,
     }
 }
 
@@ -9402,6 +9425,11 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 if installed_apps_needed(state) {
                     state.marketplace.installed_apps_status = Some(LoadStatus::Loading);
                     effects.push(refresh_installed_apps_effect(state, false));
+                }
+                if state.marketplace.mcp_status.is_some() {
+                    state.marketplace.mcp_status = Some(LoadStatus::Loading);
+                    let cwd = selected_task_cwds(state).into_iter().next();
+                    effects.push(refresh_mcp_servers_effect(state, cwd));
                 }
             }
             let goal = state.goals.entry(task_id.clone()).or_default();
@@ -14368,7 +14396,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             if manage_mode && state.marketplace.mcp_status != Some(LoadStatus::Ready) {
                 state.marketplace.mcp_status = Some(LoadStatus::Loading);
-                effects.push(Effect::RefreshMcpServers { cwd });
+                effects.push(refresh_mcp_servers_effect(state, cwd));
             }
             if manage_mode && state.marketplace.skills_status != Some(LoadStatus::Ready) {
                 state.marketplace.skills_status = Some(LoadStatus::Loading);
@@ -14413,9 +14441,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 )
             {
                 state.marketplace.mcp_status = Some(LoadStatus::Loading);
-                vec![Effect::RefreshMcpServers {
-                    cwd: selected_task_cwds(state).into_iter().next(),
-                }]
+                let cwd = selected_task_cwds(state).into_iter().next();
+                vec![refresh_mcp_servers_effect(state, cwd)]
             } else if tab == MarketplaceManageTab::Skills
                 && !matches!(
                     state.marketplace.skills_status,
@@ -15095,15 +15122,18 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::RefreshMcpServers => {
             state.marketplace.mcp_status = Some(LoadStatus::Loading);
-            vec![Effect::RefreshMcpServers {
-                cwd: selected_task_cwds(state).into_iter().next(),
-            }]
+            let cwd = selected_task_cwds(state).into_iter().next();
+            vec![refresh_mcp_servers_effect(state, cwd)]
         }
         Action::McpServersLoaded {
+            generation,
             mut servers,
             mut plugin_servers,
             mut warnings,
         } => {
+            if generation != state.marketplace.mcp_generation {
+                return Vec::new();
+            }
             let authorization_urls = state
                 .marketplace
                 .mcp_servers
@@ -15129,7 +15159,13 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.marketplace.mcp_errors = warnings;
             Vec::new()
         }
-        Action::McpServersFailed(message) => {
+        Action::McpServersFailed {
+            generation,
+            message,
+        } => {
+            if generation != state.marketplace.mcp_generation {
+                return Vec::new();
+            }
             state.marketplace.mcp_status = Some(LoadStatus::Failed);
             state.marketplace.mcp_errors = vec![bounded_string(message, 4 * 1024)];
             Vec::new()
@@ -15300,9 +15336,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             } else {
                 format!("Saved MCP server {key}.")
             });
-            vec![Effect::ReloadMcpServers {
-                cwd: selected_task_cwds(state).into_iter().next(),
-            }]
+            let cwd = selected_task_cwds(state).into_iter().next();
+            vec![reload_mcp_servers_effect(state, cwd)]
         }
         Action::RemoveMcpServer { key } => {
             let can_remove = state.marketplace.pending_mcp_key.is_none()
@@ -15336,9 +15371,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             } else {
                 format!("Uninstalled MCP server {key}.")
             });
-            vec![Effect::ReloadMcpServers {
-                cwd: selected_task_cwds(state).into_iter().next(),
-            }]
+            let cwd = selected_task_cwds(state).into_iter().next();
+            vec![reload_mcp_servers_effect(state, cwd)]
         }
         Action::ClearMcpServerMutationError => {
             state.marketplace.mcp_mutation_error = None;
@@ -15367,9 +15401,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     "MCP server state is overridden by higher-priority configuration.".to_owned(),
                 );
             }
-            vec![Effect::RefreshMcpServers {
-                cwd: selected_task_cwds(state).into_iter().next(),
-            }]
+            let cwd = selected_task_cwds(state).into_iter().next();
+            vec![refresh_mcp_servers_effect(state, cwd)]
         }
         Action::McpServerMutationFailed { key, message } => {
             if state.marketplace.pending_mcp_key.as_deref() == Some(key.as_str()) {
@@ -15451,9 +15484,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             if success {
                 state.marketplace.mcp_status = Some(LoadStatus::Loading);
                 state.status_message = Some(format!("Authenticated MCP server {name}."));
-                vec![Effect::ReloadMcpServers {
-                    cwd: selected_task_cwds(state).into_iter().next(),
-                }]
+                let cwd = selected_task_cwds(state).into_iter().next();
+                vec![reload_mcp_servers_effect(state, cwd)]
             } else {
                 state.status_message = Some(
                     error
@@ -21307,6 +21339,60 @@ mod tests {
     }
 
     #[test]
+    fn stale_mcp_catalog_is_ignored_after_workspace_change() {
+        let mut state = AppState::default();
+        let first_root = repository_path();
+        let second_root = first_root.with_file_name("repo-second");
+        let mut first = task_in_repository("first");
+        first.cwd = first_root.clone();
+        let mut second = task_in_repository("second");
+        second.cwd = second_root.clone();
+        state.tasks = vec![first, second];
+
+        reduce(&mut state, Action::SelectTask("first".to_owned()));
+        assert_eq!(
+            reduce(&mut state, Action::RefreshMcpServers),
+            [Effect::RefreshMcpServers {
+                generation: 1,
+                cwd: Some(first_root),
+            }]
+        );
+
+        let effects = reduce(&mut state, Action::SelectTask("second".to_owned()));
+        assert!(effects.contains(&Effect::RefreshMcpServers {
+            generation: 2,
+            cwd: Some(second_root),
+        }));
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::McpServersLoaded {
+                    generation: 1,
+                    servers: Vec::new(),
+                    plugin_servers: Vec::new(),
+                    warnings: vec!["stale".to_owned()],
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(state.marketplace.mcp_status, Some(LoadStatus::Loading));
+        assert!(state.marketplace.mcp_errors.is_empty());
+
+        reduce(
+            &mut state,
+            Action::McpServersLoaded {
+                generation: 2,
+                servers: Vec::new(),
+                plugin_servers: Vec::new(),
+                warnings: vec!["current".to_owned()],
+            },
+        );
+        assert_eq!(state.marketplace.mcp_status, Some(LoadStatus::Ready));
+        assert_eq!(state.marketplace.mcp_errors, ["current"]);
+    }
+
+    #[test]
     fn stale_composer_plugin_catalog_is_ignored_after_workspace_change() {
         let mut state = AppState::default();
         let first_root = repository_path();
@@ -26882,7 +26968,10 @@ mod tests {
                     force_refresh: false,
                     thread_id: None,
                 },
-                Effect::RefreshMcpServers { cwd: None },
+                Effect::RefreshMcpServers {
+                    generation: 1,
+                    cwd: None,
+                },
                 Effect::RefreshSkills {
                     cwds: Vec::new(),
                     force_reload: false,
@@ -27324,6 +27413,7 @@ mod tests {
             reduce(
                 &mut state,
                 Action::McpServersLoaded {
+                    generation: 0,
                     servers: vec![McpServerCard {
                         key: "calendar".to_owned(),
                         name: "Calendar".to_owned(),
@@ -27457,7 +27547,10 @@ mod tests {
                     overridden: false,
                 },
             ),
-            [Effect::RefreshMcpServers { cwd: None }]
+            [Effect::RefreshMcpServers {
+                generation: 1,
+                cwd: None,
+            }]
         );
         assert!(!state.marketplace.mcp_servers[0].enabled);
 
@@ -27506,7 +27599,10 @@ mod tests {
                     error: None,
                 },
             ),
-            [Effect::ReloadMcpServers { cwd: None }]
+            [Effect::ReloadMcpServers {
+                generation: 2,
+                cwd: None,
+            }]
         );
         assert!(state.marketplace.mcp_servers[0].authorization_url.is_none());
     }
@@ -27558,7 +27654,10 @@ mod tests {
                     overridden: false,
                 },
             ),
-            [Effect::ReloadMcpServers { cwd: None }]
+            [Effect::ReloadMcpServers {
+                generation: 1,
+                cwd: None,
+            }]
         );
 
         let server = McpServerCard {
@@ -27591,6 +27690,7 @@ mod tests {
             reduce(
                 &mut state,
                 Action::McpServersLoaded {
+                    generation: 1,
                     servers: vec![server.clone()],
                     plugin_servers: Vec::new(),
                     warnings: Vec::new(),
