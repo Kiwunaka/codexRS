@@ -21,7 +21,7 @@ use image::codecs::jpeg::JpegDecoder;
 use serde_json::{Value, json};
 use tungstenite::client::client_with_config;
 use tungstenite::protocol::WebSocketConfig;
-use tungstenite::{Error as WebSocketError, Message, WebSocket};
+use tungstenite::{Error as WebSocketError, HandshakeError, Message, WebSocket};
 use url::Url;
 
 use crate::browser_agent::{
@@ -50,6 +50,7 @@ const BROWSER_TICK: Duration = Duration::from_millis(25);
 const CDP_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const CDP_IO_TIMEOUT: Duration = Duration::from_millis(25);
 const CDP_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const CDP_SHUTDOWN_REQUESTED: &str = "Browser shutdown requested";
 const DEVTOOLS_PORT_TIMEOUT: Duration = Duration::from_secs(10);
 const GRACEFUL_BROWSER_EXIT: Duration = Duration::from_secs(1);
 const MAX_CDP_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
@@ -1182,41 +1183,56 @@ fn run_browser(
         .map_err(|error| format!("could not launch the native Browser: {error}"))?;
     let job = create_browser_job(&mut child)?;
     let mut pending_commands = VecDeque::with_capacity(BROWSER_COMMAND_CAPACITY);
-    let endpoint = match wait_for_devtools_endpoint(
-        &mut child,
-        &config.profile_dir,
-        marker_before.as_ref(),
-        &commands,
-        &shutdown_requested,
-        &mut pending_commands,
-    )? {
-        Some(endpoint) => endpoint,
-        None => {
-            graceful_browser_exit(&mut child, None);
-            release_browser_job(job);
+    let mut runtime = None;
+    let result = (|| {
+        let Some(endpoint) = wait_for_devtools_endpoint(
+            &mut child,
+            &config.profile_dir,
+            marker_before.as_ref(),
+            &commands,
+            &shutdown_requested,
+            &mut pending_commands,
+        )?
+        else {
+            return Ok(());
+        };
+        if shutdown_requested.load(Ordering::Acquire) {
             return Ok(());
         }
-    };
-    let mut runtime = BrowserRuntime::connect(
-        endpoint,
-        browser_family,
-        &config,
-        download_dir,
-        download_staging_root,
-        ui_events,
-        agent_events,
-    )?;
-    let context_id = checked_context_id(&config.context_id).map_err(|error| error.to_string())?;
-    runtime.bootstrap(&context_id, config.initial_url.as_deref())?;
-    runtime.emit(BrowserEvent::Ready {
-        executable: executable.clone(),
-    });
-    runtime.emit_tabs(&context_id);
-
-    let result = runtime.run(&mut child, &commands, &shutdown_requested, pending_commands);
-    graceful_browser_exit(&mut child, Some(&mut runtime.cdp));
+        runtime = Some(BrowserRuntime::connect(
+            endpoint,
+            browser_family,
+            &config,
+            download_dir,
+            download_staging_root,
+            ui_events,
+            agent_events,
+        )?);
+        if shutdown_requested.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let context_id =
+            checked_context_id(&config.context_id).map_err(|error| error.to_string())?;
+        let Some(runtime) = runtime.as_mut() else {
+            return Err("Browser runtime was unavailable during bootstrap".to_owned());
+        };
+        runtime.bootstrap(&context_id, config.initial_url.as_deref())?;
+        if shutdown_requested.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        runtime.emit(BrowserEvent::Ready {
+            executable: executable.clone(),
+        });
+        runtime.emit_tabs(&context_id);
+        runtime.run(&mut child, &commands, &shutdown_requested, pending_commands)
+    })();
+    graceful_browser_exit(&mut child, runtime.as_mut().map(|runtime| &mut runtime.cdp));
     release_browser_job(job);
-    result
+    if shutdown_requested.load(Ordering::Acquire) {
+        Ok(())
+    } else {
+        result
+    }
 }
 
 fn browser_command(executable: &Path, config: &BrowserConfig) -> Command {
@@ -1395,6 +1411,7 @@ struct CdpClient {
     socket: WebSocket<TcpStream>,
     next_id: u64,
     pending_events: PendingCdpEvents,
+    shutdown_requested: Arc<AtomicBool>,
 }
 
 struct PendingCdpEvent {
@@ -1444,23 +1461,38 @@ impl PendingCdpEvents {
 }
 
 impl CdpClient {
-    fn connect(endpoint: &DevToolsEndpoint) -> Result<Self, String> {
+    fn connect(
+        endpoint: &DevToolsEndpoint,
+        shutdown_requested: &Arc<AtomicBool>,
+    ) -> Result<Self, String> {
         let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), endpoint.port);
-        let stream =
-            TcpStream::connect_timeout(&address, CDP_CONNECT_TIMEOUT).map_err(|error| {
-                format!("could not connect to the Browser debugging endpoint: {error}")
-            })?;
-        stream
-            .set_read_timeout(Some(CDP_CONNECT_TIMEOUT))
-            .map_err(|error| format!("could not configure Browser reads: {error}"))?;
+        let stream = connect_cdp_stream(address, shutdown_requested)?;
         stream
             .set_write_timeout(Some(CDP_REQUEST_TIMEOUT))
             .map_err(|error| format!("could not configure Browser writes: {error}"))?;
+        stream
+            .set_nonblocking(true)
+            .map_err(|error| format!("could not configure Browser reads: {error}"))?;
         let config = WebSocketConfig::default()
             .max_message_size(Some(MAX_CDP_MESSAGE_BYTES))
             .max_frame_size(Some(MAX_CDP_MESSAGE_BYTES));
-        let (mut socket, _) = client_with_config(endpoint.websocket_url(), stream, Some(config))
-            .map_err(|error| format!("could not open the Browser debugging channel: {error}"))?;
+        let mut socket = match client_with_config(endpoint.websocket_url(), stream, Some(config)) {
+            Ok((mut socket, _)) => {
+                socket
+                    .get_mut()
+                    .set_nonblocking(false)
+                    .map_err(|error| format!("could not configure Browser reads: {error}"))?;
+                socket
+            }
+            Err(HandshakeError::Interrupted(handshake)) => {
+                handshake_cdp_client(handshake, shutdown_requested)?
+            }
+            Err(HandshakeError::Failure(error)) => {
+                return Err(format!(
+                    "could not open the Browser debugging channel: {error}"
+                ));
+            }
+        };
         socket
             .get_mut()
             .set_read_timeout(Some(CDP_IO_TIMEOUT))
@@ -1469,7 +1501,12 @@ impl CdpClient {
             socket,
             next_id: 1,
             pending_events: PendingCdpEvents::new(),
+            shutdown_requested: Arc::clone(shutdown_requested),
         })
+    }
+
+    fn shutdown_requested(&self) -> bool {
+        self.shutdown_requested.load(Ordering::Acquire)
     }
 
     fn request(
@@ -1478,10 +1515,16 @@ impl CdpClient {
         params: Value,
         session_id: Option<&str>,
     ) -> Result<Value, String> {
+        if self.shutdown_requested() {
+            return Err(CDP_SHUTDOWN_REQUESTED.to_owned());
+        }
         let id = self.send_request(method, params, session_id)?;
 
         let deadline = Instant::now() + CDP_REQUEST_TIMEOUT;
         loop {
+            if self.shutdown_requested() {
+                return Err(CDP_SHUTDOWN_REQUESTED.to_owned());
+            }
             if Instant::now() >= deadline {
                 return Err(format!("Browser command {method} timed out"));
             }
@@ -1544,6 +1587,83 @@ impl CdpClient {
             )?;
         }
         Ok(())
+    }
+
+    fn close_browser(&mut self) {
+        if self
+            .socket
+            .get_mut()
+            .set_write_timeout(Some(CDP_IO_TIMEOUT))
+            .is_err()
+        {
+            return;
+        }
+        let _ = self.send_request("Browser.close", json!({}), None);
+        let _ = self
+            .socket
+            .get_mut()
+            .set_write_timeout(Some(CDP_REQUEST_TIMEOUT));
+    }
+}
+
+fn connect_cdp_stream(
+    address: SocketAddr,
+    shutdown_requested: &AtomicBool,
+) -> Result<TcpStream, String> {
+    let deadline = Instant::now() + CDP_CONNECT_TIMEOUT;
+    loop {
+        if shutdown_requested.load(Ordering::Acquire) {
+            return Err(CDP_SHUTDOWN_REQUESTED.to_owned());
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(
+                "could not connect to the Browser debugging endpoint: timed out".to_owned(),
+            );
+        }
+        match TcpStream::connect_timeout(&address, remaining.min(CDP_IO_TIMEOUT)) {
+            Ok(stream) => return Ok(stream),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == io::ErrorKind::TimedOut => {}
+            Err(error) => {
+                return Err(format!(
+                    "could not connect to the Browser debugging endpoint: {error}"
+                ));
+            }
+        }
+    }
+}
+
+fn handshake_cdp_client(
+    mut handshake: tungstenite::handshake::MidHandshake<tungstenite::ClientHandshake<TcpStream>>,
+    shutdown_requested: &AtomicBool,
+) -> Result<WebSocket<TcpStream>, String> {
+    let deadline = Instant::now() + CDP_CONNECT_TIMEOUT;
+    loop {
+        if shutdown_requested.load(Ordering::Acquire) {
+            return Err(CDP_SHUTDOWN_REQUESTED.to_owned());
+        }
+        if Instant::now() >= deadline {
+            return Err("could not open the Browser debugging channel: timed out".to_owned());
+        }
+        match handshake.handshake() {
+            Ok((mut socket, _)) => {
+                socket
+                    .get_mut()
+                    .set_nonblocking(false)
+                    .map_err(|error| format!("could not configure Browser reads: {error}"))?;
+                return Ok(socket);
+            }
+            Err(HandshakeError::Interrupted(next)) => {
+                handshake = next;
+                thread::sleep(CDP_IO_TIMEOUT);
+            }
+            Err(HandshakeError::Failure(error)) => {
+                return Err(format!(
+                    "could not open the Browser debugging channel: {error}"
+                ));
+            }
+        }
     }
 }
 
@@ -1821,7 +1941,7 @@ impl BrowserRuntime {
     ) -> Result<Self, String> {
         Ok(Self {
             browser_family,
-            cdp: CdpClient::connect(&endpoint)?,
+            cdp: CdpClient::connect(&endpoint, &ui_events.shutdown_requested)?,
             ui_events,
             agent_events,
             tabs: Vec::with_capacity(4),
@@ -4821,7 +4941,7 @@ fn allowed_agent_cdp_method(method: &str) -> bool {
 
 fn graceful_browser_exit(child: &mut Child, cdp: Option<&mut CdpClient>) {
     if let Some(cdp) = cdp {
-        let _ = cdp.request("Browser.close", json!({}), None);
+        cdp.close_browser();
     }
     let deadline = Instant::now() + GRACEFUL_BROWSER_EXIT;
     while Instant::now() < deadline {
@@ -4881,8 +5001,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread;
-    use std::time::Duration;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     use codex_core::{
         BrowserPermissionResource, BrowserPermissionValue, BrowserPermissionsState,
@@ -4894,9 +5013,9 @@ mod tests {
     use super::{
         BROWSER_COMMAND_CAPACITY, BrowserAgentChildSession, BrowserCommand, BrowserCommandError,
         BrowserConfig, BrowserDownloadControl, BrowserDownloadRuntime, BrowserEvent, BrowserFamily,
-        CdpClient, DevToolsEndpoint, LatestBrowserFrame, MAX_AGENT_CHILD_SESSIONS,
-        MAX_BROWSER_URL_BYTES, MAX_CDP_PENDING_EVENT_BYTES, PendingCdpEvents,
-        agent_tab_id_for_cdp_session, allowed_agent_cdp_method, browser_command,
+        CDP_SHUTDOWN_REQUESTED, CdpClient, DevToolsEndpoint, LatestBrowserFrame,
+        MAX_AGENT_CHILD_SESSIONS, MAX_BROWSER_URL_BYTES, MAX_CDP_PENDING_EVENT_BYTES,
+        PendingCdpEvents, agent_tab_id_for_cdp_session, allowed_agent_cdp_method, browser_command,
         browser_origin_pattern_matches, browser_permission_for_url, cdp_key_name,
         checked_agent_browser_id, checked_agent_viewport, checked_download_url,
         checked_navigation_url, control_download_transfer, create_browser_job,
@@ -5376,6 +5495,156 @@ mod tests {
     }
 
     #[test]
+    fn cdp_request_stops_waiting_when_startup_shutdown_is_requested() -> Result<(), Box<dyn Error>>
+    {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let port = listener.local_addr()?.port();
+        let (request_received_sender, request_received_receiver) = bounded(1);
+        let (finish_sender, finish_receiver) = bounded(1);
+        let server = thread::spawn(move || {
+            let Ok((connection, _)) = listener.accept() else {
+                return false;
+            };
+            let Ok(mut socket) = tungstenite::accept(connection) else {
+                return false;
+            };
+            if socket.read().is_err() || request_received_sender.send(()).is_err() {
+                return false;
+            }
+            finish_receiver.recv_timeout(Duration::from_secs(2)).is_ok()
+        });
+        let shutdown_requested = Arc::new(AtomicBool::new(false));
+        let shutdown_setter = {
+            let shutdown_requested = Arc::clone(&shutdown_requested);
+            thread::spawn(move || {
+                if request_received_receiver
+                    .recv_timeout(Duration::from_secs(2))
+                    .is_ok()
+                {
+                    shutdown_requested.store(true, Ordering::Release);
+                }
+            })
+        };
+        let endpoint = DevToolsEndpoint {
+            port,
+            path: "/devtools/browser/test".to_owned(),
+        };
+        let mut cdp = CdpClient::connect(&endpoint, &shutdown_requested)?;
+
+        let started = Instant::now();
+        let result = cdp.request("Runtime.enable", json!({}), None);
+        let elapsed = started.elapsed();
+        let _ = finish_sender.send(());
+        if shutdown_setter.join().is_err() || !matches!(server.join(), Ok(true)) {
+            return Err("CDP shutdown fixture failed".into());
+        }
+
+        assert_eq!(result, Err(CDP_SHUTDOWN_REQUESTED.to_owned()));
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "CDP request waited for its normal timeout after shutdown"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cdp_connect_stops_waiting_when_handshake_shutdown_is_requested() -> Result<(), Box<dyn Error>>
+    {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let port = listener.local_addr()?.port();
+        let (request_received_sender, request_received_receiver) = bounded(1);
+        let (finish_sender, finish_receiver) = bounded(1);
+        let server = thread::spawn(move || {
+            let Ok((mut connection, _)) = listener.accept() else {
+                return false;
+            };
+            let mut request = [0_u8; 1024];
+            if connection.read(&mut request).is_err() || request_received_sender.send(()).is_err() {
+                return false;
+            }
+            finish_receiver.recv_timeout(Duration::from_secs(2)).is_ok()
+        });
+        let shutdown_requested = Arc::new(AtomicBool::new(false));
+        let shutdown_setter = {
+            let shutdown_requested = Arc::clone(&shutdown_requested);
+            thread::spawn(move || {
+                if request_received_receiver
+                    .recv_timeout(Duration::from_secs(2))
+                    .is_ok()
+                {
+                    shutdown_requested.store(true, Ordering::Release);
+                }
+            })
+        };
+        let endpoint = DevToolsEndpoint {
+            port,
+            path: "/devtools/browser/test".to_owned(),
+        };
+
+        let started = Instant::now();
+        let result = CdpClient::connect(&endpoint, &shutdown_requested);
+        let elapsed = started.elapsed();
+        let _ = finish_sender.send(());
+        if shutdown_setter.join().is_err() || !matches!(server.join(), Ok(true)) {
+            return Err("CDP handshake shutdown fixture failed".into());
+        }
+
+        assert_eq!(result.map(|_| ()), Err(CDP_SHUTDOWN_REQUESTED.to_owned()));
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "CDP connect waited for the handshake timeout after shutdown"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cdp_close_does_not_wait_for_a_response_during_shutdown() -> Result<(), Box<dyn Error>> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let port = listener.local_addr()?.port();
+        let (close_received_sender, close_received_receiver) = bounded(1);
+        let (finish_sender, finish_receiver) = bounded(1);
+        let server = thread::spawn(move || {
+            let Ok((connection, _)) = listener.accept() else {
+                return false;
+            };
+            let Ok(mut socket) = tungstenite::accept(connection) else {
+                return false;
+            };
+            if socket.read().is_err() || close_received_sender.send(()).is_err() {
+                return false;
+            }
+            finish_receiver.recv_timeout(Duration::from_secs(2)).is_ok()
+        });
+        let shutdown_requested = Arc::new(AtomicBool::new(false));
+        let endpoint = DevToolsEndpoint {
+            port,
+            path: "/devtools/browser/test".to_owned(),
+        };
+        let mut cdp = CdpClient::connect(&endpoint, &shutdown_requested)?;
+        shutdown_requested.store(true, Ordering::Release);
+
+        let started = Instant::now();
+        cdp.close_browser();
+        assert!(
+            close_received_receiver
+                .recv_timeout(Duration::from_secs(1))
+                .is_ok(),
+            "Browser.close was not sent during shutdown"
+        );
+        let elapsed = started.elapsed();
+        let _ = finish_sender.send(());
+        if !matches!(server.join(), Ok(true)) {
+            return Err("CDP close shutdown fixture failed".into());
+        }
+
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "Browser.close waited for a CDP response during shutdown"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn download_grants_preserve_exact_bounded_urls() {
         assert_eq!(
             checked_download_url(Some("blob:https://example.com/download-id"))
@@ -5583,18 +5852,19 @@ mod tests {
         let job = create_browser_job(&mut child).map_err(io::Error::other)?;
         let (_commands, command_receiver) = bounded(BROWSER_COMMAND_CAPACITY);
         let mut pending_commands = VecDeque::new();
-        let shutdown_requested = AtomicBool::new(false);
+        let shutdown_requested = Arc::new(AtomicBool::new(false));
         let endpoint = wait_for_devtools_endpoint(
             &mut child,
             &profile_dir,
             None,
             &command_receiver,
-            &shutdown_requested,
+            shutdown_requested.as_ref(),
             &mut pending_commands,
         )
         .map_err(io::Error::other)?
         .ok_or("Chromium stopped before publishing its DevTools endpoint")?;
-        let mut cdp = CdpClient::connect(&endpoint).map_err(io::Error::other)?;
+        let mut cdp =
+            CdpClient::connect(&endpoint, &shutdown_requested).map_err(io::Error::other)?;
 
         let probe = (|| -> Result<(), Box<dyn std::error::Error>> {
             cdp.request("Target.setDiscoverTargets", json!({"discover": true}), None)
