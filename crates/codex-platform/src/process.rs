@@ -385,7 +385,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn detached_process_timeout_terminates_its_process_group() {
+    fn detached_process_timeout_terminates_its_process_group() -> std::io::Result<()> {
         let marker = env::temp_dir().join(format!(
             "codex-platform-detached-process-{}-{}",
             std::process::id(),
@@ -400,8 +400,7 @@ mod tests {
         command
             .args(["-c", "sleep 0.2; : > \"$CODEX_RS_DETACHED_MARKER\""])
             .env("CODEX_RS_DETACHED_MARKER", &marker);
-        spawn_detached_bounded_for(&mut command, Duration::from_millis(50))
-            .expect("detached process should start");
+        spawn_detached_bounded_for(&mut command, Duration::from_millis(50))?;
 
         thread::sleep(Duration::from_millis(400));
         let marker_created = marker.exists();
@@ -410,6 +409,7 @@ mod tests {
             !marker_created,
             "timed out detached process should not leave its child running"
         );
+        Ok(())
     }
 
     #[cfg(windows)]
