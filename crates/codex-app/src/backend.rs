@@ -10083,7 +10083,7 @@ fn run_browser_download_command(
     }
 }
 
-fn drain_browser(browser: &mut Option<BrowserRuntime>, events: &dyn ActionEmitter) -> bool {
+fn drain_browser(browser: &mut Option<BrowserRuntime>, events: &UiEventSender) -> bool {
     let Some(runtime) = browser.as_mut() else {
         return false;
     };
@@ -10134,16 +10134,20 @@ fn drain_browser(browser: &mut Option<BrowserRuntime>, events: &dyn ActionEmitte
                 jpeg,
                 width,
                 height,
-            })) => emit(
-                events,
-                Action::BrowserFrameReady {
-                    task_id: context_id,
-                    tab_id,
-                    jpeg: Arc::from(jpeg),
-                    width,
-                    height,
-                },
-            ),
+            })) => {
+                let frame_bytes = jpeg.len();
+                let _ = events.emit_budgeted(
+                    Action::BrowserFrameReady {
+                        task_id: context_id,
+                        tab_id,
+                        jpeg: Arc::from(jpeg),
+                        width,
+                        height,
+                    },
+                    frame_bytes,
+                    false,
+                );
+            }
             Ok(Some(BrowserEvent::VisibilityRequested {
                 context_id,
                 visible,
@@ -16970,7 +16974,17 @@ mod tests {
             UiEventDelivery::Delivered
         );
         assert_eq!(
-            events.emit_budgeted(Action::SetStatus("second".to_owned()), 1, false),
+            events.emit_budgeted(
+                Action::BrowserFrameReady {
+                    task_id: "task".to_owned(),
+                    tab_id: "tab".to_owned(),
+                    jpeg: Arc::from([1_u8]),
+                    width: 1,
+                    height: 1,
+                },
+                1,
+                false,
+            ),
             UiEventDelivery::Dropped
         );
 
