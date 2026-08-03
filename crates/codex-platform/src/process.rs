@@ -450,7 +450,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn successful_process_exit_terminates_its_process_group_before_reader_join()
-    -> std::io::Result<()> {
+    -> Result<(), ProcessError> {
         let marker = env::temp_dir().join(format!(
             "codex-platform-successful-process-{}-{}",
             std::process::id(),
