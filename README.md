@@ -137,7 +137,7 @@ If it is not on `PATH`, set `CODEX_RS_CODEX_BIN` to the native `codex` or
 Download only from the [GitHub Releases](https://github.com/Kiwunaka/codexRS/releases)
 page. Each pre-release provides `codexrs-<tag>-windows-x86_64.zip` and
 `codexrs-<tag>-linux-x86_64.tar.gz`, with `SHA256SUMS.txt`; substitute the
-release tag (for example, `v0.1.0-rc.6`) for `<tag>`.
+full tag of the release you selected for `<tag>`.
 Verify the archive checksum before extraction; for example, on Linux run
 `grep ' \./codexrs-<tag>-linux-x86_64.tar.gz$' SHA256SUMS.txt | sha256sum -c -`,
 and on Windows compare
