@@ -7,6 +7,7 @@ use std::io::{self, Cursor, Read};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -402,6 +403,7 @@ pub struct BrowserSession {
     events: Receiver<BrowserEvent>,
     latest_frame: LatestBrowserFrame,
     agent_bridge: BrowserAgentBridge,
+    shutdown_requested: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -413,6 +415,7 @@ struct LatestBrowserFrame {
 struct BrowserUiEvents {
     control: Sender<BrowserEvent>,
     latest_frame: LatestBrowserFrame,
+    shutdown_requested: Arc<AtomicBool>,
 }
 
 impl LatestBrowserFrame {
@@ -473,10 +476,12 @@ impl BrowserSession {
         let (command_sender, command_receiver) =
             crossbeam_channel::bounded(BROWSER_COMMAND_CAPACITY);
         let (event_sender, event_receiver) = crossbeam_channel::bounded(BROWSER_EVENT_CAPACITY);
+        let shutdown_requested = Arc::new(AtomicBool::new(false));
         let latest_frame = LatestBrowserFrame::default();
         let runtime_ui_events = BrowserUiEvents {
             control: event_sender.clone(),
             latest_frame: latest_frame.clone(),
+            shutdown_requested: Arc::clone(&shutdown_requested),
         };
         let (agent_event_sender, agent_event_receiver) =
             crossbeam_channel::bounded(BROWSER_AGENT_EVENT_CAPACITY);
@@ -505,6 +510,7 @@ impl BrowserSession {
             events: event_receiver,
             latest_frame,
             agent_bridge,
+            shutdown_requested,
             thread: Some(thread),
         })
     }
@@ -753,6 +759,7 @@ impl BrowserSession {
     }
 
     pub fn shutdown(&mut self) {
+        self.shutdown_requested.store(true, Ordering::Release);
         self.agent_bridge.shutdown();
         let _ = self.commands.try_send(BrowserCommand::Shutdown);
         if let Some(thread) = self.thread.take() {
@@ -1165,6 +1172,7 @@ fn run_browser(
     ui_events: BrowserUiEvents,
     agent_events: Sender<BrowserAgentNotification>,
 ) -> Result<(), String> {
+    let shutdown_requested = Arc::clone(&ui_events.shutdown_requested);
     let browser_family = BrowserFamily::from_executable(&executable);
     let marker_before = read_devtools_marker(&config.profile_dir).ok();
     let mut command = browser_command(&executable, &config);
@@ -1178,6 +1186,7 @@ fn run_browser(
         &config.profile_dir,
         marker_before.as_ref(),
         &commands,
+        &shutdown_requested,
         &mut pending_commands,
     )? {
         Some(endpoint) => endpoint,
@@ -1203,7 +1212,7 @@ fn run_browser(
     });
     runtime.emit_tabs(&context_id);
 
-    let result = runtime.run(&mut child, &commands, pending_commands);
+    let result = runtime.run(&mut child, &commands, &shutdown_requested, pending_commands);
     graceful_browser_exit(&mut child, Some(&mut runtime.cdp));
     release_browser_job(job);
     result
@@ -1254,10 +1263,14 @@ fn wait_for_devtools_endpoint(
     profile_dir: &Path,
     marker_before: Option<&DevToolsEndpoint>,
     commands: &Receiver<BrowserCommand>,
+    shutdown_requested: &AtomicBool,
     pending_commands: &mut VecDeque<BrowserCommand>,
 ) -> Result<Option<DevToolsEndpoint>, String> {
     let deadline = Instant::now() + DEVTOOLS_PORT_TIMEOUT;
     loop {
+        if shutdown_requested.load(Ordering::Acquire) {
+            return Ok(None);
+        }
         if let Some(status) = child
             .try_wait()
             .map_err(|error| format!("could not inspect Browser startup: {error}"))?
@@ -1283,6 +1296,24 @@ fn wait_for_devtools_endpoint(
             return Err("timed out waiting for the native Browser debugging endpoint".to_owned());
         }
         thread::sleep(BROWSER_TICK);
+    }
+}
+
+fn next_browser_command(
+    shutdown_requested: &AtomicBool,
+    commands: &Receiver<BrowserCommand>,
+    pending_commands: &mut VecDeque<BrowserCommand>,
+) -> Result<Option<BrowserCommand>, TryRecvError> {
+    if shutdown_requested.load(Ordering::Acquire) {
+        return Ok(Some(BrowserCommand::Shutdown));
+    }
+    if let Some(command) = pending_commands.pop_front() {
+        return Ok(Some(command));
+    }
+    match commands.try_recv() {
+        Ok(command) => Ok(Some(command)),
+        Err(TryRecvError::Empty) => Ok(None),
+        Err(error @ TryRecvError::Disconnected) => Err(error),
     }
 }
 
@@ -1792,9 +1823,13 @@ impl BrowserRuntime {
         &mut self,
         child: &mut Child,
         commands: &Receiver<BrowserCommand>,
+        shutdown_requested: &AtomicBool,
         mut pending_commands: VecDeque<BrowserCommand>,
     ) -> Result<(), String> {
         loop {
+            if shutdown_requested.load(Ordering::Acquire) {
+                return Ok(());
+            }
             self.expire_download_grant()?;
             if let Some(status) = child
                 .try_wait()
@@ -1804,15 +1839,13 @@ impl BrowserRuntime {
             }
 
             for _ in 0..BROWSER_COMMANDS_PER_TICK {
-                let command = if let Some(command) = pending_commands.pop_front() {
-                    Some(command)
-                } else {
-                    match commands.try_recv() {
-                        Ok(command) => Some(command),
-                        Err(TryRecvError::Empty) => None,
+                let command =
+                    match next_browser_command(shutdown_requested, commands, &mut pending_commands)
+                    {
+                        Ok(command) => command,
                         Err(TryRecvError::Disconnected) => return Ok(()),
-                    }
-                };
+                        Err(TryRecvError::Empty) => None,
+                    };
                 let Some(command) = command else {
                     break;
                 };
@@ -4787,15 +4820,16 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        BROWSER_COMMAND_CAPACITY, BrowserCommandError, BrowserConfig, BrowserDownloadControl,
-        BrowserDownloadRuntime, BrowserEvent, BrowserFamily, CdpClient, DevToolsEndpoint,
-        LatestBrowserFrame, MAX_BROWSER_URL_BYTES, MAX_CDP_PENDING_EVENT_BYTES, PendingCdpEvents,
-        browser_command, browser_origin_pattern_matches, browser_permission_for_url, cdp_key_name,
-        checked_agent_browser_id, checked_agent_viewport, checked_download_url,
-        checked_navigation_url, control_download_transfer, create_browser_job,
-        graceful_browser_exit, move_download_to_destination, normalize_browser_origin,
-        parse_devtools_marker, resolve_browser_binary, safe_download_filename,
-        screencast_frame_ack, try_recv_browser_event, wait_for_devtools_endpoint,
+        BROWSER_COMMAND_CAPACITY, BrowserCommand, BrowserCommandError, BrowserConfig,
+        BrowserDownloadControl, BrowserDownloadRuntime, BrowserEvent, BrowserFamily, CdpClient,
+        DevToolsEndpoint, LatestBrowserFrame, MAX_BROWSER_URL_BYTES, MAX_CDP_PENDING_EVENT_BYTES,
+        PendingCdpEvents, browser_command, browser_origin_pattern_matches,
+        browser_permission_for_url, cdp_key_name, checked_agent_browser_id, checked_agent_viewport,
+        checked_download_url, checked_navigation_url, control_download_transfer,
+        create_browser_job, graceful_browser_exit, move_download_to_destination,
+        next_browser_command, normalize_browser_origin, parse_devtools_marker,
+        resolve_browser_binary, safe_download_filename, screencast_frame_ack,
+        try_recv_browser_event, wait_for_devtools_endpoint,
     };
     use super::{
         MAX_XDG_USER_DIRS_BYTES, decode_xdg_double_quoted, linux_user_dirs_config_path,
@@ -5082,6 +5116,28 @@ mod tests {
     }
 
     #[test]
+    fn shutdown_flag_outranks_a_full_browser_command_queue() {
+        let (sender, receiver) = bounded(1);
+        let mut pending_commands = VecDeque::new();
+        let shutdown_requested = AtomicBool::new(false);
+        assert!(
+            sender
+                .try_send(BrowserCommand::SetPromptForUserDownloads(true))
+                .is_ok()
+        );
+        shutdown_requested.store(true, Ordering::Release);
+
+        assert!(matches!(
+            next_browser_command(&shutdown_requested, &receiver, &mut pending_commands),
+            Ok(Some(BrowserCommand::Shutdown))
+        ));
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(BrowserCommand::SetPromptForUserDownloads(true))
+        ));
+    }
+
+    #[test]
     fn cdp_pending_events_evict_oldest_to_stay_within_byte_budget() {
         let mut events = PendingCdpEvents::new();
         let quarter_budget = MAX_CDP_PENDING_EVENT_BYTES / 4;
@@ -5331,11 +5387,13 @@ mod tests {
         let job = create_browser_job(&mut child).map_err(io::Error::other)?;
         let (_commands, command_receiver) = bounded(BROWSER_COMMAND_CAPACITY);
         let mut pending_commands = VecDeque::new();
+        let shutdown_requested = AtomicBool::new(false);
         let endpoint = wait_for_devtools_endpoint(
             &mut child,
             &profile_dir,
             None,
             &command_receiver,
+            &shutdown_requested,
             &mut pending_commands,
         )
         .map_err(io::Error::other)?
