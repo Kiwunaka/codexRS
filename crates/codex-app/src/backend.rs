@@ -7481,11 +7481,15 @@ fn run_effect(
                     }
                 }
                 Err(error) => {
-                    if goal_objective.is_some() {
+                    if let Some(objective) = goal_objective {
                         emit(
                             events,
-                            Action::GoalLoadFailed {
+                            Action::GoalAttachmentStartFailed {
                                 task_id: goal_task_id,
+                                prompt: RetryableUserMessage {
+                                    text: objective,
+                                    attachments: prompt.attachments,
+                                },
                                 message: format!("failed to start Goal attachment turn: {error}"),
                             },
                         );
