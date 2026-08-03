@@ -5,6 +5,39 @@ All notable changes to codexRS are documented here. The project follows
 
 ## [Unreleased]
 
+## [0.1.0-rc.8] - 2026-08-03
+
+### Added
+
+- MCP runtime-status catalogs load bounded additional pages instead of
+  stopping at the first page.
+
+### Fixed
+
+- Browser screencast delivery coalesces superseded frames and respects the UI
+  byte budget without displacing control or disconnect events.
+- Hidden right-side panels restore only at wide layout widths.
+- Failed or late Goal, shell, login, approval, MCP, and pull-request operations
+  preserve retry or resync state.
+- New-chat creation no longer overwrites a newer draft on late failure or
+  success.
+- Task, diff, review-panel, usage, pull-request, MCP OAuth, and compact-layout
+  state remains scoped to the active workspace.
+- Linux launchers preserve the configured Codex CLI path, validate executable
+  Browser paths, and bound opener and terminal process lifecycles.
+- Account refresh no longer interrupts device or browser login cancellation.
+- Import completion resync and task-only Find command behavior are corrected.
+
+### Security
+
+- Browser runtime queues and shutdown are bounded, debugger targets stay
+  isolated to their owning tab, and raw Target-domain escape paths are
+  rejected.
+- Computer Use revalidates the approved application identity before raw input
+  and accessibility actions.
+- Failed approval and MCP responses restore the exact pending request instead
+  of silently dropping it.
+
 ## [0.1.0-rc.7] - 2026-08-03
 
 ### Added
