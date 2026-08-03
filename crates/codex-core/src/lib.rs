@@ -7951,7 +7951,16 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             };
             for timeline in state.timelines.values_mut() {
                 timeline.runtime_status_loaded = false;
+                timeline.interrupt_pending = false;
                 timeline.goal_continuation_pending = false;
+                if let Some(buffering) = timeline
+                    .safety_buffering
+                    .as_mut()
+                    .filter(|buffering| buffering.retry_pending)
+                {
+                    buffering.retry_pending = false;
+                    buffering.dismissed = false;
+                }
             }
             vec![Effect::ScheduleAppServerReconnect]
         }
@@ -9712,6 +9721,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             if generation != timeline.runtime_generation {
                 return Vec::new();
             }
+            let same_active_turn =
+                active_turn_id.is_some() && timeline.active_turn_id == active_turn_id;
             timeline.runtime_status_loaded = true;
             timeline.active_turn_id = active_turn_id;
             if active_turn_is_review && timeline.active_turn_id.is_some() {
@@ -9719,9 +9730,17 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             } else if timeline.active_review_turn_id != timeline.active_turn_id {
                 timeline.active_review_turn_id = None;
             }
-            timeline.interrupt_pending = false;
-            timeline.retryable_turn = None;
-            timeline.safety_buffering = None;
+            if same_active_turn {
+                if timeline.safety_buffering.as_ref().is_some_and(|buffering| {
+                    timeline.active_turn_id.as_deref() != Some(buffering.turn_id.as_str())
+                }) {
+                    timeline.safety_buffering = None;
+                }
+            } else {
+                timeline.interrupt_pending = false;
+                timeline.retryable_turn = None;
+                timeline.safety_buffering = None;
+            }
             if !is_idle {
                 timeline.goal_continuation_pending = false;
             }
@@ -18757,11 +18776,11 @@ mod tests {
         PullRequestReviewEvent, PullRequestReviewState, PullRequestState, PullRequestSummary,
         ReasoningEffortOption, RemoteControlRuntimeStatus, RemoteDevice, RemotePairing,
         RetryableTurnSubmission, RetryableUserMessage, ReviewDelivery, ReviewStartError,
-        ReviewTarget, ServiceTierOption, SkillCard, SkillScope, StartedImport, TaskRunStatus,
-        TaskSearchResult, TaskSummary, TerminalDockLocation, ThreadGoal, ThreadGoalState,
-        ThreadGoalStatus, TimelineItem, TimelineKind, UsageLimitWindow, UserInputAnswer,
-        UserInputAnswers, UserInputOption, UserInputQuestion, UserInputRequest,
-        appearance_code_theme_supports_variant, clear_git_for_context_change,
+        ReviewTarget, SafetyBufferingState, ServiceTierOption, SkillCard, SkillScope,
+        StartedImport, TaskRunStatus, TaskSearchResult, TaskSummary, TerminalDockLocation,
+        ThreadGoal, ThreadGoalState, ThreadGoalStatus, TimelineItem, TimelineKind,
+        UsageLimitWindow, UserInputAnswer, UserInputAnswers, UserInputOption, UserInputQuestion,
+        UserInputRequest, appearance_code_theme_supports_variant, clear_git_for_context_change,
         computer_app_id_matches, permission_mode_options, reduce, stable_reference,
         validate_mcp_form_content,
     };
@@ -23397,6 +23416,111 @@ mod tests {
             Some("turn-active")
         );
         assert_eq!(state.tasks[0].status, TaskRunStatus::Running);
+    }
+
+    #[test]
+    fn same_turn_runtime_snapshot_keeps_safety_retry_and_stop_pending() {
+        let submission = RetryableTurnSubmission {
+            messages: vec![RetryableUserMessage {
+                text: "Inspect the failure".to_owned(),
+                attachments: Vec::new(),
+            }],
+            model: None,
+            effort: None,
+            service_tier: None,
+            permissions: None,
+            approval_policy: None,
+            approvals_reviewer: None,
+            plan_mode: false,
+            personality: Personality::Pragmatic,
+        };
+        let mut state = AppState {
+            connection: ConnectionStatus::Online,
+            tasks: vec![task("t1")],
+            selected_task_id: Some("t1".to_owned()),
+            ..AppState::default()
+        };
+        let timeline = state.timelines.entry("t1".to_owned()).or_default();
+        timeline.runtime_generation = 1;
+        timeline.active_turn_id = Some("turn-1".to_owned());
+        timeline.interrupt_pending = true;
+        timeline.retryable_turn = Some(submission.clone());
+        timeline.safety_buffering = Some(SafetyBufferingState {
+            turn_id: "turn-1".to_owned(),
+            faster_model: Some("gpt-5.6-terra".to_owned()),
+            retry_available: true,
+            dismissed: false,
+            retry_pending: false,
+        });
+
+        reduce(
+            &mut state,
+            Action::TaskRuntimeLoaded {
+                task_id: "t1".to_owned(),
+                generation: 1,
+                active_turn_id: Some("turn-1".to_owned()),
+                active_turn_is_review: false,
+                run_status: Some(TaskRunStatus::Running),
+            },
+        );
+        assert_eq!(state.timelines["t1"].retryable_turn, Some(submission));
+        assert!(state.timelines["t1"].interrupt_pending);
+        assert!(reduce(&mut state, Action::InterruptActiveTurn).is_empty());
+        let buffering = state
+            .timelines
+            .get_mut("t1")
+            .and_then(|timeline| timeline.safety_buffering.as_mut())
+            .unwrap_or_else(|| panic!("same-turn buffering is preserved"));
+        buffering.retry_pending = true;
+        buffering.dismissed = true;
+
+        assert_eq!(
+            reduce(&mut state, Action::ConnectionLost),
+            [Effect::ScheduleAppServerReconnect]
+        );
+        let reconnect_generation = reduce(&mut state, Action::Connected)
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::ResumeTask {
+                    task_id,
+                    generation,
+                } if task_id == "t1" => Some(*generation),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("reconnect resumes the selected task"));
+        reduce(
+            &mut state,
+            Action::TaskRuntimeLoaded {
+                task_id: "t1".to_owned(),
+                generation: reconnect_generation,
+                active_turn_id: Some("turn-1".to_owned()),
+                active_turn_is_review: false,
+                run_status: Some(TaskRunStatus::Running),
+            },
+        );
+        let timeline = &state.timelines["t1"];
+        assert!(!timeline.interrupt_pending);
+        assert!(timeline.retryable_turn.is_some());
+        assert!(timeline.safety_buffering.as_ref().is_some_and(|buffering| {
+            buffering.retry_available && !buffering.retry_pending && !buffering.dismissed
+        }));
+        assert!(matches!(
+            reduce(&mut state, Action::InterruptActiveTurn).as_slice(),
+            [Effect::InterruptTurn { task_id, turn_id }]
+                if task_id == "t1" && turn_id == "turn-1"
+        ));
+        assert!(matches!(
+            reduce(
+                &mut state,
+                Action::RetrySafetyBufferedTurn {
+                    task_id: "t1".to_owned(),
+                    turn_id: "turn-1".to_owned(),
+                },
+            )
+            .as_slice(),
+            [Effect::RetrySafetyBufferedTurn { task_id, turn_id, .. }]
+                if task_id == "t1" && turn_id == "turn-1"
+        ));
     }
 
     #[test]
