@@ -7084,6 +7084,26 @@ fn clear_pull_request_diff(state: &mut AppState) {
     state.pull_requests.diff_error = None;
 }
 
+fn invalidate_pull_requests_for_workspace_change(state: &mut AppState) {
+    state.pull_requests.generation = state.pull_requests.generation.saturating_add(1);
+    state.pull_requests.detail_generation = state.pull_requests.detail_generation.saturating_add(1);
+    state.pull_requests.diff_generation = state.pull_requests.diff_generation.saturating_add(1);
+    state.pull_requests.status = LoadStatus::Idle;
+    state.pull_requests.items.clear();
+    state.pull_requests.total_count = 0;
+    state.pull_requests.next_cursor = None;
+    state.pull_requests.truncated = false;
+    state.pull_requests.loading_more = false;
+    state.pull_requests.selected = None;
+    state.pull_requests.detail_status = LoadStatus::Idle;
+    state.pull_requests.detail = None;
+    state.pull_requests.error = None;
+    state.pull_requests.detail_error = None;
+    state.pull_requests.detail_tab = PullRequestDetailTab::Summary;
+    state.pull_requests.mutation_error = None;
+    clear_pull_request_diff(state);
+}
+
 fn begin_pull_request_diff(state: &mut AppState) -> Vec<Effect> {
     let Some(identity) = state.pull_requests.selected.clone() else {
         return Vec::new();
@@ -9432,6 +9452,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 || previous_cwd != selected_cwd;
             if git_context_changed {
                 clear_git_for_context_change(state);
+            }
+            if previous_cwd != selected_cwd {
+                invalidate_pull_requests_for_workspace_change(state);
             }
             let mut effects = selected_cwd.map_or_else(Vec::new, |cwd| {
                 let generation = next_git_refresh_generation(state);
@@ -23717,6 +23740,68 @@ mod tests {
             ]
         );
         assert_eq!(state.pull_requests.status, LoadStatus::Loading);
+    }
+
+    #[test]
+    fn changing_pull_request_workspace_invalidates_the_inbox_before_reloading() {
+        let first_root = PathBuf::from("C:\\repo-a");
+        let second_root = PathBuf::from("C:\\repo-b");
+        let mut first = task_in_repository("first");
+        first.cwd = first_root;
+        let mut second = task_in_repository("second");
+        second.cwd = second_root.clone();
+        let summary = pull_request(42);
+        let identity = summary.identity.clone();
+        let mut state = AppState {
+            tasks: vec![first, second],
+            selected_task_id: Some("first".to_owned()),
+            ..AppState::default()
+        };
+        state.pull_requests.generation = 4;
+        state.pull_requests.status = LoadStatus::Ready;
+        state.pull_requests.items = vec![summary];
+        state.pull_requests.total_count = 2;
+        state.pull_requests.next_cursor = Some("next-page".to_owned());
+        state.pull_requests.truncated = true;
+        state.pull_requests.selected = Some(identity);
+        state.pull_requests.detail_generation = 5;
+        state.pull_requests.detail_status = LoadStatus::Ready;
+        state.pull_requests.diff_generation = 6;
+        state.pull_requests.diff_status = LoadStatus::Ready;
+        state.pull_requests.diff_head_revision = Some("abc123".to_owned());
+        state.pull_requests.unified_diff = "stale diff".to_owned();
+        state.pull_requests.pending_mutation = Some(PullRequestMutationKind::Approve);
+        state.pull_requests.mutation_generation = 7;
+
+        reduce(&mut state, Action::SelectTask("second".to_owned()));
+
+        assert_eq!(state.pull_requests.generation, 5);
+        assert_eq!(state.pull_requests.status, LoadStatus::Idle);
+        assert!(state.pull_requests.items.is_empty());
+        assert_eq!(state.pull_requests.next_cursor, None);
+        assert_eq!(state.pull_requests.selected, None);
+        assert_eq!(state.pull_requests.detail_status, LoadStatus::Idle);
+        assert_eq!(state.pull_requests.diff_status, LoadStatus::Idle);
+        assert!(state.pull_requests.unified_diff.is_empty());
+        assert_eq!(
+            state.pull_requests.pending_mutation,
+            Some(PullRequestMutationKind::Approve)
+        );
+        assert_eq!(state.pull_requests.mutation_generation, 7);
+
+        assert!(
+            reduce(&mut state, Action::Navigate(MainRoute::PullRequests)).contains(
+                &Effect::SearchPullRequests {
+                    generation: 6,
+                    cwd: second_root,
+                    relationship: PullRequestRelationship::ReviewRequested,
+                    lifecycle: PullRequestLifecycle::Open,
+                    query: String::new(),
+                    cursor: None,
+                    append: false,
+                }
+            )
+        );
     }
 
     #[test]
