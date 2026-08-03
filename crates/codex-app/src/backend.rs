@@ -7965,15 +7965,20 @@ fn run_effect(
                 },
             ),
         },
-        Effect::ReadMcpResource { server, uri } => {
+        Effect::ReadMcpResource {
+            server,
+            uri,
+            thread_id,
+        } => {
             match app_server.read_mcp_resource(McpResourceReadParams {
                 server: server.clone(),
                 uri: uri.clone(),
-                thread_id: None,
+                thread_id: thread_id.clone(),
             }) {
                 Ok(response) => emit(
                     events,
                     Action::McpResourceLoaded {
+                        thread_id,
                         server,
                         uri,
                         contents: map_mcp_resource_contents(response.contents),
@@ -7982,6 +7987,7 @@ fn run_effect(
                 Err(error) => emit(
                     events,
                     Action::McpResourceFailed {
+                        thread_id,
                         server,
                         uri,
                         message: format!("failed to read MCP resource: {error}"),

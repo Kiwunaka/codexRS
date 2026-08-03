@@ -5259,11 +5259,13 @@ pub enum Action {
         uri: String,
     },
     McpResourceLoaded {
+        thread_id: Option<String>,
         server: String,
         uri: String,
         contents: Vec<McpResourceContentCard>,
     },
     McpResourceFailed {
+        thread_id: Option<String>,
         server: String,
         uri: String,
         message: String,
@@ -5951,6 +5953,7 @@ pub enum Effect {
     ReadMcpResource {
         server: String,
         uri: String,
+        thread_id: Option<String>,
     },
     SetMcpServerEnabled {
         key: String,
@@ -9383,6 +9386,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             if task_changed {
                 state.artifacts = ArtifactState::default();
+                state.marketplace.mcp_resource_read = McpResourceReadState::default();
                 state.marketplace.selected_app_id = None;
                 state.marketplace.app_detail_status = None;
                 state.marketplace.app_detail = None;
@@ -15222,15 +15226,21 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 contents: Vec::new(),
                 error: None,
             };
-            vec![Effect::ReadMcpResource { server, uri }]
+            vec![Effect::ReadMcpResource {
+                server,
+                uri,
+                thread_id: state.selected_task_id.clone(),
+            }]
         }
         Action::McpResourceLoaded {
+            thread_id,
             server,
             uri,
             mut contents,
         } => {
             let selected = &state.marketplace.mcp_resource_read;
-            if selected.server.as_deref() != Some(server.as_str())
+            if thread_id.as_deref() != state.selected_task_id.as_deref()
+                || selected.server.as_deref() != Some(server.as_str())
                 || selected.uri.as_deref() != Some(uri.as_str())
             {
                 return Vec::new();
@@ -15257,12 +15267,14 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::McpResourceFailed {
+            thread_id,
             server,
             uri,
             message,
         } => {
             let selected = &state.marketplace.mcp_resource_read;
-            if selected.server.as_deref() != Some(server.as_str())
+            if thread_id.as_deref() != state.selected_task_id.as_deref()
+                || selected.server.as_deref() != Some(server.as_str())
                 || selected.uri.as_deref() != Some(uri.as_str())
             {
                 return Vec::new();
@@ -23726,7 +23738,10 @@ mod tests {
                 account_login: "reviewer".to_owned(),
             }]
         );
-        assert_eq!(state.pull_requests.pending_mutation, Some(PullRequestMutationKind::Approve));
+        assert_eq!(
+            state.pull_requests.pending_mutation,
+            Some(PullRequestMutationKind::Approve)
+        );
 
         assert!(
             reduce(
@@ -27675,7 +27690,10 @@ mod tests {
 
     #[test]
     fn mcp_servers_use_config_toggle_and_oauth_reload_contracts() {
-        let mut state = AppState::default();
+        let mut state = AppState {
+            selected_task_id: Some("task-a".to_owned()),
+            ..AppState::default()
+        };
         state.marketplace.manage_mode = true;
         assert!(
             reduce(
@@ -27761,12 +27779,14 @@ mod tests {
             [Effect::ReadMcpResource {
                 server: "calendar".to_owned(),
                 uri: "calendar://today".to_owned(),
+                thread_id: Some("task-a".to_owned()),
             }]
         );
         assert!(
             reduce(
                 &mut state,
                 Action::McpResourceLoaded {
+                    thread_id: Some("task-a".to_owned()),
                     server: "calendar".to_owned(),
                     uri: "calendar://today".to_owned(),
                     contents: vec![McpResourceContentCard {
@@ -27873,6 +27893,51 @@ mod tests {
             }]
         );
         assert!(state.marketplace.mcp_servers[0].authorization_url.is_none());
+    }
+
+    #[test]
+    fn stale_mcp_resource_read_is_ignored_after_task_change() {
+        let mut state = AppState {
+            tasks: vec![task_in_repository("task-a"), task_in_repository("task-b")],
+            ..AppState::default()
+        };
+        reduce(&mut state, Action::SelectTask("task-a".to_owned()));
+        state.marketplace.mcp_resource_read.server = Some("calendar".to_owned());
+        state.marketplace.mcp_resource_read.uri = Some("calendar://today".to_owned());
+        state.marketplace.mcp_resource_read.status = Some(LoadStatus::Loading);
+
+        reduce(&mut state, Action::SelectTask("task-b".to_owned()));
+        assert_eq!(
+            state.marketplace.mcp_resource_read,
+            super::McpResourceReadState::default()
+        );
+
+        state.marketplace.mcp_resource_read.server = Some("calendar".to_owned());
+        state.marketplace.mcp_resource_read.uri = Some("calendar://today".to_owned());
+        state.marketplace.mcp_resource_read.status = Some(LoadStatus::Loading);
+        assert!(
+            reduce(
+                &mut state,
+                Action::McpResourceLoaded {
+                    thread_id: Some("task-a".to_owned()),
+                    server: "calendar".to_owned(),
+                    uri: "calendar://today".to_owned(),
+                    contents: vec![McpResourceContentCard {
+                        uri: "calendar://today".to_owned(),
+                        mime_type: Some("application/json".to_owned()),
+                        text: Some("stale".to_owned()),
+                        blob_bytes: None,
+                        truncated: false,
+                    }],
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.marketplace.mcp_resource_read.status,
+            Some(LoadStatus::Loading)
+        );
+        assert!(state.marketplace.mcp_resource_read.contents.is_empty());
     }
 
     #[test]
