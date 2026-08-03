@@ -7,6 +7,7 @@ use std::io::{self, Cursor, Read};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -52,11 +53,13 @@ const CDP_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const DEVTOOLS_PORT_TIMEOUT: Duration = Duration::from_secs(10);
 const GRACEFUL_BROWSER_EXIT: Duration = Duration::from_secs(1);
 const MAX_CDP_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_CDP_PENDING_EVENT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_BROWSER_KEY_BYTES: usize = 64;
 const MAX_BROWSER_TEXT_BYTES: usize = 256;
 const MAX_CACHED_AGENT_EXPRESSIONS: usize = 32;
 const MAX_CACHED_AGENT_EXPRESSION_BYTES: usize = 1024 * 1024;
 const MAX_AGENT_CACHE_KEY_BYTES: usize = 256;
+const MAX_AGENT_CHILD_SESSIONS: usize = BROWSER_COMMAND_CAPACITY;
 const MAX_BROWSER_DOWNLOAD_DIRECTORY_ENTRIES: usize = 32;
 const MAX_BROWSER_DOWNLOAD_FILENAME_ATTEMPTS: u32 = 10_000;
 const MAX_BROWSER_DOWNLOAD_FILENAME_BYTES: usize = 240;
@@ -401,6 +404,7 @@ pub struct BrowserSession {
     events: Receiver<BrowserEvent>,
     latest_frame: LatestBrowserFrame,
     agent_bridge: BrowserAgentBridge,
+    shutdown_requested: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -412,6 +416,7 @@ struct LatestBrowserFrame {
 struct BrowserUiEvents {
     control: Sender<BrowserEvent>,
     latest_frame: LatestBrowserFrame,
+    shutdown_requested: Arc<AtomicBool>,
 }
 
 impl LatestBrowserFrame {
@@ -472,10 +477,12 @@ impl BrowserSession {
         let (command_sender, command_receiver) =
             crossbeam_channel::bounded(BROWSER_COMMAND_CAPACITY);
         let (event_sender, event_receiver) = crossbeam_channel::bounded(BROWSER_EVENT_CAPACITY);
+        let shutdown_requested = Arc::new(AtomicBool::new(false));
         let latest_frame = LatestBrowserFrame::default();
         let runtime_ui_events = BrowserUiEvents {
             control: event_sender.clone(),
             latest_frame: latest_frame.clone(),
+            shutdown_requested: Arc::clone(&shutdown_requested),
         };
         let (agent_event_sender, agent_event_receiver) =
             crossbeam_channel::bounded(BROWSER_AGENT_EVENT_CAPACITY);
@@ -504,6 +511,7 @@ impl BrowserSession {
             events: event_receiver,
             latest_frame,
             agent_bridge,
+            shutdown_requested,
             thread: Some(thread),
         })
     }
@@ -752,6 +760,7 @@ impl BrowserSession {
     }
 
     pub fn shutdown(&mut self) {
+        self.shutdown_requested.store(true, Ordering::Release);
         self.agent_bridge.shutdown();
         let _ = self.commands.try_send(BrowserCommand::Shutdown);
         if let Some(thread) = self.thread.take() {
@@ -1164,6 +1173,7 @@ fn run_browser(
     ui_events: BrowserUiEvents,
     agent_events: Sender<BrowserAgentNotification>,
 ) -> Result<(), String> {
+    let shutdown_requested = Arc::clone(&ui_events.shutdown_requested);
     let browser_family = BrowserFamily::from_executable(&executable);
     let marker_before = read_devtools_marker(&config.profile_dir).ok();
     let mut command = browser_command(&executable, &config);
@@ -1177,6 +1187,7 @@ fn run_browser(
         &config.profile_dir,
         marker_before.as_ref(),
         &commands,
+        &shutdown_requested,
         &mut pending_commands,
     )? {
         Some(endpoint) => endpoint,
@@ -1202,7 +1213,7 @@ fn run_browser(
     });
     runtime.emit_tabs(&context_id);
 
-    let result = runtime.run(&mut child, &commands, pending_commands);
+    let result = runtime.run(&mut child, &commands, &shutdown_requested, pending_commands);
     graceful_browser_exit(&mut child, Some(&mut runtime.cdp));
     release_browser_job(job);
     result
@@ -1253,10 +1264,14 @@ fn wait_for_devtools_endpoint(
     profile_dir: &Path,
     marker_before: Option<&DevToolsEndpoint>,
     commands: &Receiver<BrowserCommand>,
+    shutdown_requested: &AtomicBool,
     pending_commands: &mut VecDeque<BrowserCommand>,
 ) -> Result<Option<DevToolsEndpoint>, String> {
     let deadline = Instant::now() + DEVTOOLS_PORT_TIMEOUT;
     loop {
+        if shutdown_requested.load(Ordering::Acquire) {
+            return Ok(None);
+        }
         if let Some(status) = child
             .try_wait()
             .map_err(|error| format!("could not inspect Browser startup: {error}"))?
@@ -1282,6 +1297,24 @@ fn wait_for_devtools_endpoint(
             return Err("timed out waiting for the native Browser debugging endpoint".to_owned());
         }
         thread::sleep(BROWSER_TICK);
+    }
+}
+
+fn next_browser_command(
+    shutdown_requested: &AtomicBool,
+    commands: &Receiver<BrowserCommand>,
+    pending_commands: &mut VecDeque<BrowserCommand>,
+) -> Result<Option<BrowserCommand>, TryRecvError> {
+    if shutdown_requested.load(Ordering::Acquire) {
+        return Ok(Some(BrowserCommand::Shutdown));
+    }
+    if let Some(command) = pending_commands.pop_front() {
+        return Ok(Some(command));
+    }
+    match commands.try_recv() {
+        Ok(command) => Ok(Some(command)),
+        Err(TryRecvError::Empty) => Ok(None),
+        Err(error @ TryRecvError::Disconnected) => Err(error),
     }
 }
 
@@ -1361,7 +1394,53 @@ fn create_browser_job(_child: &mut Child) -> Result<BrowserJob, String> {
 struct CdpClient {
     socket: WebSocket<TcpStream>,
     next_id: u64,
-    pending_events: VecDeque<Value>,
+    pending_events: PendingCdpEvents,
+}
+
+struct PendingCdpEvent {
+    value: Value,
+    frame_bytes: usize,
+}
+
+struct PendingCdpEvents {
+    events: VecDeque<PendingCdpEvent>,
+    retained_bytes: usize,
+}
+
+impl PendingCdpEvents {
+    fn new() -> Self {
+        Self {
+            events: VecDeque::with_capacity(BROWSER_EVENT_CAPACITY),
+            retained_bytes: 0,
+        }
+    }
+
+    fn push(&mut self, value: Value, frame_bytes: usize) -> Vec<Value> {
+        let mut evicted = Vec::new();
+        if frame_bytes > MAX_CDP_PENDING_EVENT_BYTES {
+            evicted.push(value);
+            return evicted;
+        }
+        while self.events.len() >= BROWSER_EVENT_CAPACITY
+            || self.retained_bytes.saturating_add(frame_bytes) > MAX_CDP_PENDING_EVENT_BYTES
+        {
+            let Some(event) = self.events.pop_front() else {
+                break;
+            };
+            self.retained_bytes = self.retained_bytes.saturating_sub(event.frame_bytes);
+            evicted.push(event.value);
+        }
+        self.retained_bytes = self.retained_bytes.saturating_add(frame_bytes);
+        self.events
+            .push_back(PendingCdpEvent { value, frame_bytes });
+        evicted
+    }
+
+    fn pop(&mut self) -> Option<Value> {
+        let event = self.events.pop_front()?;
+        self.retained_bytes = self.retained_bytes.saturating_sub(event.frame_bytes);
+        Some(event.value)
+    }
 }
 
 impl CdpClient {
@@ -1389,7 +1468,7 @@ impl CdpClient {
         Ok(Self {
             socket,
             next_id: 1,
-            pending_events: VecDeque::with_capacity(BROWSER_EVENT_CAPACITY),
+            pending_events: PendingCdpEvents::new(),
         })
     }
 
@@ -1399,6 +1478,39 @@ impl CdpClient {
         params: Value,
         session_id: Option<&str>,
     ) -> Result<Value, String> {
+        let id = self.send_request(method, params, session_id)?;
+
+        let deadline = Instant::now() + CDP_REQUEST_TIMEOUT;
+        loop {
+            if Instant::now() >= deadline {
+                return Err(format!("Browser command {method} timed out"));
+            }
+            match self.read_value()? {
+                Some((value, _)) if value.get("id").and_then(Value::as_u64) == Some(id) => {
+                    if let Some(error) = value.get("error") {
+                        let message = error
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or("Browser command failed");
+                        return Err(bounded_text(message, MAX_ERROR_BYTES));
+                    }
+                    return Ok(value.get("result").cloned().unwrap_or(Value::Null));
+                }
+                Some((value, frame_bytes)) if value.get("method").is_some() => {
+                    let evicted = self.pending_events.push(value, frame_bytes);
+                    self.acknowledge_evicted_screencast_frames(evicted)?;
+                }
+                Some(_) | None => {}
+            }
+        }
+    }
+
+    fn send_request(
+        &mut self,
+        method: &str,
+        params: Value,
+        session_id: Option<&str>,
+    ) -> Result<u64, String> {
         let id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
         let mut request = json!({
@@ -1417,55 +1529,57 @@ impl CdpClient {
         self.socket
             .send(Message::text(serialized))
             .map_err(|error| format!("could not send Browser command: {error}"))?;
-
-        let deadline = Instant::now() + CDP_REQUEST_TIMEOUT;
-        loop {
-            if Instant::now() >= deadline {
-                return Err(format!("Browser command {method} timed out"));
-            }
-            match self.read_value()? {
-                Some(value) if value.get("id").and_then(Value::as_u64) == Some(id) => {
-                    if let Some(error) = value.get("error") {
-                        let message = error
-                            .get("message")
-                            .and_then(Value::as_str)
-                            .unwrap_or("Browser command failed");
-                        return Err(bounded_text(message, MAX_ERROR_BYTES));
-                    }
-                    return Ok(value.get("result").cloned().unwrap_or(Value::Null));
-                }
-                Some(value) if value.get("method").is_some() => {
-                    if self.pending_events.len() == BROWSER_EVENT_CAPACITY {
-                        self.pending_events.pop_front();
-                    }
-                    self.pending_events.push_back(value);
-                }
-                Some(_) | None => {}
-            }
-        }
+        Ok(id)
     }
 
+    fn acknowledge_evicted_screencast_frames(&mut self, events: Vec<Value>) -> Result<(), String> {
+        for event in events {
+            let Some((session_id, frame_session_id)) = screencast_frame_ack(&event) else {
+                continue;
+            };
+            self.send_request(
+                "Page.screencastFrameAck",
+                json!({"sessionId": frame_session_id}),
+                Some(session_id),
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn screencast_frame_ack(event: &Value) -> Option<(&str, u64)> {
+    if event.get("method").and_then(Value::as_str) != Some("Page.screencastFrame") {
+        return None;
+    }
+    Some((
+        event.get("sessionId")?.as_str()?,
+        event.get("params")?.get("sessionId")?.as_u64()?,
+    ))
+}
+
+impl CdpClient {
     fn poll_event(&mut self) -> Result<Option<Value>, String> {
-        if let Some(event) = self.pending_events.pop_front() {
+        if let Some(event) = self.pending_events.pop() {
             return Ok(Some(event));
         }
         loop {
             match self.read_value()? {
-                Some(value) if value.get("method").is_some() => return Ok(Some(value)),
+                Some((value, _)) if value.get("method").is_some() => return Ok(Some(value)),
                 Some(_) => {}
                 None => return Ok(None),
             }
         }
     }
 
-    fn read_value(&mut self) -> Result<Option<Value>, String> {
+    fn read_value(&mut self) -> Result<Option<(Value, usize)>, String> {
         match self.socket.read() {
             Ok(Message::Text(text)) => {
                 if text.len() > MAX_CDP_MESSAGE_BYTES {
                     return Err("Browser event exceeded its size limit".to_owned());
                 }
+                let frame_bytes = text.len();
                 serde_json::from_str(text.as_str())
-                    .map(Some)
+                    .map(|value| Some((value, frame_bytes)))
                     .map_err(|error| format!("could not decode Browser event: {error}"))
             }
             Ok(Message::Ping(payload)) => {
@@ -1547,6 +1661,84 @@ struct BrowserTabRuntime {
 struct BrowserAgentChildSession {
     agent_tab_id: u64,
     target_id: String,
+    parent_session_id: String,
+}
+
+fn agent_tab_id_for_cdp_session<'a>(
+    mut root_sessions: impl Iterator<Item = (&'a str, u64)>,
+    child_sessions: &HashMap<String, BrowserAgentChildSession>,
+    session_id: &str,
+) -> Option<u64> {
+    root_sessions
+        .find_map(|(root_session_id, agent_tab_id)| {
+            (root_session_id == session_id).then_some(agent_tab_id)
+        })
+        .or_else(|| {
+            child_sessions
+                .get(session_id)
+                .map(|child| child.agent_tab_id)
+        })
+}
+
+fn record_agent_child_session<'a>(
+    root_sessions: impl Iterator<Item = (&'a str, u64)>,
+    child_sessions: &mut HashMap<String, BrowserAgentChildSession>,
+    parent_session_id: &str,
+    child_session_id: &str,
+    target_id: &str,
+) {
+    let Some(agent_tab_id) =
+        agent_tab_id_for_cdp_session(root_sessions, child_sessions, parent_session_id)
+    else {
+        return;
+    };
+    if !is_bounded_agent_identifier(child_session_id)
+        || !is_bounded_agent_identifier(target_id)
+        || child_session_id == parent_session_id
+        || child_sessions.contains_key(child_session_id)
+        || child_sessions.len() >= MAX_AGENT_CHILD_SESSIONS
+    {
+        return;
+    }
+    child_sessions.insert(
+        child_session_id.to_owned(),
+        BrowserAgentChildSession {
+            agent_tab_id,
+            target_id: target_id.to_owned(),
+            parent_session_id: parent_session_id.to_owned(),
+        },
+    );
+}
+
+fn remove_agent_child_session<'a>(
+    root_sessions: impl Iterator<Item = (&'a str, u64)>,
+    child_sessions: &mut HashMap<String, BrowserAgentChildSession>,
+    parent_session_id: &str,
+    child_session_id: &str,
+) -> bool {
+    let Some(parent_agent_tab_id) =
+        agent_tab_id_for_cdp_session(root_sessions, child_sessions, parent_session_id)
+    else {
+        return false;
+    };
+    let Some(child) = child_sessions.get(child_session_id) else {
+        return false;
+    };
+    if child.parent_session_id != parent_session_id || child.agent_tab_id != parent_agent_tab_id {
+        return false;
+    }
+
+    let mut removed_sessions = VecDeque::from([child_session_id.to_owned()]);
+    while let Some(parent_session_id) = removed_sessions.pop_front() {
+        child_sessions.remove(&parent_session_id);
+        removed_sessions.extend(
+            child_sessions
+                .iter()
+                .filter(|(_, child)| child.parent_session_id == parent_session_id)
+                .map(|(session_id, _)| session_id.to_owned()),
+        );
+    }
+    true
 }
 
 enum BrowserDownloadGrantSource {
@@ -1710,9 +1902,13 @@ impl BrowserRuntime {
         &mut self,
         child: &mut Child,
         commands: &Receiver<BrowserCommand>,
+        shutdown_requested: &AtomicBool,
         mut pending_commands: VecDeque<BrowserCommand>,
     ) -> Result<(), String> {
         loop {
+            if shutdown_requested.load(Ordering::Acquire) {
+                return Ok(());
+            }
             self.expire_download_grant()?;
             if let Some(status) = child
                 .try_wait()
@@ -1722,15 +1918,13 @@ impl BrowserRuntime {
             }
 
             for _ in 0..BROWSER_COMMANDS_PER_TICK {
-                let command = if let Some(command) = pending_commands.pop_front() {
-                    Some(command)
-                } else {
-                    match commands.try_recv() {
-                        Ok(command) => Some(command),
-                        Err(TryRecvError::Empty) => None,
+                let command =
+                    match next_browser_command(shutdown_requested, commands, &mut pending_commands)
+                    {
+                        Ok(command) => command,
                         Err(TryRecvError::Disconnected) => return Ok(()),
-                    }
-                };
+                        Err(TryRecvError::Empty) => None,
+                    };
                 let Some(command) = command else {
                     break;
                 };
@@ -2181,30 +2375,13 @@ impl BrowserRuntime {
         if self.tabs[index].public.id == target_id {
             return Ok(Value::Null);
         }
-        let main_session = self.tabs[index].session_id.clone();
-        let result = self
-            .cdp
-            .request(
-                "Target.attachToTarget",
-                json!({"targetId": target_id, "flatten": true}),
-                Some(&main_session),
-            )
-            .map_err(BrowserAgentRpcError::request)?;
-        let child_session = result
-            .get("sessionId")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
+        self.agent_child_sessions
+            .values()
+            .any(|child| child.agent_tab_id == agent_tab_id && child.target_id == target_id)
+            .then_some(Value::Null)
             .ok_or_else(|| {
-                BrowserAgentRpcError::request("Target.attachToTarget did not return a sessionId")
-            })?;
-        self.agent_child_sessions.insert(
-            child_session,
-            BrowserAgentChildSession {
-                agent_tab_id,
-                target_id,
-            },
-        );
-        Ok(Value::Null)
+                BrowserAgentRpcError::request("Debugger target does not belong to this Browser tab")
+            })
     }
 
     fn agent_detach_target(&mut self, params: &Value) -> Result<Value, BrowserAgentRpcError> {
@@ -2225,15 +2402,19 @@ impl BrowserRuntime {
                     .then(|| session_id.clone())
             })
             .ok_or_else(|| BrowserAgentRpcError::request("Debugger target is not attached"))?;
-        let main_session = self.tabs[index].session_id.clone();
+        let parent_session = self
+            .agent_child_sessions
+            .get(&child_session)
+            .map(|child| child.parent_session_id.clone())
+            .ok_or_else(|| BrowserAgentRpcError::request("Debugger target is not attached"))?;
         self.cdp
             .request(
                 "Target.detachFromTarget",
                 json!({"sessionId": child_session}),
-                Some(&main_session),
+                Some(&parent_session),
             )
             .map_err(BrowserAgentRpcError::request)?;
-        self.agent_child_sessions.remove(&child_session);
+        self.remove_agent_child_session(&parent_session, &child_session);
         Ok(Value::Null)
     }
 
@@ -2298,31 +2479,17 @@ impl BrowserRuntime {
         } else {
             self.tabs[index].public.url.as_str()
         };
-        if method != "Target.closeTarget" {
-            self.ensure_agent_site_permission(
-                permission_url,
-                BrowserPermissionResource::Browse,
-                "browsing",
-            )?;
-        }
+        self.ensure_agent_site_permission(
+            permission_url,
+            BrowserPermissionResource::Browse,
+            "browsing",
+        )?;
         if method == "DOM.setFileInputFiles" {
             self.ensure_agent_site_permission(
                 permission_url,
                 BrowserPermissionResource::Upload,
                 "uploads",
             )?;
-        }
-
-        if method == "Target.closeTarget"
-            && command_params
-                .get("targetId")
-                .and_then(Value::as_str)
-                .is_none_or(|target_id| target_id == self.tabs[index].public.id)
-        {
-            let tab_id = self.tabs[index].public.id.clone();
-            self.close_tab(&context_id, &tab_id)
-                .map_err(BrowserAgentRpcError::request)?;
-            return Ok(json!({"success": true}));
         }
 
         let cdp_session = self.agent_cdp_session(index, target)?;
@@ -2684,19 +2851,30 @@ impl BrowserRuntime {
         let method = event.get("method").and_then(Value::as_str);
         let parent_session = event.get("sessionId").and_then(Value::as_str);
         if method == Some("Target.detachedFromTarget") {
-            if let Some(child_session) = event
-                .get("params")
-                .and_then(|params| params.get("sessionId"))
-                .and_then(Value::as_str)
-            {
-                self.agent_child_sessions.remove(child_session);
+            if let (Some(parent_session), Some(child_session)) = (
+                parent_session,
+                event
+                    .get("params")
+                    .and_then(|params| params.get("sessionId"))
+                    .and_then(Value::as_str),
+            ) {
+                let root_sessions = self
+                    .tabs
+                    .iter()
+                    .map(|tab| (tab.session_id.as_str(), tab.agent_id));
+                remove_agent_child_session(
+                    root_sessions,
+                    &mut self.agent_child_sessions,
+                    parent_session,
+                    child_session,
+                );
             }
             return;
         }
         if method != Some("Target.attachedToTarget") {
             return;
         }
-        let Some(parent_index) = self.tab_index_for_session(parent_session) else {
+        let Some(parent_session) = parent_session else {
             return;
         };
         let params = event.get("params").unwrap_or(&Value::Null);
@@ -2710,12 +2888,29 @@ impl BrowserRuntime {
         else {
             return;
         };
-        self.agent_child_sessions.insert(
-            child_session.to_owned(),
-            BrowserAgentChildSession {
-                agent_tab_id: self.tabs[parent_index].agent_id,
-                target_id: target_id.to_owned(),
-            },
+        let root_sessions = self
+            .tabs
+            .iter()
+            .map(|tab| (tab.session_id.as_str(), tab.agent_id));
+        record_agent_child_session(
+            root_sessions,
+            &mut self.agent_child_sessions,
+            parent_session,
+            child_session,
+            target_id,
+        );
+    }
+
+    fn remove_agent_child_session(&mut self, parent_session_id: &str, child_session_id: &str) {
+        let root_sessions = self
+            .tabs
+            .iter()
+            .map(|tab| (tab.session_id.as_str(), tab.agent_id));
+        remove_agent_child_session(
+            root_sessions,
+            &mut self.agent_child_sessions,
+            parent_session_id,
+            child_session_id,
         );
     }
 
@@ -3754,6 +3949,15 @@ impl BrowserRuntime {
             .and_then(Value::as_str)
             .map(str::to_owned)
             .ok_or_else(|| "Browser did not return a tab session".to_owned())?;
+        self.cdp.request(
+            "Target.setAutoAttach",
+            json!({
+                "autoAttach": true,
+                "waitForDebuggerOnStart": false,
+                "flatten": true,
+            }),
+            Some(&session_id),
+        )?;
         self.cdp
             .request("Page.enable", json!({}), Some(&session_id))?;
         self.cdp.request(
@@ -4550,13 +4754,15 @@ fn checked_agent_target_id(value: Option<&Value>) -> Result<String, BrowserAgent
     value
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|target_id| {
-            !target_id.is_empty()
-                && target_id.len() <= 256
-                && !target_id.chars().any(char::is_control)
-        })
+        .filter(|target_id| is_bounded_agent_identifier(target_id))
         .map(str::to_owned)
         .ok_or_else(|| BrowserAgentRpcError::request("Browser request requires a targetId"))
+}
+
+fn is_bounded_agent_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_BROWSER_AGENT_ID_BYTES
+        && !value.chars().any(char::is_control)
 }
 
 fn finite_coordinate(value: Option<&Value>, extent: u32) -> Result<f64, BrowserAgentRpcError> {
@@ -4578,17 +4784,7 @@ fn allowed_agent_cdp_method(method: &str) -> bool {
         return false;
     };
     if domain == "Target" {
-        return matches!(
-            command,
-            "activateTarget"
-                | "attachToTarget"
-                | "closeTarget"
-                | "detachFromTarget"
-                | "getTargetInfo"
-                | "getTargets"
-                | "setAutoAttach"
-                | "setDiscoverTargets"
-        );
+        return false;
     }
     if domain == "Page" && matches!(command, "startScreencast" | "stopScreencast") {
         return false;
@@ -4685,7 +4881,7 @@ fn bounded_text(value: &str, max_bytes: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
+    use std::collections::{HashMap, VecDeque};
     use std::error::Error;
     use std::fs;
     use std::io::{self, Read as _, Write as _};
@@ -4705,14 +4901,18 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        BROWSER_COMMAND_CAPACITY, BrowserCommandError, BrowserConfig, BrowserDownloadControl,
-        BrowserDownloadRuntime, BrowserEvent, BrowserFamily, CdpClient, DevToolsEndpoint,
-        LatestBrowserFrame, MAX_BROWSER_URL_BYTES, browser_command, browser_origin_pattern_matches,
-        browser_permission_for_url, cdp_key_name, checked_agent_browser_id, checked_agent_viewport,
-        checked_download_url, checked_navigation_url, control_download_transfer,
-        create_browser_job, graceful_browser_exit, move_download_to_destination,
-        normalize_browser_origin, parse_devtools_marker, resolve_browser_binary,
-        safe_download_filename, try_recv_browser_event, wait_for_devtools_endpoint,
+        BROWSER_COMMAND_CAPACITY, BrowserAgentChildSession, BrowserCommand, BrowserCommandError,
+        BrowserConfig, BrowserDownloadControl, BrowserDownloadRuntime, BrowserEvent, BrowserFamily,
+        CdpClient, DevToolsEndpoint, LatestBrowserFrame, MAX_AGENT_CHILD_SESSIONS,
+        MAX_BROWSER_URL_BYTES, MAX_CDP_PENDING_EVENT_BYTES, PendingCdpEvents,
+        agent_tab_id_for_cdp_session, allowed_agent_cdp_method, browser_command,
+        browser_origin_pattern_matches, browser_permission_for_url, cdp_key_name,
+        checked_agent_browser_id, checked_agent_viewport, checked_download_url,
+        checked_navigation_url, control_download_transfer, create_browser_job,
+        graceful_browser_exit, move_download_to_destination, next_browser_command,
+        normalize_browser_origin, parse_devtools_marker, record_agent_child_session,
+        remove_agent_child_session, resolve_browser_binary, safe_download_filename,
+        screencast_frame_ack, try_recv_browser_event, wait_for_devtools_endpoint,
     };
     use super::{
         MAX_XDG_USER_DIRS_BYTES, decode_xdg_double_quoted, linux_user_dirs_config_path,
@@ -4999,6 +5199,192 @@ mod tests {
     }
 
     #[test]
+    fn shutdown_flag_outranks_a_full_browser_command_queue() {
+        let (sender, receiver) = bounded(1);
+        let mut pending_commands = VecDeque::new();
+        let shutdown_requested = AtomicBool::new(false);
+        assert!(
+            sender
+                .try_send(BrowserCommand::SetPromptForUserDownloads(true))
+                .is_ok()
+        );
+        shutdown_requested.store(true, Ordering::Release);
+
+        assert!(matches!(
+            next_browser_command(&shutdown_requested, &receiver, &mut pending_commands),
+            Ok(Some(BrowserCommand::Shutdown))
+        ));
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(BrowserCommand::SetPromptForUserDownloads(true))
+        ));
+    }
+
+    #[test]
+    fn scoped_agent_child_sessions_inherit_only_owned_parent_sessions() {
+        let root_sessions =
+            HashMap::from([("root-a".to_owned(), 1_u64), ("root-b".to_owned(), 2_u64)]);
+        let mut child_sessions = HashMap::<String, BrowserAgentChildSession>::new();
+
+        record_agent_child_session(
+            root_sessions
+                .iter()
+                .map(|(session_id, tab_id)| (session_id.as_str(), *tab_id)),
+            &mut child_sessions,
+            "unscoped-parent",
+            "unowned-child",
+            "unowned-target",
+        );
+        assert!(child_sessions.is_empty());
+
+        record_agent_child_session(
+            root_sessions
+                .iter()
+                .map(|(session_id, tab_id)| (session_id.as_str(), *tab_id)),
+            &mut child_sessions,
+            "root-a",
+            "child-a",
+            "target-a",
+        );
+        record_agent_child_session(
+            root_sessions
+                .iter()
+                .map(|(session_id, tab_id)| (session_id.as_str(), *tab_id)),
+            &mut child_sessions,
+            "child-a",
+            "nested-child-a",
+            "nested-target-a",
+        );
+        record_agent_child_session(
+            root_sessions
+                .iter()
+                .map(|(session_id, tab_id)| (session_id.as_str(), *tab_id)),
+            &mut child_sessions,
+            "root-b",
+            "child-b",
+            "target-b",
+        );
+
+        assert_eq!(
+            agent_tab_id_for_cdp_session(
+                root_sessions
+                    .iter()
+                    .map(|(session_id, tab_id)| (session_id.as_str(), *tab_id)),
+                &child_sessions,
+                "nested-child-a",
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            child_sessions
+                .get("child-b")
+                .map(|child| child.agent_tab_id),
+            Some(2)
+        );
+
+        assert!(!remove_agent_child_session(
+            root_sessions
+                .iter()
+                .map(|(session_id, tab_id)| (session_id.as_str(), *tab_id)),
+            &mut child_sessions,
+            "root-b",
+            "child-a",
+        ));
+        assert!(child_sessions.contains_key("child-a"));
+        assert!(remove_agent_child_session(
+            root_sessions
+                .iter()
+                .map(|(session_id, tab_id)| (session_id.as_str(), *tab_id)),
+            &mut child_sessions,
+            "root-a",
+            "child-a",
+        ));
+        assert!(!child_sessions.contains_key("child-a"));
+        assert!(!child_sessions.contains_key("nested-child-a"));
+        assert!(child_sessions.contains_key("child-b"));
+    }
+
+    #[test]
+    fn scoped_agent_child_sessions_fail_closed_at_their_cap() {
+        let root_sessions = HashMap::from([("root".to_owned(), 1_u64)]);
+        let mut child_sessions = HashMap::<String, BrowserAgentChildSession>::new();
+        for index in 0..=MAX_AGENT_CHILD_SESSIONS {
+            record_agent_child_session(
+                root_sessions
+                    .iter()
+                    .map(|(session_id, tab_id)| (session_id.as_str(), *tab_id)),
+                &mut child_sessions,
+                "root",
+                &format!("child-{index}"),
+                &format!("target-{index}"),
+            );
+        }
+
+        assert_eq!(child_sessions.len(), MAX_AGENT_CHILD_SESSIONS);
+        assert!(!child_sessions.contains_key(&format!("child-{MAX_AGENT_CHILD_SESSIONS}")));
+    }
+
+    #[test]
+    fn raw_agent_cdp_rejects_target_domain_commands() {
+        for method in [
+            "Target.activateTarget",
+            "Target.attachToTarget",
+            "Target.closeTarget",
+            "Target.detachFromTarget",
+            "Target.getTargetInfo",
+            "Target.getTargets",
+            "Target.setAutoAttach",
+            "Target.setDiscoverTargets",
+        ] {
+            assert!(!allowed_agent_cdp_method(method), "{method}");
+        }
+        assert!(allowed_agent_cdp_method("Page.navigate"));
+        assert!(allowed_agent_cdp_method("Browser.getVersion"));
+    }
+
+    #[test]
+    fn cdp_pending_events_evict_oldest_to_stay_within_byte_budget() {
+        let mut events = PendingCdpEvents::new();
+        let quarter_budget = MAX_CDP_PENDING_EVENT_BYTES / 4;
+        let half_budget = MAX_CDP_PENDING_EVENT_BYTES / 2;
+
+        assert!(
+            events
+                .push(json!({"method": "first"}), quarter_budget)
+                .is_empty()
+        );
+        assert!(
+            events
+                .push(json!({"method": "second"}), half_budget)
+                .is_empty()
+        );
+        let evicted = events.push(json!({"method": "third"}), half_budget);
+
+        assert_eq!(events.retained_bytes, MAX_CDP_PENDING_EVENT_BYTES);
+        assert_eq!(evicted, vec![json!({"method": "first"})]);
+        assert_eq!(events.pop(), Some(json!({"method": "second"})));
+        assert_eq!(events.pop(), Some(json!({"method": "third"})));
+        assert_eq!(events.retained_bytes, 0);
+        assert_eq!(events.pop(), None);
+    }
+
+    #[test]
+    fn evicted_screencast_frames_extract_ack_details_only() {
+        assert_eq!(
+            screencast_frame_ack(&json!({
+                "method": "Page.screencastFrame",
+                "sessionId": "tab-session",
+                "params": {"sessionId": 42},
+            })),
+            Some(("tab-session", 42)),
+        );
+        assert_eq!(
+            screencast_frame_ack(&json!({"method": "Runtime.consoleAPICalled"})),
+            None,
+        );
+    }
+
+    #[test]
     fn download_grants_preserve_exact_bounded_urls() {
         assert_eq!(
             checked_download_url(Some("blob:https://example.com/download-id"))
@@ -5206,11 +5592,13 @@ mod tests {
         let job = create_browser_job(&mut child).map_err(io::Error::other)?;
         let (_commands, command_receiver) = bounded(BROWSER_COMMAND_CAPACITY);
         let mut pending_commands = VecDeque::new();
+        let shutdown_requested = AtomicBool::new(false);
         let endpoint = wait_for_devtools_endpoint(
             &mut child,
             &profile_dir,
             None,
             &command_receiver,
+            &shutdown_requested,
             &mut pending_commands,
         )
         .map_err(io::Error::other)?
