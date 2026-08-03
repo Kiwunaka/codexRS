@@ -16329,13 +16329,11 @@ impl WorkspaceView {
                                         .into_any_element(),
                                 ),
                                 AccountAuthOperation::LoggingOut => (
-                                    "Sign in with your ChatGPT account to start using Codex.",
+                                    "Signing out…",
                                     Button::new("first-run-account-login")
-                                        .label("Sign in with ChatGPT")
+                                        .label("Signing out…")
                                         .small()
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.dispatch(Action::StartAccountLogin, cx);
-                                        }))
+                                        .disabled(true)
                                         .into_any_element(),
                                 ),
                                 AccountAuthOperation::StartingLogin => (
@@ -36031,11 +36029,9 @@ impl WorkspaceView {
                         .when_some(bedrock_login_form, |controls, form| controls.child(form))
                         .into_any_element(),
                     AccountAuthOperation::LoggingOut => Button::new("account-login")
-                        .label("Sign in with ChatGPT")
+                        .label("Signing out…")
                         .small()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.dispatch(Action::StartAccountLogin, cx);
-                        }))
+                        .disabled(true)
                         .into_any_element(),
                     AccountAuthOperation::StartingLogin => Button::new("account-login-starting")
                         .label("Starting…")
