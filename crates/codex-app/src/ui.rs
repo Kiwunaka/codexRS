@@ -36278,6 +36278,8 @@ impl WorkspaceView {
                 "Loading usage settings…",
                 cx,
             ));
+        } else if account.auth_operation == AccountAuthOperation::LoggingOut {
+            cards.push(settings_card("General usage limits", "Signing out…", cx));
         } else if usage_settings_requires_sign_in(&account) {
             cards.push(
                 v_flex()
@@ -45152,7 +45154,10 @@ const fn settings_section_refreshes_account(section: SettingsSection) -> bool {
 }
 
 fn usage_settings_requires_sign_in(account: &AccountState) -> bool {
-    account.status == LoadStatus::Ready && account.profile.is_none() && account.requires_openai_auth
+    account.status == LoadStatus::Ready
+        && account.profile.is_none()
+        && account.requires_openai_auth
+        && account.auth_operation != AccountAuthOperation::LoggingOut
 }
 
 const fn remote_control_status_label(status: RemoteControlRuntimeStatus) -> &'static str {
@@ -48112,6 +48117,9 @@ mod tests {
             ..AccountState::default()
         };
         assert!(usage_settings_requires_sign_in(&account));
+        account.auth_operation = AccountAuthOperation::LoggingOut;
+        assert!(!usage_settings_requires_sign_in(&account));
+        account.auth_operation = AccountAuthOperation::Idle;
         account.requires_openai_auth = false;
         assert!(!usage_settings_requires_sign_in(&account));
         account.requires_openai_auth = true;
