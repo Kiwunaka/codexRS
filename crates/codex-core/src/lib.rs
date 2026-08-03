@@ -4614,6 +4614,11 @@ pub enum Action {
         task_id: String,
         message: String,
     },
+    GoalAttachmentStartFailed {
+        task_id: String,
+        prompt: RetryableUserMessage,
+        message: String,
+    },
     SetGoal {
         objective: String,
         token_budget: Option<Option<i64>>,
@@ -10002,6 +10007,25 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 .or_default()
                 .goal_continuation_pending = false;
             state.status_message = Some(message);
+            Vec::new()
+        }
+        Action::GoalAttachmentStartFailed {
+            task_id,
+            mut prompt,
+            message,
+        } => {
+            state.goals.entry(task_id.clone()).or_default().status = LoadStatus::Failed;
+            state
+                .timelines
+                .entry(task_id.clone())
+                .or_default()
+                .goal_continuation_pending = false;
+            state.status_message = Some(bounded_string(message, MAX_COMPOSER_BYTES));
+            if state.selected_task_id.as_deref() == Some(task_id.as_str()) {
+                normalize_retryable_user_message(&mut prompt);
+                restore_retry_prompt(state, &prompt);
+                state.composer_controls.goal_mode = true;
+            }
             Vec::new()
         }
         Action::SetGoal {
@@ -22028,6 +22052,87 @@ mod tests {
         );
         assert!(state.composer.is_empty());
         assert!(state.composer_attachments.is_empty());
+        assert_eq!(state.status_message.as_deref(), Some("late failure"));
+    }
+
+    #[test]
+    fn failed_goal_attachment_start_restores_only_the_owning_chat_draft() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(&mut state, Action::TaskCreated(task("t2")));
+        reduce(&mut state, Action::SelectTask("t1".to_owned()));
+        reduce(
+            &mut state,
+            Action::TaskRuntimeLoaded {
+                task_id: "t1".to_owned(),
+                generation: 1,
+                active_turn_id: None,
+                active_turn_is_review: false,
+                run_status: Some(TaskRunStatus::Idle),
+            },
+        );
+        let attachment = ComposerAttachment {
+            path: repository_path().join("goal.md"),
+            name: "goal.md".to_owned(),
+            kind: ComposerAttachmentKind::Mention,
+        };
+        let prompt = RetryableUserMessage {
+            text: "Finish the release".to_owned(),
+            attachments: vec![attachment.clone()],
+        };
+        reduce(&mut state, Action::ToggleGoalMode);
+        state.composer = prompt.text.clone();
+        state.composer_attachments = prompt.attachments.clone();
+
+        assert!(matches!(
+            reduce(&mut state, Action::SubmitComposer).as_slice(),
+            [Effect::StartTurn {
+                task_id,
+                text,
+                goal_objective: Some(objective),
+                ..
+            }] if task_id == "t1" && text == "/goal Finish the release" && objective == "Finish the release"
+        ));
+        assert!(state.composer.is_empty());
+        assert!(state.composer_attachments.is_empty());
+        assert!(!state.composer_controls.goal_mode);
+        assert_eq!(state.goals["t1"].status, LoadStatus::Loading);
+
+        reduce(
+            &mut state,
+            Action::GoalAttachmentStartFailed {
+                task_id: "t1".to_owned(),
+                prompt: prompt.clone(),
+                message: "x".repeat(MAX_COMPOSER_BYTES + 1),
+            },
+        );
+        assert_eq!(state.composer, prompt.text);
+        assert_eq!(
+            state.composer_attachments.as_slice(),
+            std::slice::from_ref(&attachment)
+        );
+        assert!(state.composer_controls.goal_mode);
+        assert_eq!(state.goals["t1"].status, LoadStatus::Failed);
+        assert_eq!(
+            state.status_message.as_ref().map(String::len),
+            Some(MAX_COMPOSER_BYTES)
+        );
+
+        reduce(&mut state, Action::SelectTask("t2".to_owned()));
+        state.composer = "keep this other draft".to_owned();
+        state.composer_attachments = vec![attachment.clone()];
+        state.composer_controls.goal_mode = false;
+        reduce(
+            &mut state,
+            Action::GoalAttachmentStartFailed {
+                task_id: "t1".to_owned(),
+                prompt,
+                message: "late failure".to_owned(),
+            },
+        );
+        assert_eq!(state.composer, "keep this other draft");
+        assert_eq!(state.composer_attachments, [attachment]);
+        assert!(!state.composer_controls.goal_mode);
         assert_eq!(state.status_message.as_deref(), Some("late failure"));
     }
 

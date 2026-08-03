@@ -6867,7 +6867,9 @@ impl WorkspaceView {
         );
         let may_restore_composer = matches!(
             &action,
-            Action::ComposerSubmissionFailed { .. } | Action::SafetyBufferedRetryFailed { .. }
+            Action::ComposerSubmissionFailed { .. }
+                | Action::GoalAttachmentStartFailed { .. }
+                | Action::SafetyBufferedRetryFailed { .. }
         );
         match &action {
             Action::ShowInspector(InspectorPane::Terminal) | Action::ToggleReviewPanel => {
