@@ -11760,7 +11760,7 @@ fn activate_computer_input_target(
 
     #[cfg(not(windows))]
     {
-        let _ = (window_id, computer_accessibility);
+        let _ = (window_id, expected_application_id, computer_accessibility);
         Ok(())
     }
 }
