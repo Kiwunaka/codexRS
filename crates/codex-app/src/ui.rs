@@ -57,9 +57,10 @@ use codex_core::{
     STANDARD_SERVICE_TIER_ID, ServiceTierOption, SkillCard, SkillScope, TaskRunStatus,
     TaskSearchResult, TaskSummary, TerminalDockLocation, TerminalTabState, ThreadGoalStatus,
     TimelineCitation, TimelineItem, TimelineKind, UsageLimitWindow, UserInputAnswer,
-    UserInputAnswers, UserInputRequest, appearance_code_theme_supports_variant,
-    composer_plugin_display_name, composer_plugin_is_mentionable, is_appearance_code_theme_id,
-    reduce, selected_thread_runtime_ready, validate_mcp_form_content,
+    UserInputAnswers, UserInputRequest, account_auth_refresh_blocked,
+    appearance_code_theme_supports_variant, composer_plugin_display_name,
+    composer_plugin_is_mentionable, is_appearance_code_theme_id, reduce,
+    selected_thread_runtime_ready, validate_mcp_form_content,
 };
 use codex_platform::{
     BackgroundCompletionNotifier, computer_use_platform_available, default_browser_download_dir,
@@ -35942,6 +35943,7 @@ impl WorkspaceView {
     fn render_profile_settings(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let account = self.state.account.clone();
         let loading = account.status == LoadStatus::Loading;
+        let refresh_disabled = account_refresh_disabled(&account);
         let device_code = account_device_code(&account);
         let mut cards = Vec::new();
 
@@ -35974,6 +35976,7 @@ impl WorkspaceView {
                         Button::new("retry-account-profile")
                             .label("Retry")
                             .small()
+                            .disabled(refresh_disabled)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.dispatch(Action::RefreshAccount, cx);
                             })),
@@ -36250,7 +36253,7 @@ impl WorkspaceView {
                         Button::new("refresh-account-profile")
                             .label(if loading { "Refreshing…" } else { "Refresh" })
                             .small()
-                            .disabled(loading)
+                            .disabled(refresh_disabled)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.dispatch(Action::RefreshAccount, cx);
                             })),
@@ -36271,6 +36274,7 @@ impl WorkspaceView {
     fn render_usage_settings(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let account = self.state.account.clone();
         let loading = account.status == LoadStatus::Loading;
+        let refresh_disabled = account_refresh_disabled(&account);
         let mut cards = Vec::new();
 
         if account.status == LoadStatus::Failed {
@@ -36302,6 +36306,7 @@ impl WorkspaceView {
                         Button::new("retry-account-usage")
                             .label("Retry")
                             .small()
+                            .disabled(refresh_disabled)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.dispatch(Action::RefreshAccount, cx);
                             })),
@@ -36542,7 +36547,7 @@ impl WorkspaceView {
                         Button::new("refresh-account-usage")
                             .label(if loading { "Refreshing…" } else { "Refresh" })
                             .small()
-                            .disabled(loading)
+                            .disabled(refresh_disabled)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.dispatch(Action::RefreshAccount, cx);
                             })),
@@ -45189,6 +45194,10 @@ const fn settings_section_refreshes_account(section: SettingsSection) -> bool {
     matches!(section, SettingsSection::Profile | SettingsSection::Usage)
 }
 
+fn account_refresh_disabled(account: &AccountState) -> bool {
+    account.status == LoadStatus::Loading || account_auth_refresh_blocked(account.auth_operation)
+}
+
 fn usage_settings_requires_sign_in(account: &AccountState) -> bool {
     account.status == LoadStatus::Ready
         && account.profile.is_none()
@@ -45594,19 +45603,20 @@ mod tests {
         MODEL_AVAILABILITY_NUX_SOL_COPY, NavigationHistory, NavigationLocation, PaletteCommand,
         PaletteGroup, ReasoningEffortStep, SettingsSection, ShellWidthClass, TaskCopyKind,
         ThreadFindSurface, accelerators_conflict, account_daily_usage_rows, account_device_code,
-        adjacent_task_id, app_chatgpt_url, app_mention_prompt, appearance_color,
-        appearance_color_value, appearance_theme_share_string, archived_chat_groups,
-        archived_chat_projects, archived_delete_confirmation_copy, background_chat_running_count,
-        background_chat_window_title, background_completion_notification_transition,
-        background_terminal_summary, bedrock_workspace_notice,
-        bottom_terminal_panel_toggle_available, bounded_keyboard_shortcut_search_query,
-        bounded_settings_search_query, bounded_thread_find_query, browser_display_url,
-        browser_navigation_url, browser_surface_coordinates, build_plugin_catalog_sections,
-        case_insensitive_match_ranges, command_task_slot, composer_app_commands,
-        composer_at_skill_commands, composer_desktop_app_commands, composer_file_query,
-        composer_file_search_max_height, composer_model_picker_items, composer_model_placeholder,
-        composer_plugin_commands, composer_service_tier_command_for_query,
-        composer_service_tier_commands, composer_skill_command_for_query, composer_skill_commands,
+        account_refresh_disabled, adjacent_task_id, app_chatgpt_url, app_mention_prompt,
+        appearance_color, appearance_color_value, appearance_theme_share_string,
+        archived_chat_groups, archived_chat_projects, archived_delete_confirmation_copy,
+        background_chat_running_count, background_chat_window_title,
+        background_completion_notification_transition, background_terminal_summary,
+        bedrock_workspace_notice, bottom_terminal_panel_toggle_available,
+        bounded_keyboard_shortcut_search_query, bounded_settings_search_query,
+        bounded_thread_find_query, browser_display_url, browser_navigation_url,
+        browser_surface_coordinates, build_plugin_catalog_sections, case_insensitive_match_ranges,
+        command_task_slot, composer_app_commands, composer_at_skill_commands,
+        composer_desktop_app_commands, composer_file_query, composer_file_search_max_height,
+        composer_model_picker_items, composer_model_placeholder, composer_plugin_commands,
+        composer_service_tier_command_for_query, composer_service_tier_commands,
+        composer_skill_command_for_query, composer_skill_commands,
         composer_slash_command_for_prefix, connection_send_failure, decode_mcp_form_image_data_url,
         default_branch_name, diff_file_review_rows, diff_file_sections,
         extract_code_comment_findings, fetch_plugin_logo_blocking, find_timeline_matches,
@@ -48154,6 +48164,19 @@ mod tests {
             requires_openai_auth: true,
             ..AccountState::default()
         };
+        assert!(!account_refresh_disabled(&account));
+        account.status = LoadStatus::Loading;
+        assert!(account_refresh_disabled(&account));
+        account.status = LoadStatus::Ready;
+        for operation in [
+            AccountAuthOperation::StartingLogin,
+            AccountAuthOperation::AwaitingLogin,
+            AccountAuthOperation::CancelingLogin,
+        ] {
+            account.auth_operation = operation;
+            assert!(account_refresh_disabled(&account));
+        }
+        account.auth_operation = AccountAuthOperation::Idle;
         assert!(usage_settings_requires_sign_in(&account));
         account.auth_operation = AccountAuthOperation::LoggingOut;
         assert!(!usage_settings_requires_sign_in(&account));

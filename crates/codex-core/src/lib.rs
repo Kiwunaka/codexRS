@@ -3766,6 +3766,15 @@ pub enum AccountAuthOperation {
     LoggingOut,
 }
 
+pub const fn account_auth_refresh_blocked(operation: AccountAuthOperation) -> bool {
+    matches!(
+        operation,
+        AccountAuthOperation::StartingLogin
+            | AccountAuthOperation::AwaitingLogin
+            | AccountAuthOperation::CancelingLogin
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountState {
     pub status: LoadStatus,
@@ -14027,6 +14036,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::RefreshAccount => {
+            if account_auth_refresh_blocked(state.account.auth_operation) {
+                return Vec::new();
+            }
             state.account.status = LoadStatus::Loading;
             state.account.error = None;
             state.account.usage_error = None;
@@ -27096,6 +27108,22 @@ mod tests {
             [Effect::LoadAccount]
         );
         assert!(state.account.profile.is_none());
+    }
+
+    #[test]
+    fn account_refresh_preserves_awaiting_login() {
+        let mut state = AppState::default();
+        state.account.status = LoadStatus::Ready;
+        state.account.auth_operation = AccountAuthOperation::AwaitingLogin;
+        state.account.login_id = Some("login-1".to_owned());
+
+        assert!(reduce(&mut state, Action::RefreshAccount).is_empty());
+        assert_eq!(state.account.status, LoadStatus::Ready);
+        assert_eq!(
+            state.account.auth_operation,
+            AccountAuthOperation::AwaitingLogin
+        );
+        assert_eq!(state.account.login_id.as_deref(), Some("login-1"));
     }
 
     #[test]
