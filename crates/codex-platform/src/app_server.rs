@@ -2389,6 +2389,8 @@ impl ManagedChild {
             {
                 #[cfg(windows)]
                 drop(self.job.take());
+                #[cfg(unix)]
+                self.force_terminate();
                 return Ok(());
             }
 
@@ -2497,6 +2499,39 @@ mod tests {
         child.shutdown(Duration::ZERO)?;
 
         assert!(child.child.try_wait()?.is_some());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn successful_shutdown_terminates_unix_app_server_descendants()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let marker = env::temp_dir().join(format!(
+            "codex-platform-app-server-successful-shutdown-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_nanos()
+        ));
+        let _ = fs::remove_file(&marker);
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "(sleep 0.2; : > \"$CODEX_RS_APP_SERVER_MARKER\") & exit",
+            ])
+            .env("CODEX_RS_APP_SERVER_MARKER", &marker);
+        let mut child = ManagedChild::spawn(&mut command)?;
+        assert!(child.child.wait()?.success());
+
+        child.shutdown(Duration::from_secs(1))?;
+        std::thread::sleep(Duration::from_millis(400));
+        let marker_created = marker.exists();
+        let _ = fs::remove_file(&marker);
+        assert!(
+            !marker_created,
+            "a successful app-server exit must not leave a descendant running"
+        );
         Ok(())
     }
 
