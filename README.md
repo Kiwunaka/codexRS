@@ -230,7 +230,7 @@ as an issue or discussion so the contract is clear before implementation.
 
 ## Star history
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Kiwunaka/codexRS&type=Date)](https://star-history.com/#Kiwunaka/codexRS&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Kiwunaka/codexRS&type=Date)]([https://star-history.com/#Kiwunaka/codexRS&Date](https://www.star-history.com/?repos=Kiwunaka%2FcodexRS&type=date&legend=top-left))
 
 ## License and upstream notice
 
