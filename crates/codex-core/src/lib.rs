@@ -16356,14 +16356,16 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::PullRequestMutationFailed {
             generation,
-            identity: _,
+            identity,
             message,
         } => {
             if generation != state.pull_requests.mutation_generation {
                 return Vec::new();
             }
             state.pull_requests.pending_mutation = None;
-            state.pull_requests.mutation_error = Some(message.clone());
+            if state.pull_requests.selected.as_ref() == Some(&identity) {
+                state.pull_requests.mutation_error = Some(message.clone());
+            }
             state.status_message = Some(message);
             Vec::new()
         }
@@ -23697,6 +23699,50 @@ mod tests {
         );
         assert_eq!(state.pull_requests.pending_mutation, None);
         assert_eq!(state.pull_requests.detail_status, LoadStatus::Loading);
+    }
+
+    #[test]
+    fn pull_request_mutation_failure_does_not_attach_to_a_newly_selected_pull_request() {
+        let source = pull_request(42);
+        let source_identity = source.identity.clone();
+        let selected = pull_request(43);
+        let selected_identity = selected.identity.clone();
+        let mut state = AppState::default();
+        state.pull_requests.items = vec![source, selected];
+        state.pull_requests.account_login = Some("reviewer".to_owned());
+        state.pull_requests.selected = Some(source_identity.clone());
+        state.pull_requests.mutation_generation = 7;
+        state.pull_requests.pending_mutation = Some(PullRequestMutationKind::Approve);
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SelectPullRequest(selected_identity.clone()),
+            ),
+            [Effect::LoadPullRequestDetail {
+                generation: 1,
+                cwd: PathBuf::from("."),
+                identity: selected_identity.clone(),
+                account_login: "reviewer".to_owned(),
+            }]
+        );
+        assert_eq!(state.pull_requests.pending_mutation, Some(PullRequestMutationKind::Approve));
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::PullRequestMutationFailed {
+                    generation: 7,
+                    identity: source_identity,
+                    message: "review rejected".to_owned(),
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(state.pull_requests.pending_mutation, None);
+        assert_eq!(state.pull_requests.selected, Some(selected_identity));
+        assert!(state.pull_requests.mutation_error.is_none());
+        assert_eq!(state.status_message.as_deref(), Some("review rejected"));
     }
 
     #[test]
