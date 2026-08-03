@@ -262,6 +262,17 @@ fn right_panels_restore_for_width_class(current: ShellWidthClass) -> bool {
     current == ShellWidthClass::Wide
 }
 
+fn thread_find_right_offset_for_shell(
+    width_class: Option<ShellWidthClass>,
+    inline_offset: f32,
+) -> f32 {
+    if width_class == Some(ShellWidthClass::Wide) {
+        inline_offset
+    } else {
+        16.0
+    }
+}
+
 fn task_workspace_active(route: MainRoute, selected_task_id: Option<&str>) -> bool {
     route == MainRoute::Tasks && selected_task_id.is_some()
 }
@@ -3501,6 +3512,10 @@ impl PaletteCommand {
         )
     }
 
+    const fn requires_task_workspace(self) -> bool {
+        matches!(self, Self::ToggleReviewPanel)
+    }
+
     const fn requires_repository(self) -> bool {
         matches!(
             self,
@@ -3639,6 +3654,10 @@ impl CommandPaletteView {
         }
         let query = self.query.trim().to_lowercase();
         let has_selected_chat = self.has_selected_chat(cx);
+        let has_task_workspace = self.workspace.upgrade().is_some_and(|workspace| {
+            let state = &workspace.read(cx).state;
+            task_workspace_active(state.route, state.selected_task_id.as_deref())
+        });
         let has_workspace = self.has_workspace(cx);
         let has_repository = self.has_repository(cx);
         let has_available_account = self.has_available_account(cx);
@@ -3653,6 +3672,7 @@ impl CommandPaletteView {
         PaletteCommand::ALL
             .into_iter()
             .filter(|command| !command.requires_selected_chat() || has_selected_chat)
+            .filter(|command| !command.requires_task_workspace() || has_task_workspace)
             .filter(|command| !command.requires_repository() || has_repository)
             .filter(|command| !command.requires_account() || has_available_account)
             .filter(|command| {
@@ -6867,7 +6887,9 @@ impl WorkspaceView {
         );
         let may_restore_composer = matches!(
             &action,
-            Action::ComposerSubmissionFailed { .. } | Action::SafetyBufferedRetryFailed { .. }
+            Action::ComposerSubmissionFailed { .. }
+                | Action::GoalAttachmentStartFailed { .. }
+                | Action::SafetyBufferedRetryFailed { .. }
         );
         match &action {
             Action::ShowInspector(InspectorPane::Terminal) | Action::ToggleReviewPanel => {
@@ -12109,7 +12131,10 @@ impl WorkspaceView {
         if self.state.terminal_dock_open
             && self.state.terminal.location == TerminalDockLocation::Right
         {
-            return self.terminal_right_width + 16.0;
+            return thread_find_right_offset_for_shell(
+                self.shell_width_class,
+                self.terminal_right_width + 16.0,
+            );
         }
         let inspector_width = match self.state.inspector {
             InspectorPane::Changes => CHANGES_INSPECTOR_WIDTH,
@@ -12124,7 +12149,7 @@ impl WorkspaceView {
                 INSPECTOR_WIDTH
             }
         };
-        inspector_width + 16.0
+        thread_find_right_offset_for_shell(self.shell_width_class, inspector_width + 16.0)
     }
 
     fn render_thread_find_bar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
@@ -13440,8 +13465,8 @@ impl WorkspaceView {
             )
             .selected(selected)
             .on_click(cx.listener(move |this, _, _, cx| {
+                this.navigate(MainRoute::Tasks, cx);
                 this.dispatch(Action::SelectTask(task_id.clone()), cx);
-                this.close_narrow_sidebar();
             }))
             .child(
                 h_flex()
@@ -16329,13 +16354,11 @@ impl WorkspaceView {
                                         .into_any_element(),
                                 ),
                                 AccountAuthOperation::LoggingOut => (
-                                    "Sign in with your ChatGPT account to start using Codex.",
+                                    "Signing out…",
                                     Button::new("first-run-account-login")
-                                        .label("Sign in with ChatGPT")
+                                        .label("Signing out…")
                                         .small()
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.dispatch(Action::StartAccountLogin, cx);
-                                        }))
+                                        .disabled(true)
                                         .into_any_element(),
                                 ),
                                 AccountAuthOperation::StartingLogin => (
@@ -36031,11 +36054,9 @@ impl WorkspaceView {
                         .when_some(bedrock_login_form, |controls, form| controls.child(form))
                         .into_any_element(),
                     AccountAuthOperation::LoggingOut => Button::new("account-login")
-                        .label("Sign in with ChatGPT")
+                        .label("Signing out…")
                         .small()
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.dispatch(Action::StartAccountLogin, cx);
-                        }))
+                        .disabled(true)
                         .into_any_element(),
                     AccountAuthOperation::StartingLogin => Button::new("account-login-starting")
                         .label("Starting…")
@@ -36266,6 +36287,39 @@ impl WorkspaceView {
                 "Loading usage settings…",
                 cx,
             ));
+        } else if account.auth_operation == AccountAuthOperation::LoggingOut {
+            cards.push(settings_card("General usage limits", "Signing out…", cx));
+        } else if usage_settings_requires_sign_in(&account) {
+            cards.push(
+                v_flex()
+                    .max_w(px(760.0))
+                    .p_4()
+                    .gap_3()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().sidebar)
+                    .child(
+                        div()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child("Sign in to view usage and billing"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Connect your OpenAI account to load its usage limits."),
+                    )
+                    .child(
+                        Button::new("open-profile-from-usage")
+                            .label("Go to Profile")
+                            .small()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.open_settings_section(SettingsSection::Profile, cx);
+                            })),
+                    )
+                    .into_any_element(),
+            );
         } else {
             if let Some(credits) = account.credits {
                 let balance = if credits.unlimited {
@@ -45108,6 +45162,13 @@ const fn settings_section_refreshes_account(section: SettingsSection) -> bool {
     matches!(section, SettingsSection::Profile | SettingsSection::Usage)
 }
 
+fn usage_settings_requires_sign_in(account: &AccountState) -> bool {
+    account.status == LoadStatus::Ready
+        && account.profile.is_none()
+        && account.requires_openai_auth
+        && account.auth_operation != AccountAuthOperation::LoggingOut
+}
+
 const fn remote_control_status_label(status: RemoteControlRuntimeStatus) -> &'static str {
     match status {
         RemoteControlRuntimeStatus::Disabled => "Disabled",
@@ -45543,9 +45604,11 @@ mod tests {
         selected_task_copy_value, settings_section_matches, settings_section_refreshes_account,
         shell_width_class, sidebar_layout_width, split_diff_rows, startup_recovery_card,
         status_context_total_label, status_rate_limit_label, status_rate_limit_reset_metadata_at,
-        task_slot_id, task_workspace_active, terminal_tab_label, timeline_activity_content,
+        task_slot_id, task_workspace_active, terminal_tab_label,
+        thread_find_right_offset_for_shell, timeline_activity_content,
         turn_diff_update_is_accepted, usage_limit_reset_summary_copy,
-        validate_plugin_logo_dimensions, worktree_fork_queue_full, worktree_use_disabled,
+        usage_settings_requires_sign_in, validate_plugin_logo_dimensions, worktree_fork_queue_full,
+        worktree_use_disabled,
     };
     use codex_core::{
         AccountAuthOperation, AccountDailyUsageBucket, AccountKind, AccountProfile, AccountState,
@@ -46966,6 +47029,7 @@ mod tests {
         assert!(PaletteCommand::ToggleChatPin.requires_selected_chat());
         assert!(PaletteCommand::OpenReviewTab.requires_selected_chat());
         assert!(!PaletteCommand::ToggleReviewPanel.requires_selected_chat());
+        assert!(PaletteCommand::ToggleReviewPanel.requires_task_workspace());
         assert!(!PaletteCommand::FindInThread.requires_selected_chat());
         assert!(PaletteCommand::ToggleTerminal.requires_selected_chat());
         assert!(PaletteCommand::LogOut.requires_account());
@@ -47706,6 +47770,19 @@ mod tests {
         assert!(!right_panels_restore_for_width_class(
             ShellWidthClass::Narrow
         ));
+        assert_eq!(
+            thread_find_right_offset_for_shell(Some(ShellWidthClass::Wide), 696.0),
+            696.0
+        );
+        assert_eq!(
+            thread_find_right_offset_for_shell(Some(ShellWidthClass::Compact), 696.0),
+            16.0
+        );
+        assert_eq!(
+            thread_find_right_offset_for_shell(Some(ShellWidthClass::Narrow), 696.0),
+            16.0
+        );
+        assert_eq!(thread_find_right_offset_for_shell(None, 696.0), 16.0);
     }
 
     #[test]
@@ -48043,6 +48120,26 @@ mod tests {
         assert!(!settings_section_refreshes_account(
             SettingsSection::Personalization
         ));
+
+        let mut account = AccountState {
+            status: LoadStatus::Ready,
+            requires_openai_auth: true,
+            ..AccountState::default()
+        };
+        assert!(usage_settings_requires_sign_in(&account));
+        account.auth_operation = AccountAuthOperation::LoggingOut;
+        assert!(!usage_settings_requires_sign_in(&account));
+        account.auth_operation = AccountAuthOperation::Idle;
+        account.requires_openai_auth = false;
+        assert!(!usage_settings_requires_sign_in(&account));
+        account.requires_openai_auth = true;
+        account.profile = Some(AccountProfile {
+            kind: AccountKind::ChatGpt,
+            email: None,
+            plan: None,
+            uses_codex_managed_credentials: None,
+        });
+        assert!(!usage_settings_requires_sign_in(&account));
     }
 
     #[test]

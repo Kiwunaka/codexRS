@@ -19,6 +19,7 @@ pub enum LinuxDesktopEntryError {
     MissingHome,
     InvalidDataDirectory(&'static str),
     InvalidExecutablePath,
+    InvalidCodexBinaryPath,
     TemporaryNameExhausted,
     EntryAlreadyExists {
         path: PathBuf,
@@ -38,6 +39,9 @@ impl fmt::Display for LinuxDesktopEntryError {
             }
             Self::InvalidExecutablePath => formatter.write_str(
                 "the current executable path must be a bounded UTF-8 absolute path without controls or field codes",
+            ),
+            Self::InvalidCodexBinaryPath => formatter.write_str(
+                "CODEX_RS_CODEX_BIN must be a bounded UTF-8 absolute path without controls or field codes",
             ),
             Self::TemporaryNameExhausted => {
                 formatter.write_str("could not reserve a temporary desktop entry path")
@@ -59,6 +63,7 @@ impl Error for LinuxDesktopEntryError {
             Self::MissingHome
             | Self::InvalidDataDirectory(_)
             | Self::InvalidExecutablePath
+            | Self::InvalidCodexBinaryPath
             | Self::TemporaryNameExhausted
             | Self::EntryAlreadyExists { .. } => None,
         }
@@ -74,8 +79,15 @@ pub fn install_linux_desktop_entry() -> Result<PathBuf, LinuxDesktopEntryError> 
         action: "resolve the current executable path",
         source,
     })?;
+    let codex_binary = env::var_os("CODEX_RS_CODEX_BIN")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
 
-    install_linux_desktop_entry_at(&applications_directory, &executable)
+    install_linux_desktop_entry_at(
+        &applications_directory,
+        &executable,
+        codex_binary.as_deref(),
+    )
 }
 
 fn desktop_applications_directory(
@@ -117,8 +129,9 @@ fn validate_data_directory(
 fn install_linux_desktop_entry_at(
     applications_directory: &Path,
     executable: &Path,
+    codex_binary: Option<&Path>,
 ) -> Result<PathBuf, LinuxDesktopEntryError> {
-    let contents = render_desktop_entry(executable)?;
+    let contents = render_desktop_entry(executable, codex_binary)?;
     fs::create_dir_all(applications_directory).map_err(|source| LinuxDesktopEntryError::Io {
         action: "create the desktop entry directory",
         source,
@@ -151,19 +164,54 @@ fn install_linux_desktop_entry_at(
     }
 }
 
-fn render_desktop_entry(executable: &Path) -> Result<Vec<u8>, LinuxDesktopEntryError> {
-    if !executable.is_absolute() || executable.as_os_str().len() > MAX_LINUX_DESKTOP_PATH_BYTES {
-        return Err(LinuxDesktopEntryError::InvalidExecutablePath);
+fn render_desktop_entry(
+    executable: &Path,
+    codex_binary: Option<&Path>,
+) -> Result<Vec<u8>, LinuxDesktopEntryError> {
+    let executable = desktop_exec_path(executable, LinuxDesktopEntryError::InvalidExecutablePath)?;
+    let executable = escape_desktop_exec_argument(executable);
+    let exec = if let Some(codex_binary) = codex_binary {
+        let codex_binary =
+            desktop_exec_path(codex_binary, LinuxDesktopEntryError::InvalidCodexBinaryPath)?;
+        let codex_binary = escape_desktop_exec_argument(codex_binary);
+        format!("\"/usr/bin/env\" \"CODEX_RS_CODEX_BIN={codex_binary}\" \"{executable}\"")
+    } else {
+        format!("\"{executable}\"")
+    };
+    let entry = format!(
+        "[Desktop Entry]\nType=Application\nName=codexRS\nComment=Native Codex desktop client\nExec={exec}\nTerminal=false\nCategories=Development;\n"
+    );
+    if entry.len() > MAX_LINUX_DESKTOP_ENTRY_BYTES {
+        return Err(if codex_binary.is_some() {
+            LinuxDesktopEntryError::InvalidCodexBinaryPath
+        } else {
+            LinuxDesktopEntryError::InvalidExecutablePath
+        });
     }
-    let executable = executable
-        .to_str()
-        .filter(|path| {
-            !path.is_empty() && !path.contains('%') && !path.chars().any(char::is_control)
-        })
-        .ok_or(LinuxDesktopEntryError::InvalidExecutablePath)?;
+    Ok(entry.into_bytes())
+}
 
-    let mut escaped = String::with_capacity(executable.len());
-    for character in executable.chars() {
+fn desktop_exec_path(
+    path: &Path,
+    invalid: LinuxDesktopEntryError,
+) -> Result<&str, LinuxDesktopEntryError> {
+    let Some(path_text) = path.to_str() else {
+        return Err(invalid);
+    };
+    if !path.is_absolute()
+        || path.as_os_str().is_empty()
+        || path.as_os_str().len() > MAX_LINUX_DESKTOP_PATH_BYTES
+        || path_text.contains('%')
+        || path_text.chars().any(char::is_control)
+    {
+        return Err(invalid);
+    }
+    Ok(path_text)
+}
+
+fn escape_desktop_exec_argument(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
         if character == '\\' {
             escaped.push_str(r"\\\\");
         } else {
@@ -173,13 +221,7 @@ fn render_desktop_entry(executable: &Path) -> Result<Vec<u8>, LinuxDesktopEntryE
             escaped.push(character);
         }
     }
-    let entry = format!(
-        "[Desktop Entry]\nType=Application\nName=codexRS\nComment=Native Codex desktop client\nExec=\"{escaped}\"\nTerminal=false\nCategories=Development;\n"
-    );
-    if entry.len() > MAX_LINUX_DESKTOP_ENTRY_BYTES {
-        return Err(LinuxDesktopEntryError::InvalidExecutablePath);
-    }
-    Ok(entry.into_bytes())
+    escaped
 }
 
 fn create_temporary_entry(directory: &Path) -> Result<(File, PathBuf), LinuxDesktopEntryError> {
@@ -231,6 +273,7 @@ mod tests {
         ffi::OsString,
         fs,
         io::Read,
+        os::unix::ffi::OsStringExt,
         os::unix::fs::symlink,
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -298,7 +341,7 @@ mod tests {
 
     #[test]
     fn desktop_entry_escapes_exec_without_shell_or_field_codes() {
-        let entry = render_desktop_entry(Path::new(r#"/opt/Codex RS/$`"\codexrs"#))
+        let entry = render_desktop_entry(Path::new(r#"/opt/Codex RS/$`"\codexrs"#), None)
             .expect("render desktop entry");
         let entry = String::from_utf8(entry).expect("desktop entry is UTF-8");
 
@@ -306,26 +349,59 @@ mod tests {
         assert!(!entry.contains("sh -c"));
         assert!(!entry.contains('%'));
         assert!(matches!(
-            render_desktop_entry(Path::new("/opt/codex%rs")),
+            render_desktop_entry(Path::new("/opt/codex%rs"), None),
             Err(LinuxDesktopEntryError::InvalidExecutablePath)
         ));
         assert!(matches!(
-            render_desktop_entry(Path::new("/opt/codex\nrs")),
+            render_desktop_entry(Path::new("/opt/codex\nrs"), None),
             Err(LinuxDesktopEntryError::InvalidExecutablePath)
         ));
+    }
+
+    #[test]
+    fn desktop_entry_captures_absolute_codex_binary_without_shell() {
+        let entry = render_desktop_entry(
+            Path::new("/opt/Codex RS/codexrs"),
+            Some(Path::new(r#"/opt/Codex CLI/$`"\codex"#)),
+        )
+        .expect("render desktop entry");
+        let entry = String::from_utf8(entry).expect("desktop entry is UTF-8");
+
+        assert!(entry.contains(
+            "Exec=\"/usr/bin/env\" \"CODEX_RS_CODEX_BIN=/opt/Codex CLI/\\$\\`\\\"\\\\\\\\codex\" \"/opt/Codex RS/codexrs\"\n"
+        ));
+        assert!(!entry.contains("sh -c"));
+        assert!(!entry.contains('%'));
+        for invalid in [
+            PathBuf::from("relative/codex"),
+            PathBuf::from("/opt/codex%bin"),
+            PathBuf::from("/opt/codex\nbin"),
+            PathBuf::from(OsString::from_vec(vec![b'/', b'o', b'p', b't', b'/', 0xff])),
+        ] {
+            assert!(matches!(
+                render_desktop_entry(Path::new("/opt/codexrs"), Some(&invalid)),
+                Err(LinuxDesktopEntryError::InvalidCodexBinaryPath)
+            ));
+        }
     }
 
     #[test]
     fn install_creates_entry_and_cleans_temporary_file() {
         let directory = TestDirectory::new();
         let applications = directory.path.join("applications");
-        let installed = install_linux_desktop_entry_at(&applications, Path::new("/opt/codexrs"))
-            .expect("install desktop entry");
+        let installed = install_linux_desktop_entry_at(
+            &applications,
+            Path::new("/opt/codexrs"),
+            Some(Path::new("/opt/codex/bin/codex")),
+        )
+        .expect("install desktop entry");
 
         assert_eq!(installed, applications.join(LINUX_DESKTOP_ENTRY_FILE_NAME));
         let contents =
             String::from_utf8(read_test_file(&installed)).expect("desktop entry is UTF-8");
-        assert!(contents.contains("Exec=\"/opt/codexrs\""));
+        assert!(contents.contains(
+            "Exec=\"/usr/bin/env\" \"CODEX_RS_CODEX_BIN=/opt/codex/bin/codex\" \"/opt/codexrs\""
+        ));
         let names = fs::read_dir(&applications)
             .expect("read applications directory")
             .map(|entry| entry.expect("read directory entry").file_name())
@@ -342,7 +418,7 @@ mod tests {
         fs::write(&destination, b"foreign entry").expect("write foreign entry");
 
         assert!(matches!(
-            install_linux_desktop_entry_at(&applications, Path::new("/opt/codexrs")),
+            install_linux_desktop_entry_at(&applications, Path::new("/opt/codexrs"), None),
             Err(LinuxDesktopEntryError::EntryAlreadyExists { .. })
         ));
         assert_eq!(read_test_file(&destination), b"foreign entry");
@@ -364,7 +440,7 @@ mod tests {
         symlink(&target, &destination).expect("create destination symlink");
 
         assert!(matches!(
-            install_linux_desktop_entry_at(&applications, Path::new("/opt/codexrs")),
+            install_linux_desktop_entry_at(&applications, Path::new("/opt/codexrs"), None),
             Err(LinuxDesktopEntryError::EntryAlreadyExists { .. })
         ));
         assert_eq!(read_test_file(&target), b"foreign entry");

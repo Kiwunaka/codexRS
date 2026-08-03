@@ -3,7 +3,9 @@ use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::Command;
+
+use crate::process::spawn_detached_bounded;
 
 pub const MAX_ARTIFACT_PATH_BYTES: usize = 8 * 1024;
 pub const MAX_ARTIFACT_PREVIEW_BYTES: u64 = 40 * 1024 * 1024;
@@ -284,11 +286,8 @@ pub fn open_workspace_path(workspace: &Path, requested_path: &Path) -> Result<()
     if !metadata.is_file() && !metadata.is_dir() {
         return Err(ArtifactError::NotAFile);
     }
-    let child = open_path_command(&path, metadata.is_dir())
-        .spawn()
-        .map_err(ArtifactError::Launch)?;
-    reap_child(child);
-    Ok(())
+    let mut command = open_path_command(&path, metadata.is_dir());
+    spawn_detached_bounded(&mut command).map_err(ArtifactError::Launch)
 }
 
 fn resolve_artifact_path(
@@ -387,12 +386,6 @@ fn open_path_command(path: &Path, is_directory: bool) -> Command {
 #[cfg(not(any(windows, target_os = "linux")))]
 fn open_path_command(_path: &Path, _is_directory: bool) -> Command {
     Command::new("false")
-}
-
-fn reap_child(mut child: Child) {
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
 }
 
 #[cfg(test)]

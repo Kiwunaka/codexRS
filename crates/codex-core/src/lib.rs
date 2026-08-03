@@ -4614,6 +4614,11 @@ pub enum Action {
         task_id: String,
         message: String,
     },
+    GoalAttachmentStartFailed {
+        task_id: String,
+        prompt: RetryableUserMessage,
+        message: String,
+    },
     SetGoal {
         objective: String,
         token_budget: Option<Option<i64>>,
@@ -5254,11 +5259,13 @@ pub enum Action {
         uri: String,
     },
     McpResourceLoaded {
+        thread_id: Option<String>,
         server: String,
         uri: String,
         contents: Vec<McpResourceContentCard>,
     },
     McpResourceFailed {
+        thread_id: Option<String>,
         server: String,
         uri: String,
         message: String,
@@ -5305,6 +5312,7 @@ pub enum Action {
         error: Option<String>,
     },
     McpServerStartupStatusUpdated {
+        thread_id: Option<String>,
         name: String,
         status: McpServerStartupState,
         error: Option<String>,
@@ -5945,6 +5953,7 @@ pub enum Effect {
     ReadMcpResource {
         server: String,
         uri: String,
+        thread_id: Option<String>,
     },
     SetMcpServerEnabled {
         key: String,
@@ -8272,7 +8281,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }]
         }
         Action::ToggleReviewPanel => {
-            if state.selected_task_id.is_none() {
+            if state.route != MainRoute::Tasks || state.selected_task_id.is_none() {
                 return Vec::new();
             }
             if state.terminal.location == TerminalDockLocation::Right && state.terminal_dock_open {
@@ -9377,6 +9386,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             if task_changed {
                 state.artifacts = ArtifactState::default();
+                state.marketplace.mcp_resource_read = McpResourceReadState::default();
                 state.marketplace.selected_app_id = None;
                 state.marketplace.app_detail_status = None;
                 state.marketplace.app_detail = None;
@@ -10002,6 +10012,25 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 .or_default()
                 .goal_continuation_pending = false;
             state.status_message = Some(message);
+            Vec::new()
+        }
+        Action::GoalAttachmentStartFailed {
+            task_id,
+            mut prompt,
+            message,
+        } => {
+            state.goals.entry(task_id.clone()).or_default().status = LoadStatus::Failed;
+            state
+                .timelines
+                .entry(task_id.clone())
+                .or_default()
+                .goal_continuation_pending = false;
+            state.status_message = Some(bounded_string(message, MAX_COMPOSER_BYTES));
+            if state.selected_task_id.as_deref() == Some(task_id.as_str()) {
+                normalize_retryable_user_message(&mut prompt);
+                restore_retry_prompt(state, &prompt);
+                state.composer_controls.goal_mode = true;
+            }
             Vec::new()
         }
         Action::SetGoal {
@@ -15197,15 +15226,21 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 contents: Vec::new(),
                 error: None,
             };
-            vec![Effect::ReadMcpResource { server, uri }]
+            vec![Effect::ReadMcpResource {
+                server,
+                uri,
+                thread_id: state.selected_task_id.clone(),
+            }]
         }
         Action::McpResourceLoaded {
+            thread_id,
             server,
             uri,
             mut contents,
         } => {
             let selected = &state.marketplace.mcp_resource_read;
-            if selected.server.as_deref() != Some(server.as_str())
+            if thread_id.as_deref() != state.selected_task_id.as_deref()
+                || selected.server.as_deref() != Some(server.as_str())
                 || selected.uri.as_deref() != Some(uri.as_str())
             {
                 return Vec::new();
@@ -15232,12 +15267,14 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::McpResourceFailed {
+            thread_id,
             server,
             uri,
             message,
         } => {
             let selected = &state.marketplace.mcp_resource_read;
-            if selected.server.as_deref() != Some(server.as_str())
+            if thread_id.as_deref() != state.selected_task_id.as_deref()
+                || selected.server.as_deref() != Some(server.as_str())
                 || selected.uri.as_deref() != Some(uri.as_str())
             {
                 return Vec::new();
@@ -15499,11 +15536,17 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
         }
         Action::McpServerStartupStatusUpdated {
+            thread_id,
             name,
             status,
             error,
             failure_reason,
         } => {
+            if let Some(thread_id) = thread_id.as_deref()
+                && state.selected_task_id.as_deref() != Some(thread_id)
+            {
+                return Vec::new();
+            }
             let name = bounded_string(name.trim().to_owned(), 512);
             if name.is_empty() {
                 return Vec::new();
@@ -16325,14 +16368,16 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::PullRequestMutationFailed {
             generation,
-            identity: _,
+            identity,
             message,
         } => {
             if generation != state.pull_requests.mutation_generation {
                 return Vec::new();
             }
             state.pull_requests.pending_mutation = None;
-            state.pull_requests.mutation_error = Some(message.clone());
+            if state.pull_requests.selected.as_ref() == Some(&identity) {
+                state.pull_requests.mutation_error = Some(message.clone());
+            }
             state.status_message = Some(message);
             Vec::new()
         }
@@ -16378,6 +16423,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             let previous_repository_root = state.git.repository_root.clone();
             let previous_scope = state.git.selected_scope;
+            let previous_selected_path = state.git.selected_path.clone();
             let previous_commit_sha = state.git.selected_commit_sha.clone();
             let previous_review_base = state.git.selected_review_base.clone();
             let previous_diff_generation = state.git.diff_generation;
@@ -16429,10 +16475,37 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     }
                     GitDiffScope::Unstaged | GitDiffScope::Staged => {
                         state.git.selected_scope = previous_scope;
-                        state.git.selected_path = None;
+                        state.git.selected_path = previous_selected_path.filter(|path| {
+                            previous_repository_root == state.git.repository_root
+                                && state.git.files.iter().any(|file| {
+                                    file.path == *path
+                                        && if previous_scope == GitDiffScope::Staged {
+                                            file.staged
+                                        } else {
+                                            file.unstaged
+                                        }
+                                })
+                        });
                         state.git.unified_diff.clear();
                         state.git.diff_generation = next_diff_generation;
-                        state.git.diff_status = None;
+                        state.git.diff_status = state
+                            .git
+                            .selected_path
+                            .as_ref()
+                            .map(|_| LoadStatus::Loading);
+                        if let Some((root, path)) = state
+                            .git
+                            .repository_root
+                            .clone()
+                            .zip(state.git.selected_path.clone())
+                        {
+                            effects.push(Effect::LoadDiff {
+                                generation: next_diff_generation,
+                                root,
+                                path,
+                                staged: previous_scope == GitDiffScope::Staged,
+                            });
+                        }
                     }
                     GitDiffScope::LastTurn => {}
                 }
@@ -21895,6 +21968,8 @@ mod tests {
     fn shell_slash_command_is_explicit_and_preserves_shell_syntax() {
         let mut state = AppState::default();
         reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(&mut state, Action::TaskCreated(task("t2")));
+        reduce(&mut state, Action::SelectTask("t1".to_owned()));
         state
             .timelines
             .entry("t1".to_owned())
@@ -21913,6 +21988,32 @@ mod tests {
             }]
         );
         assert!(state.composer.is_empty());
+
+        let prompt = RetryableUserMessage {
+            text: "/shell git status --short | rg src".to_owned(),
+            attachments: Vec::new(),
+        };
+        reduce(
+            &mut state,
+            Action::ComposerSubmissionFailed {
+                task_id: Some("t1".to_owned()),
+                prompt: prompt.clone(),
+                message: "Could not run the shell command.".to_owned(),
+            },
+        );
+        assert_eq!(state.composer, prompt.text);
+
+        reduce(&mut state, Action::SelectTask("t2".to_owned()));
+        state.composer = "keep this other draft".to_owned();
+        reduce(
+            &mut state,
+            Action::ComposerSubmissionFailed {
+                task_id: Some("t1".to_owned()),
+                prompt,
+                message: "late failure".to_owned(),
+            },
+        );
+        assert_eq!(state.composer, "keep this other draft");
 
         reduce(&mut state, Action::ComposerChanged("/shell".to_owned()));
         assert!(reduce(&mut state, Action::SubmitComposer).is_empty());
@@ -22028,6 +22129,87 @@ mod tests {
         );
         assert!(state.composer.is_empty());
         assert!(state.composer_attachments.is_empty());
+        assert_eq!(state.status_message.as_deref(), Some("late failure"));
+    }
+
+    #[test]
+    fn failed_goal_attachment_start_restores_only_the_owning_chat_draft() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(&mut state, Action::TaskCreated(task("t2")));
+        reduce(&mut state, Action::SelectTask("t1".to_owned()));
+        reduce(
+            &mut state,
+            Action::TaskRuntimeLoaded {
+                task_id: "t1".to_owned(),
+                generation: 1,
+                active_turn_id: None,
+                active_turn_is_review: false,
+                run_status: Some(TaskRunStatus::Idle),
+            },
+        );
+        let attachment = ComposerAttachment {
+            path: repository_path().join("goal.md"),
+            name: "goal.md".to_owned(),
+            kind: ComposerAttachmentKind::Mention,
+        };
+        let prompt = RetryableUserMessage {
+            text: "Finish the release".to_owned(),
+            attachments: vec![attachment.clone()],
+        };
+        reduce(&mut state, Action::ToggleGoalMode);
+        state.composer = prompt.text.clone();
+        state.composer_attachments = prompt.attachments.clone();
+
+        assert!(matches!(
+            reduce(&mut state, Action::SubmitComposer).as_slice(),
+            [Effect::StartTurn {
+                task_id,
+                text,
+                goal_objective: Some(objective),
+                ..
+            }] if task_id == "t1" && text == "/goal Finish the release" && objective == "Finish the release"
+        ));
+        assert!(state.composer.is_empty());
+        assert!(state.composer_attachments.is_empty());
+        assert!(!state.composer_controls.goal_mode);
+        assert_eq!(state.goals["t1"].status, LoadStatus::Loading);
+
+        reduce(
+            &mut state,
+            Action::GoalAttachmentStartFailed {
+                task_id: "t1".to_owned(),
+                prompt: prompt.clone(),
+                message: "x".repeat(MAX_COMPOSER_BYTES + 1),
+            },
+        );
+        assert_eq!(state.composer, prompt.text);
+        assert_eq!(
+            state.composer_attachments.as_slice(),
+            std::slice::from_ref(&attachment)
+        );
+        assert!(state.composer_controls.goal_mode);
+        assert_eq!(state.goals["t1"].status, LoadStatus::Failed);
+        assert_eq!(
+            state.status_message.as_ref().map(String::len),
+            Some(MAX_COMPOSER_BYTES)
+        );
+
+        reduce(&mut state, Action::SelectTask("t2".to_owned()));
+        state.composer = "keep this other draft".to_owned();
+        state.composer_attachments = vec![attachment.clone()];
+        state.composer_controls.goal_mode = false;
+        reduce(
+            &mut state,
+            Action::GoalAttachmentStartFailed {
+                task_id: "t1".to_owned(),
+                prompt,
+                message: "late failure".to_owned(),
+            },
+        );
+        assert_eq!(state.composer, "keep this other draft");
+        assert_eq!(state.composer_attachments, [attachment]);
+        assert!(!state.composer_controls.goal_mode);
         assert_eq!(state.status_message.as_deref(), Some("late failure"));
     }
 
@@ -23532,6 +23714,53 @@ mod tests {
     }
 
     #[test]
+    fn pull_request_mutation_failure_does_not_attach_to_a_newly_selected_pull_request() {
+        let source = pull_request(42);
+        let source_identity = source.identity.clone();
+        let selected = pull_request(43);
+        let selected_identity = selected.identity.clone();
+        let mut state = AppState::default();
+        state.pull_requests.items = vec![source, selected];
+        state.pull_requests.account_login = Some("reviewer".to_owned());
+        state.pull_requests.selected = Some(source_identity.clone());
+        state.pull_requests.mutation_generation = 7;
+        state.pull_requests.pending_mutation = Some(PullRequestMutationKind::Approve);
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SelectPullRequest(selected_identity.clone()),
+            ),
+            [Effect::LoadPullRequestDetail {
+                generation: 1,
+                cwd: PathBuf::from("."),
+                identity: selected_identity.clone(),
+                account_login: "reviewer".to_owned(),
+            }]
+        );
+        assert_eq!(
+            state.pull_requests.pending_mutation,
+            Some(PullRequestMutationKind::Approve)
+        );
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::PullRequestMutationFailed {
+                    generation: 7,
+                    identity: source_identity,
+                    message: "review rejected".to_owned(),
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(state.pull_requests.pending_mutation, None);
+        assert_eq!(state.pull_requests.selected, Some(selected_identity));
+        assert!(state.pull_requests.mutation_error.is_none());
+        assert_eq!(state.status_message.as_deref(), Some("review rejected"));
+    }
+
+    #[test]
     fn pull_request_author_updates_use_the_loaded_head() {
         for (mutation, kind) in [
             (
@@ -24029,6 +24258,10 @@ mod tests {
 
         state.tasks.push(task("t1"));
         state.selected_task_id = Some("t1".to_owned());
+        state.route = MainRoute::Settings;
+        assert!(reduce(&mut state, Action::ToggleReviewPanel).is_empty());
+        assert_eq!(state.inspector, InspectorPane::Hidden);
+        state.route = MainRoute::Tasks;
         assert_eq!(
             reduce(&mut state, Action::ToggleReviewPanel),
             [Effect::PersistUiState {
@@ -24331,6 +24564,60 @@ mod tests {
                 root: PathBuf::from("C:\\repo"),
             }]
         );
+    }
+
+    #[test]
+    fn git_refresh_preserves_a_selected_file_in_the_same_scope() {
+        let root = PathBuf::from("C:\\repo");
+        let path = PathBuf::from("src\\lib.rs");
+        let mut state = AppState {
+            git: GitState {
+                refresh_generation: 7,
+                repository_root: Some(root.clone()),
+                selected_scope: GitDiffScope::Unstaged,
+                selected_path: Some(path.clone()),
+                unified_diff: "old patch".to_owned(),
+                diff_generation: 3,
+                diff_status: Some(LoadStatus::Ready),
+                ..GitState::default()
+            },
+            ..AppState::default()
+        };
+        let refreshed = GitState {
+            repository_root: Some(root.clone()),
+            files: vec![super::GitFileState {
+                path: path.clone(),
+                old_path: None,
+                kind: super::GitFileKind::Modified,
+                staged: false,
+                unstaged: true,
+                staged_additions: 0,
+                staged_deletions: 0,
+                unstaged_additions: 1,
+                unstaged_deletions: 0,
+            }],
+            ..GitState::default()
+        };
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::GitSnapshotLoaded {
+                    generation: 7,
+                    git: Box::new(refreshed),
+                    error: None,
+                },
+            ),
+            [Effect::LoadDiff {
+                generation: 4,
+                root,
+                path: path.clone(),
+                staged: false,
+            }]
+        );
+        assert_eq!(state.git.selected_path.as_ref(), Some(&path));
+        assert_eq!(state.git.diff_status, Some(LoadStatus::Loading));
+        assert!(state.git.unified_diff.is_empty());
     }
 
     #[test]
@@ -27407,7 +27694,10 @@ mod tests {
 
     #[test]
     fn mcp_servers_use_config_toggle_and_oauth_reload_contracts() {
-        let mut state = AppState::default();
+        let mut state = AppState {
+            selected_task_id: Some("task-a".to_owned()),
+            ..AppState::default()
+        };
         state.marketplace.manage_mode = true;
         assert!(
             reduce(
@@ -27493,12 +27783,14 @@ mod tests {
             [Effect::ReadMcpResource {
                 server: "calendar".to_owned(),
                 uri: "calendar://today".to_owned(),
+                thread_id: Some("task-a".to_owned()),
             }]
         );
         assert!(
             reduce(
                 &mut state,
                 Action::McpResourceLoaded {
+                    thread_id: Some("task-a".to_owned()),
                     server: "calendar".to_owned(),
                     uri: "calendar://today".to_owned(),
                     contents: vec![McpResourceContentCard {
@@ -27608,8 +27900,56 @@ mod tests {
     }
 
     #[test]
+    fn stale_mcp_resource_read_is_ignored_after_task_change() {
+        let mut state = AppState {
+            tasks: vec![task_in_repository("task-a"), task_in_repository("task-b")],
+            ..AppState::default()
+        };
+        reduce(&mut state, Action::SelectTask("task-a".to_owned()));
+        state.marketplace.mcp_resource_read.server = Some("calendar".to_owned());
+        state.marketplace.mcp_resource_read.uri = Some("calendar://today".to_owned());
+        state.marketplace.mcp_resource_read.status = Some(LoadStatus::Loading);
+
+        reduce(&mut state, Action::SelectTask("task-b".to_owned()));
+        assert_eq!(
+            state.marketplace.mcp_resource_read,
+            super::McpResourceReadState::default()
+        );
+
+        state.marketplace.mcp_resource_read.server = Some("calendar".to_owned());
+        state.marketplace.mcp_resource_read.uri = Some("calendar://today".to_owned());
+        state.marketplace.mcp_resource_read.status = Some(LoadStatus::Loading);
+        assert!(
+            reduce(
+                &mut state,
+                Action::McpResourceLoaded {
+                    thread_id: Some("task-a".to_owned()),
+                    server: "calendar".to_owned(),
+                    uri: "calendar://today".to_owned(),
+                    contents: vec![McpResourceContentCard {
+                        uri: "calendar://today".to_owned(),
+                        mime_type: Some("application/json".to_owned()),
+                        text: Some("stale".to_owned()),
+                        blob_bytes: None,
+                        truncated: false,
+                    }],
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.marketplace.mcp_resource_read.status,
+            Some(LoadStatus::Loading)
+        );
+        assert!(state.marketplace.mcp_resource_read.contents.is_empty());
+    }
+
+    #[test]
     fn mcp_server_editor_uses_stable_keys_and_surfaces_reauthentication() {
-        let mut state = AppState::default();
+        let mut state = AppState {
+            selected_task_id: Some("task-b".to_owned()),
+            ..AppState::default()
+        };
         let draft = McpServerDraft {
             name: " My / MCP ".to_owned(),
             transport: McpTransportKind::Stdio,
@@ -27698,10 +28038,30 @@ mod tests {
             )
             .is_empty()
         );
+        let previous_status_message = state.status_message.clone();
         assert!(
             reduce(
                 &mut state,
                 Action::McpServerStartupStatusUpdated {
+                    thread_id: Some("task-a".to_owned()),
+                    name: "my_-_mcp".to_owned(),
+                    status: McpServerStartupState::Failed,
+                    error: Some("foreign task failure".to_owned()),
+                    failure_reason: Some(McpServerStartupFailureReason::ReauthenticationRequired,),
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.marketplace.mcp_servers.as_slice(),
+            std::slice::from_ref(&server)
+        );
+        assert_eq!(state.status_message, previous_status_message);
+        assert!(
+            reduce(
+                &mut state,
+                Action::McpServerStartupStatusUpdated {
+                    thread_id: None,
                     name: "my_-_mcp".to_owned(),
                     status: McpServerStartupState::Failed,
                     error: Some("expired credentials".to_owned()),

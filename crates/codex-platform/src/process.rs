@@ -2,7 +2,8 @@ use std::error::Error;
 use std::fmt;
 use std::io::{self, Read};
 use std::process::{Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -20,6 +21,10 @@ use win32job::{ExtendedLimitInfo, Job};
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const WAIT_TICK: Duration = Duration::from_millis(10);
+const DETACHED_PROCESS_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_DETACHED_PROCESS_SUPERVISORS: usize = 8;
+
+static DETACHED_PROCESS_SUPERVISORS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug)]
 pub(crate) struct BoundedOutput {
@@ -108,6 +113,91 @@ pub(crate) fn run_bounded_cancelable(
         timeout,
         Some(cancellation),
     )
+}
+
+/// Starts a fire-and-forget platform action without leaving its child process or
+/// waiter alive indefinitely.
+pub(crate) fn spawn_detached_bounded(command: &mut Command) -> io::Result<()> {
+    spawn_detached_bounded_for(command, DETACHED_PROCESS_TIMEOUT)
+}
+
+fn spawn_detached_bounded_for(command: &mut Command, timeout: Duration) -> io::Result<()> {
+    let permit = reserve_detached_process_supervisor()?;
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    command.process_group(0);
+
+    let deadline = Instant::now() + timeout;
+    let child = Arc::new(Mutex::new(Some(command.spawn()?)));
+    let worker_child = Arc::clone(&child);
+    match thread::Builder::new()
+        .name("codex-platform-detached-process".to_owned())
+        .spawn(move || {
+            let mut child = worker_child
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take();
+            if let Some(child) = child.as_mut() {
+                supervise_detached_process(child, deadline);
+            }
+            drop(permit);
+        }) {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            let mut child = child
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take();
+            if let Some(child) = child.as_mut() {
+                terminate_process_tree(child);
+                let _ = child.wait();
+            }
+            Err(error)
+        }
+    }
+}
+
+fn reserve_detached_process_supervisor() -> io::Result<DetachedProcessSupervisorPermit> {
+    loop {
+        let current = DETACHED_PROCESS_SUPERVISORS.load(Ordering::Acquire);
+        if current >= MAX_DETACHED_PROCESS_SUPERVISORS {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "too many platform actions are still running",
+            ));
+        }
+        if DETACHED_PROCESS_SUPERVISORS
+            .compare_exchange_weak(current, current + 1, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            return Ok(DetachedProcessSupervisorPermit);
+        }
+    }
+}
+
+struct DetachedProcessSupervisorPermit;
+
+impl Drop for DetachedProcessSupervisorPermit {
+    fn drop(&mut self) {
+        DETACHED_PROCESS_SUPERVISORS.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+fn supervise_detached_process(child: &mut std::process::Child, deadline: Instant) {
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) if Instant::now() < deadline => thread::sleep(WAIT_TICK),
+            Ok(None) | Err(_) => {
+                terminate_process_tree(child);
+                let _ = child.wait();
+                return;
+            }
+        }
+    }
 }
 
 fn run_bounded_inner(
@@ -219,6 +309,11 @@ fn terminate_process_tree(child: &mut std::process::Child) {
     let _ = child.kill();
 }
 
+#[cfg(windows)]
+fn terminate_process_tree(child: &mut std::process::Child) {
+    let _ = child.kill();
+}
+
 fn read_bounded(mut reader: impl Read, limit: usize) -> Result<(Vec<u8>, bool), ProcessError> {
     let mut output = Vec::with_capacity(limit.min(64 * 1024));
     let mut truncated = false;
@@ -237,13 +332,21 @@ fn read_bounded(mut reader: impl Read, limit: usize) -> Result<(Vec<u8>, bool), 
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::env;
+    #[cfg(unix)]
+    use std::fs;
     use std::io::Cursor;
     use std::process::Command;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread;
     use std::time::{Duration, Instant};
+    #[cfg(unix)]
+    use std::time::{SystemTime, UNIX_EPOCH};
 
+    #[cfg(unix)]
+    use super::spawn_detached_bounded_for;
     use super::{ProcessError, read_bounded, run_bounded_cancelable};
 
     #[test]
@@ -278,6 +381,35 @@ mod tests {
         assert!(signal.join().is_ok(), "cancellation signal should finish");
         assert!(matches!(result, Err(ProcessError::Cancelled)));
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detached_process_timeout_terminates_its_process_group() -> std::io::Result<()> {
+        let marker = env::temp_dir().join(format!(
+            "codex-platform-detached-process-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::remove_file(&marker);
+
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "sleep 0.2; : > \"$CODEX_RS_DETACHED_MARKER\""])
+            .env("CODEX_RS_DETACHED_MARKER", &marker);
+        spawn_detached_bounded_for(&mut command, Duration::from_millis(50))?;
+
+        thread::sleep(Duration::from_millis(400));
+        let marker_created = marker.exists();
+        let _ = fs::remove_file(&marker);
+        assert!(
+            !marker_created,
+            "timed out detached process should not leave its child running"
+        );
+        Ok(())
     }
 
     #[cfg(windows)]

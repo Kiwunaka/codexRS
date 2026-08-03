@@ -18,6 +18,8 @@ use codex_core::IntegratedTerminalShell;
 use crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
+#[cfg(unix)]
+use rustix::process::{Pid, Signal, kill_process_group};
 #[cfg(windows)]
 use win32job::{ExtendedLimitInfo, Job};
 
@@ -94,6 +96,8 @@ pub enum TerminalError {
     Job(win32job::JobError),
     #[cfg(windows)]
     MissingProcessHandle,
+    #[cfg(unix)]
+    MissingProcessId,
 }
 
 impl fmt::Display for TerminalError {
@@ -109,6 +113,10 @@ impl fmt::Display for TerminalError {
             Self::MissingProcessHandle => {
                 formatter.write_str("terminal child did not expose a process handle")
             }
+            #[cfg(unix)]
+            Self::MissingProcessId => {
+                formatter.write_str("terminal child did not expose a process id")
+            }
         }
     }
 }
@@ -122,6 +130,8 @@ impl Error for TerminalError {
             Self::Open | Self::Spawn | Self::Stream(_) => None,
             #[cfg(windows)]
             Self::MissingProcessHandle => None,
+            #[cfg(unix)]
+            Self::MissingProcessId => None,
         }
     }
 }
@@ -390,7 +400,19 @@ fn send_command(
 #[cfg(windows)]
 type TerminalJob = Job;
 
-#[cfg(not(windows))]
+#[cfg(unix)]
+struct TerminalJob {
+    process_group: Pid,
+}
+
+#[cfg(unix)]
+impl Drop for TerminalJob {
+    fn drop(&mut self) {
+        let _ = kill_process_group(self.process_group, Signal::KILL);
+    }
+}
+
+#[cfg(not(any(windows, unix)))]
 struct TerminalJob;
 
 #[cfg(windows)]
@@ -407,7 +429,17 @@ fn create_terminal_job(child: &(dyn Child + Send + Sync)) -> Result<TerminalJob,
     Ok(job)
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
+fn create_terminal_job(child: &(dyn Child + Send + Sync)) -> Result<TerminalJob, TerminalError> {
+    let process_group = child
+        .process_id()
+        .and_then(|id| i32::try_from(id).ok())
+        .and_then(Pid::from_raw)
+        .ok_or(TerminalError::MissingProcessId)?;
+    Ok(TerminalJob { process_group })
+}
+
+#[cfg(not(any(windows, unix)))]
 fn create_terminal_job(_child: &(dyn Child + Send + Sync)) -> Result<TerminalJob, TerminalError> {
     Ok(TerminalJob)
 }
@@ -418,7 +450,7 @@ fn run_terminal(
     mut writer: Box<dyn Write + Send>,
     reader: Box<dyn Read + Send>,
     child: &mut Box<dyn Child + Send + Sync>,
-    _job: TerminalJob,
+    job: TerminalJob,
     commands: Receiver<TerminalCommand>,
     response_commands: Sender<TerminalCommand>,
     events: Sender<TerminalEvent>,
@@ -515,6 +547,7 @@ fn run_terminal(
         }
     }
 
+    drop(job);
     drop(writer);
     drop(master);
     if let Some(reader_thread) = reader_thread {
@@ -585,22 +618,33 @@ fn read_terminal(
 #[cfg(test)]
 mod tests {
     use std::error::Error;
+    #[cfg(unix)]
+    use std::fs;
     use std::io::Cursor;
+    #[cfg(unix)]
+    use std::os::unix::process::CommandExt;
+    #[cfg(unix)]
+    use std::process::{Command, Stdio};
     use std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     };
+    #[cfg(unix)]
+    use std::thread;
     use std::time::{Duration, Instant};
+    #[cfg(unix)]
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[cfg(windows)]
     use super::available_terminal_shells;
-    #[cfg(windows)]
-    use codex_core::IntegratedTerminalShell;
-
+    #[cfg(unix)]
+    use super::create_terminal_job;
     use super::{
         MAX_TERMINAL_INPUT_BYTES, TerminalCommand, TerminalConfig, TerminalEvent, TerminalSession,
         next_terminal_command, read_terminal,
     };
+    #[cfg(windows)]
+    use codex_core::IntegratedTerminalShell;
 
     #[test]
     fn shutdown_request_outranks_a_full_terminal_command_queue() {
@@ -647,6 +691,41 @@ mod tests {
             IntegratedTerminalShell::PowerShell,
             IntegratedTerminalShell::CommandPrompt,
         ]));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_terminal_job_kills_same_group_descendants() -> Result<(), Box<dyn Error>> {
+        let marker = std::env::temp_dir().join(format!(
+            "codexrs-terminal-job-{}-{}.marker",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+        ));
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "trap '' HUP; (sleep 1; printf x > \"$CODEXRS_TERMINAL_JOB_MARKER\") & exit",
+            ])
+            .env("CODEXRS_TERMINAL_JOB_MARKER", &marker)
+            .process_group(0)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut child = command.spawn()?;
+        let job = create_terminal_job(&child)?;
+        assert!(child.wait()?.success());
+
+        drop(job);
+        thread::sleep(Duration::from_secs(2));
+        let descendant_ran = marker.exists();
+        if descendant_ran {
+            let _ = fs::remove_file(&marker);
+        }
+        assert!(
+            !descendant_ran,
+            "a terminal process-group descendant ran after its job was dropped"
+        );
+        Ok(())
     }
 
     #[test]

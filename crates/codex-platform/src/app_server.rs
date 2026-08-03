@@ -2121,6 +2121,8 @@ fn notification_method_requires_resync(method: &str) -> bool {
             | "turn/completed"
             | "thread/goal/updated"
             | "thread/goal/cleared"
+            | "thread/status/changed"
+            | "account/login/completed"
             | "remoteControl/status/changed"
     )
 }
@@ -2608,6 +2610,8 @@ mod tests {
             "turn/completed",
             "thread/goal/updated",
             "thread/goal/cleared",
+            "thread/status/changed",
+            "account/login/completed",
             "remoteControl/status/changed",
         ] {
             assert!(notification_requires_resync(

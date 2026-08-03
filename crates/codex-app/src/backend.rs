@@ -7398,6 +7398,10 @@ fn run_effect(
             }
         }
         Effect::RunThreadShellCommand { task_id, command } => {
+            let prompt = RetryableUserMessage {
+                text: format!("/shell {command}"),
+                attachments: Vec::new(),
+            };
             if app_server
                 .run_thread_shell_command(ThreadShellCommandParams {
                     thread_id: task_id.clone(),
@@ -7407,8 +7411,9 @@ fn run_effect(
             {
                 emit(
                     events,
-                    Action::ThreadShellCommandFailed {
-                        task_id,
+                    Action::ComposerSubmissionFailed {
+                        task_id: Some(task_id),
+                        prompt,
                         message: "Could not run the shell command.".to_owned(),
                     },
                 );
@@ -7481,11 +7486,15 @@ fn run_effect(
                     }
                 }
                 Err(error) => {
-                    if goal_objective.is_some() {
+                    if let Some(objective) = goal_objective {
                         emit(
                             events,
-                            Action::GoalLoadFailed {
+                            Action::GoalAttachmentStartFailed {
                                 task_id: goal_task_id,
+                                prompt: RetryableUserMessage {
+                                    text: objective,
+                                    attachments: prompt.attachments,
+                                },
                                 message: format!("failed to start Goal attachment turn: {error}"),
                             },
                         );
@@ -7956,15 +7965,20 @@ fn run_effect(
                 },
             ),
         },
-        Effect::ReadMcpResource { server, uri } => {
+        Effect::ReadMcpResource {
+            server,
+            uri,
+            thread_id,
+        } => {
             match app_server.read_mcp_resource(McpResourceReadParams {
                 server: server.clone(),
                 uri: uri.clone(),
-                thread_id: None,
+                thread_id: thread_id.clone(),
             }) {
                 Ok(response) => emit(
                     events,
                     Action::McpResourceLoaded {
+                        thread_id,
                         server,
                         uri,
                         contents: map_mcp_resource_contents(response.contents),
@@ -7973,6 +7987,7 @@ fn run_effect(
                 Err(error) => emit(
                     events,
                     Action::McpResourceFailed {
+                        thread_id,
                         server,
                         uri,
                         message: format!("failed to read MCP resource: {error}"),
@@ -12887,6 +12902,7 @@ fn handle_notification(method: &str, params: Value, events: &dyn ActionEmitter) 
                 emit(
                     events,
                     Action::McpServerStartupStatusUpdated {
+                        thread_id: notification.thread_id,
                         name: notification.name,
                         status: map_mcp_startup_state(notification.status),
                         error: notification.error.map(|_| {
@@ -20552,7 +20568,7 @@ mod tests {
         assert!(!handle_notification(
             "mcpServer/startupStatus/updated",
             json!({
-                "threadId": null,
+                "threadId": "thread-1",
                 "name": "remote",
                 "status": "failed",
                 "error": "OAuth token expired: secret=do-not-expose",
@@ -20566,13 +20582,15 @@ mod tests {
         assert!(matches!(
             action,
             Action::McpServerStartupStatusUpdated {
+                thread_id: Some(thread_id),
                 name,
                 status: McpServerStartupState::Failed,
                 error: Some(error),
                 failure_reason: Some(
                     McpServerStartupFailureReason::ReauthenticationRequired
                 ),
-            } if name == "remote"
+            } if thread_id == "thread-1"
+                && name == "remote"
                 && error == "MCP server could not start. Check its configuration and try again."
         ));
     }

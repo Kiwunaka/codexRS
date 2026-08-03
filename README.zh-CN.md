@@ -109,7 +109,9 @@ codex --version
 
 Linux 归档不是系统软件包：它不会自动安装 runtime 依赖或 desktop integration。
 运行 `codexrs --install-desktop-entry` 可为当前解压出的二进制文件创建用户级 desktop
-entry；该命令绝不修改已有 entry。Ubuntu CI 会在隔离的 Xvfb 会话中启动解压后的归档；
+entry。如果 Codex CLI 不在桌面会话的 `PATH` 中，请在安装时设置绝对路径
+`CODEX_RS_CODEX_BIN`；entry 会保存该路径。该命令绝不修改已有 entry，因此任一二进制
+移动后需要删除并重新创建 entry。Ubuntu CI 会在隔离的 Xvfb 会话中启动解压后的归档；
 更广泛的桌面环境 smoke 测试仍在进行中。该预览版中 Linux Computer Use 仅在 `DISPLAY` 非空时，对 X11/XWayland 窗口提供有界只读截图
 观察。不支持文本提取、输入、应用启动、持久化审批、覆盖层或中断监控；不支持没有
 XWayland 的纯 Wayland。
