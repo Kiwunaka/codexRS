@@ -59,6 +59,7 @@ const MAX_BROWSER_TEXT_BYTES: usize = 256;
 const MAX_CACHED_AGENT_EXPRESSIONS: usize = 32;
 const MAX_CACHED_AGENT_EXPRESSION_BYTES: usize = 1024 * 1024;
 const MAX_AGENT_CACHE_KEY_BYTES: usize = 256;
+const MAX_AGENT_CHILD_SESSIONS: usize = BROWSER_COMMAND_CAPACITY;
 const MAX_BROWSER_DOWNLOAD_DIRECTORY_ENTRIES: usize = 32;
 const MAX_BROWSER_DOWNLOAD_FILENAME_ATTEMPTS: u32 = 10_000;
 const MAX_BROWSER_DOWNLOAD_FILENAME_BYTES: usize = 240;
@@ -1660,6 +1661,84 @@ struct BrowserTabRuntime {
 struct BrowserAgentChildSession {
     agent_tab_id: u64,
     target_id: String,
+    parent_session_id: String,
+}
+
+fn agent_tab_id_for_cdp_session<'a>(
+    mut root_sessions: impl Iterator<Item = (&'a str, u64)>,
+    child_sessions: &HashMap<String, BrowserAgentChildSession>,
+    session_id: &str,
+) -> Option<u64> {
+    root_sessions
+        .find_map(|(root_session_id, agent_tab_id)| {
+            (root_session_id == session_id).then_some(agent_tab_id)
+        })
+        .or_else(|| {
+            child_sessions
+                .get(session_id)
+                .map(|child| child.agent_tab_id)
+        })
+}
+
+fn record_agent_child_session<'a>(
+    root_sessions: impl Iterator<Item = (&'a str, u64)>,
+    child_sessions: &mut HashMap<String, BrowserAgentChildSession>,
+    parent_session_id: &str,
+    child_session_id: &str,
+    target_id: &str,
+) {
+    let Some(agent_tab_id) =
+        agent_tab_id_for_cdp_session(root_sessions, child_sessions, parent_session_id)
+    else {
+        return;
+    };
+    if !is_bounded_agent_identifier(child_session_id)
+        || !is_bounded_agent_identifier(target_id)
+        || child_session_id == parent_session_id
+        || child_sessions.contains_key(child_session_id)
+        || child_sessions.len() >= MAX_AGENT_CHILD_SESSIONS
+    {
+        return;
+    }
+    child_sessions.insert(
+        child_session_id.to_owned(),
+        BrowserAgentChildSession {
+            agent_tab_id,
+            target_id: target_id.to_owned(),
+            parent_session_id: parent_session_id.to_owned(),
+        },
+    );
+}
+
+fn remove_agent_child_session<'a>(
+    root_sessions: impl Iterator<Item = (&'a str, u64)>,
+    child_sessions: &mut HashMap<String, BrowserAgentChildSession>,
+    parent_session_id: &str,
+    child_session_id: &str,
+) -> bool {
+    let Some(parent_agent_tab_id) =
+        agent_tab_id_for_cdp_session(root_sessions, child_sessions, parent_session_id)
+    else {
+        return false;
+    };
+    let Some(child) = child_sessions.get(child_session_id) else {
+        return false;
+    };
+    if child.parent_session_id != parent_session_id || child.agent_tab_id != parent_agent_tab_id {
+        return false;
+    }
+
+    let mut removed_sessions = VecDeque::from([child_session_id.to_owned()]);
+    while let Some(parent_session_id) = removed_sessions.pop_front() {
+        child_sessions.remove(&parent_session_id);
+        removed_sessions.extend(
+            child_sessions
+                .iter()
+                .filter(|(_, child)| child.parent_session_id == parent_session_id)
+                .map(|(session_id, _)| session_id.to_owned()),
+        );
+    }
+    true
 }
 
 enum BrowserDownloadGrantSource {
@@ -2296,30 +2375,13 @@ impl BrowserRuntime {
         if self.tabs[index].public.id == target_id {
             return Ok(Value::Null);
         }
-        let main_session = self.tabs[index].session_id.clone();
-        let result = self
-            .cdp
-            .request(
-                "Target.attachToTarget",
-                json!({"targetId": target_id, "flatten": true}),
-                Some(&main_session),
-            )
-            .map_err(BrowserAgentRpcError::request)?;
-        let child_session = result
-            .get("sessionId")
-            .and_then(Value::as_str)
-            .map(str::to_owned)
+        self.agent_child_sessions
+            .values()
+            .any(|child| child.agent_tab_id == agent_tab_id && child.target_id == target_id)
+            .then_some(Value::Null)
             .ok_or_else(|| {
-                BrowserAgentRpcError::request("Target.attachToTarget did not return a sessionId")
-            })?;
-        self.agent_child_sessions.insert(
-            child_session,
-            BrowserAgentChildSession {
-                agent_tab_id,
-                target_id,
-            },
-        );
-        Ok(Value::Null)
+                BrowserAgentRpcError::request("Debugger target does not belong to this Browser tab")
+            })
     }
 
     fn agent_detach_target(&mut self, params: &Value) -> Result<Value, BrowserAgentRpcError> {
@@ -2340,15 +2402,19 @@ impl BrowserRuntime {
                     .then(|| session_id.clone())
             })
             .ok_or_else(|| BrowserAgentRpcError::request("Debugger target is not attached"))?;
-        let main_session = self.tabs[index].session_id.clone();
+        let parent_session = self
+            .agent_child_sessions
+            .get(&child_session)
+            .map(|child| child.parent_session_id.clone())
+            .ok_or_else(|| BrowserAgentRpcError::request("Debugger target is not attached"))?;
         self.cdp
             .request(
                 "Target.detachFromTarget",
                 json!({"sessionId": child_session}),
-                Some(&main_session),
+                Some(&parent_session),
             )
             .map_err(BrowserAgentRpcError::request)?;
-        self.agent_child_sessions.remove(&child_session);
+        self.remove_agent_child_session(&parent_session, &child_session);
         Ok(Value::Null)
     }
 
@@ -2413,31 +2479,17 @@ impl BrowserRuntime {
         } else {
             self.tabs[index].public.url.as_str()
         };
-        if method != "Target.closeTarget" {
-            self.ensure_agent_site_permission(
-                permission_url,
-                BrowserPermissionResource::Browse,
-                "browsing",
-            )?;
-        }
+        self.ensure_agent_site_permission(
+            permission_url,
+            BrowserPermissionResource::Browse,
+            "browsing",
+        )?;
         if method == "DOM.setFileInputFiles" {
             self.ensure_agent_site_permission(
                 permission_url,
                 BrowserPermissionResource::Upload,
                 "uploads",
             )?;
-        }
-
-        if method == "Target.closeTarget"
-            && command_params
-                .get("targetId")
-                .and_then(Value::as_str)
-                .is_none_or(|target_id| target_id == self.tabs[index].public.id)
-        {
-            let tab_id = self.tabs[index].public.id.clone();
-            self.close_tab(&context_id, &tab_id)
-                .map_err(BrowserAgentRpcError::request)?;
-            return Ok(json!({"success": true}));
         }
 
         let cdp_session = self.agent_cdp_session(index, target)?;
@@ -2799,19 +2851,30 @@ impl BrowserRuntime {
         let method = event.get("method").and_then(Value::as_str);
         let parent_session = event.get("sessionId").and_then(Value::as_str);
         if method == Some("Target.detachedFromTarget") {
-            if let Some(child_session) = event
-                .get("params")
-                .and_then(|params| params.get("sessionId"))
-                .and_then(Value::as_str)
-            {
-                self.agent_child_sessions.remove(child_session);
+            if let (Some(parent_session), Some(child_session)) = (
+                parent_session,
+                event
+                    .get("params")
+                    .and_then(|params| params.get("sessionId"))
+                    .and_then(Value::as_str),
+            ) {
+                let root_sessions = self
+                    .tabs
+                    .iter()
+                    .map(|tab| (tab.session_id.as_str(), tab.agent_id));
+                remove_agent_child_session(
+                    root_sessions,
+                    &mut self.agent_child_sessions,
+                    parent_session,
+                    child_session,
+                );
             }
             return;
         }
         if method != Some("Target.attachedToTarget") {
             return;
         }
-        let Some(parent_index) = self.tab_index_for_session(parent_session) else {
+        let Some(parent_session) = parent_session else {
             return;
         };
         let params = event.get("params").unwrap_or(&Value::Null);
@@ -2825,12 +2888,29 @@ impl BrowserRuntime {
         else {
             return;
         };
-        self.agent_child_sessions.insert(
-            child_session.to_owned(),
-            BrowserAgentChildSession {
-                agent_tab_id: self.tabs[parent_index].agent_id,
-                target_id: target_id.to_owned(),
-            },
+        let root_sessions = self
+            .tabs
+            .iter()
+            .map(|tab| (tab.session_id.as_str(), tab.agent_id));
+        record_agent_child_session(
+            root_sessions,
+            &mut self.agent_child_sessions,
+            parent_session,
+            child_session,
+            target_id,
+        );
+    }
+
+    fn remove_agent_child_session(&mut self, parent_session_id: &str, child_session_id: &str) {
+        let root_sessions = self
+            .tabs
+            .iter()
+            .map(|tab| (tab.session_id.as_str(), tab.agent_id));
+        remove_agent_child_session(
+            root_sessions,
+            &mut self.agent_child_sessions,
+            parent_session_id,
+            child_session_id,
         );
     }
 
@@ -3869,6 +3949,15 @@ impl BrowserRuntime {
             .and_then(Value::as_str)
             .map(str::to_owned)
             .ok_or_else(|| "Browser did not return a tab session".to_owned())?;
+        self.cdp.request(
+            "Target.setAutoAttach",
+            json!({
+                "autoAttach": true,
+                "waitForDebuggerOnStart": false,
+                "flatten": true,
+            }),
+            Some(&session_id),
+        )?;
         self.cdp
             .request("Page.enable", json!({}), Some(&session_id))?;
         self.cdp.request(
@@ -4665,13 +4754,15 @@ fn checked_agent_target_id(value: Option<&Value>) -> Result<String, BrowserAgent
     value
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|target_id| {
-            !target_id.is_empty()
-                && target_id.len() <= 256
-                && !target_id.chars().any(char::is_control)
-        })
+        .filter(|target_id| is_bounded_agent_identifier(target_id))
         .map(str::to_owned)
         .ok_or_else(|| BrowserAgentRpcError::request("Browser request requires a targetId"))
+}
+
+fn is_bounded_agent_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_BROWSER_AGENT_ID_BYTES
+        && !value.chars().any(char::is_control)
 }
 
 fn finite_coordinate(value: Option<&Value>, extent: u32) -> Result<f64, BrowserAgentRpcError> {
@@ -4693,17 +4784,7 @@ fn allowed_agent_cdp_method(method: &str) -> bool {
         return false;
     };
     if domain == "Target" {
-        return matches!(
-            command,
-            "activateTarget"
-                | "attachToTarget"
-                | "closeTarget"
-                | "detachFromTarget"
-                | "getTargetInfo"
-                | "getTargets"
-                | "setAutoAttach"
-                | "setDiscoverTargets"
-        );
+        return false;
     }
     if domain == "Page" && matches!(command, "startScreencast" | "stopScreencast") {
         return false;
@@ -4800,7 +4881,7 @@ fn bounded_text(value: &str, max_bytes: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
+    use std::collections::{HashMap, VecDeque};
     use std::error::Error;
     use std::fs;
     use std::io::{self, Read as _, Write as _};
@@ -4820,16 +4901,18 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        BROWSER_COMMAND_CAPACITY, BrowserCommand, BrowserCommandError, BrowserConfig,
-        BrowserDownloadControl, BrowserDownloadRuntime, BrowserEvent, BrowserFamily, CdpClient,
-        DevToolsEndpoint, LatestBrowserFrame, MAX_BROWSER_URL_BYTES, MAX_CDP_PENDING_EVENT_BYTES,
-        PendingCdpEvents, browser_command, browser_origin_pattern_matches,
-        browser_permission_for_url, cdp_key_name, checked_agent_browser_id, checked_agent_viewport,
-        checked_download_url, checked_navigation_url, control_download_transfer,
-        create_browser_job, graceful_browser_exit, move_download_to_destination,
-        next_browser_command, normalize_browser_origin, parse_devtools_marker,
-        resolve_browser_binary, safe_download_filename, screencast_frame_ack,
-        try_recv_browser_event, wait_for_devtools_endpoint,
+        BROWSER_COMMAND_CAPACITY, BrowserAgentChildSession, BrowserCommand, BrowserCommandError,
+        BrowserConfig, BrowserDownloadControl, BrowserDownloadRuntime, BrowserEvent, BrowserFamily,
+        CdpClient, DevToolsEndpoint, LatestBrowserFrame, MAX_AGENT_CHILD_SESSIONS,
+        MAX_BROWSER_URL_BYTES, MAX_CDP_PENDING_EVENT_BYTES, PendingCdpEvents,
+        agent_tab_id_for_cdp_session, allowed_agent_cdp_method, browser_command,
+        browser_origin_pattern_matches, browser_permission_for_url, cdp_key_name,
+        checked_agent_browser_id, checked_agent_viewport, checked_download_url,
+        checked_navigation_url, control_download_transfer, create_browser_job,
+        graceful_browser_exit, move_download_to_destination, next_browser_command,
+        normalize_browser_origin, parse_devtools_marker, record_agent_child_session,
+        remove_agent_child_session, resolve_browser_binary, safe_download_filename,
+        screencast_frame_ack, try_recv_browser_event, wait_for_devtools_endpoint,
     };
     use super::{
         MAX_XDG_USER_DIRS_BYTES, decode_xdg_double_quoted, linux_user_dirs_config_path,
@@ -5135,6 +5218,128 @@ mod tests {
             receiver.try_recv(),
             Ok(BrowserCommand::SetPromptForUserDownloads(true))
         ));
+    }
+
+    #[test]
+    fn scoped_agent_child_sessions_inherit_only_owned_parent_sessions() {
+        let root_sessions =
+            HashMap::from([("root-a".to_owned(), 1_u64), ("root-b".to_owned(), 2_u64)]);
+        let mut child_sessions = HashMap::<String, BrowserAgentChildSession>::new();
+
+        record_agent_child_session(
+            root_sessions
+                .iter()
+                .map(|(session_id, tab_id)| (session_id.as_str(), *tab_id)),
+            &mut child_sessions,
+            "unscoped-parent",
+            "unowned-child",
+            "unowned-target",
+        );
+        assert!(child_sessions.is_empty());
+
+        record_agent_child_session(
+            root_sessions
+                .iter()
+                .map(|(session_id, tab_id)| (session_id.as_str(), *tab_id)),
+            &mut child_sessions,
+            "root-a",
+            "child-a",
+            "target-a",
+        );
+        record_agent_child_session(
+            root_sessions
+                .iter()
+                .map(|(session_id, tab_id)| (session_id.as_str(), *tab_id)),
+            &mut child_sessions,
+            "child-a",
+            "nested-child-a",
+            "nested-target-a",
+        );
+        record_agent_child_session(
+            root_sessions
+                .iter()
+                .map(|(session_id, tab_id)| (session_id.as_str(), *tab_id)),
+            &mut child_sessions,
+            "root-b",
+            "child-b",
+            "target-b",
+        );
+
+        assert_eq!(
+            agent_tab_id_for_cdp_session(
+                root_sessions
+                    .iter()
+                    .map(|(session_id, tab_id)| (session_id.as_str(), *tab_id)),
+                &child_sessions,
+                "nested-child-a",
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            child_sessions
+                .get("child-b")
+                .map(|child| child.agent_tab_id),
+            Some(2)
+        );
+
+        assert!(!remove_agent_child_session(
+            root_sessions
+                .iter()
+                .map(|(session_id, tab_id)| (session_id.as_str(), *tab_id)),
+            &mut child_sessions,
+            "root-b",
+            "child-a",
+        ));
+        assert!(child_sessions.contains_key("child-a"));
+        assert!(remove_agent_child_session(
+            root_sessions
+                .iter()
+                .map(|(session_id, tab_id)| (session_id.as_str(), *tab_id)),
+            &mut child_sessions,
+            "root-a",
+            "child-a",
+        ));
+        assert!(!child_sessions.contains_key("child-a"));
+        assert!(!child_sessions.contains_key("nested-child-a"));
+        assert!(child_sessions.contains_key("child-b"));
+    }
+
+    #[test]
+    fn scoped_agent_child_sessions_fail_closed_at_their_cap() {
+        let root_sessions = HashMap::from([("root".to_owned(), 1_u64)]);
+        let mut child_sessions = HashMap::<String, BrowserAgentChildSession>::new();
+        for index in 0..=MAX_AGENT_CHILD_SESSIONS {
+            record_agent_child_session(
+                root_sessions
+                    .iter()
+                    .map(|(session_id, tab_id)| (session_id.as_str(), *tab_id)),
+                &mut child_sessions,
+                "root",
+                &format!("child-{index}"),
+                &format!("target-{index}"),
+            );
+        }
+
+        assert_eq!(child_sessions.len(), MAX_AGENT_CHILD_SESSIONS);
+        assert!(!child_sessions.contains_key(&format!("child-{MAX_AGENT_CHILD_SESSIONS}")));
+    }
+
+    #[test]
+    fn raw_agent_cdp_rejects_target_domain_commands() {
+        for method in [
+            "Target.activateTarget",
+            "Target.attachToTarget",
+            "Target.closeTarget",
+            "Target.detachFromTarget",
+            "Target.getTargetInfo",
+            "Target.getTargets",
+            "Target.setAutoAttach",
+            "Target.setDiscoverTargets",
+        ] {
+            assert!(!allowed_agent_cdp_method(method), "{method}");
+        }
+        assert!(allowed_agent_cdp_method("Page.navigate"));
+        assert!(allowed_agent_cdp_method("Browser.getVersion"));
     }
 
     #[test]
