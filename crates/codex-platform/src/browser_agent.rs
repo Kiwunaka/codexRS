@@ -1,13 +1,14 @@
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[cfg(not(windows))]
 use std::{fs, path::PathBuf};
 
-use crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError};
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError, TrySendError};
 #[cfg(not(windows))]
 use interprocess::local_socket::{
     GenericFilePath, ListenerNonblockingMode, ListenerOptions, prelude::*,
@@ -88,6 +89,7 @@ pub(crate) struct BrowserAgentNotification {
 pub(crate) struct BrowserAgentBridge {
     endpoint: String,
     shutdown: Sender<()>,
+    shutdown_requested: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -99,12 +101,25 @@ impl BrowserAgentBridge {
         let endpoint = unique_endpoint()?;
         let listener = create_listener(&endpoint)?;
         let (shutdown_sender, shutdown_receiver) = crossbeam_channel::bounded(1);
+        let shutdown_requested = Arc::new(AtomicBool::new(false));
         let thread = thread::Builder::new()
             .name("codex-browser-agent-bridge".to_owned())
-            .spawn(move || run_bridge(listener, commands, notifications, shutdown_receiver))?;
+            .spawn({
+                let shutdown_requested = Arc::clone(&shutdown_requested);
+                move || {
+                    run_bridge(
+                        listener,
+                        commands,
+                        notifications,
+                        shutdown_receiver,
+                        shutdown_requested,
+                    )
+                }
+            })?;
         Ok(Self {
             endpoint,
             shutdown: shutdown_sender,
+            shutdown_requested,
             thread: Some(thread),
         })
     }
@@ -114,6 +129,7 @@ impl BrowserAgentBridge {
     }
 
     pub(crate) fn shutdown(&mut self) {
+        self.shutdown_requested.store(true, Ordering::Release);
         let _ = self.shutdown.try_send(());
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -268,9 +284,13 @@ fn run_bridge(
     commands: Sender<BrowserCommand>,
     notifications: Receiver<BrowserAgentNotification>,
     shutdown: Receiver<()>,
+    shutdown_requested: Arc<AtomicBool>,
 ) {
     let mut clients = Vec::with_capacity(MAX_BROWSER_AGENT_CLIENTS);
     loop {
+        if shutdown_requested.load(Ordering::Acquire) {
+            break;
+        }
         match shutdown.try_recv() {
             Ok(()) | Err(TryRecvError::Disconnected) => break,
             Err(TryRecvError::Empty) => {}
@@ -293,7 +313,7 @@ fn run_bridge(
 
         let mut index = 0;
         while index < clients.len() {
-            if service_client(&mut clients[index], &commands).is_err() {
+            if service_client(&mut clients[index], &commands, &shutdown_requested).is_err() {
                 clients.swap_remove(index);
             } else {
                 index += 1;
@@ -331,12 +351,21 @@ fn run_bridge(
     }
 }
 
-fn service_client(client: &mut BridgeClient, commands: &Sender<BrowserCommand>) -> io::Result<()> {
+fn service_client(
+    client: &mut BridgeClient,
+    commands: &Sender<BrowserCommand>,
+    shutdown_requested: &AtomicBool,
+) -> io::Result<()> {
     client.flush()?;
     for message in client.read_messages()? {
         let request = parse_request(message)?;
         let result = match client.bind_session(&request.params) {
-            Ok(()) => dispatch_request(commands, &request.method, request.params),
+            Ok(()) => dispatch_request(
+                commands,
+                &request.method,
+                request.params,
+                shutdown_requested,
+            ),
             Err(error) => Err(error),
         };
         if let Some(id) = request.id {
@@ -358,7 +387,11 @@ fn dispatch_request(
     commands: &Sender<BrowserCommand>,
     method: &str,
     params: Value,
+    shutdown_requested: &AtomicBool,
 ) -> Result<Value, BrowserAgentRpcError> {
+    if shutdown_requested.load(Ordering::Acquire) {
+        return Err(BrowserAgentRpcError::request("Browser is shutting down"));
+    }
     let (response_sender, response_receiver) = crossbeam_channel::bounded(1);
     commands
         .try_send(BrowserCommand::AgentRpc {
@@ -374,9 +407,23 @@ fn dispatch_request(
                 BrowserAgentRpcError::request("Browser is disconnected")
             }
         })?;
-    response_receiver
-        .recv_timeout(RPC_RESPONSE_TIMEOUT)
-        .map_err(|_| BrowserAgentRpcError::request("Browser request timed out"))?
+    let deadline = std::time::Instant::now() + RPC_RESPONSE_TIMEOUT;
+    loop {
+        if shutdown_requested.load(Ordering::Acquire) {
+            return Err(BrowserAgentRpcError::request("Browser is shutting down"));
+        }
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(BrowserAgentRpcError::request("Browser request timed out"));
+        }
+        match response_receiver.recv_timeout(remaining.min(BRIDGE_TICK)) {
+            Ok(response) => return response,
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(BrowserAgentRpcError::request("Browser is disconnected"));
+            }
+        }
+    }
 }
 
 fn parse_request(message: Value) -> io::Result<ParsedRequest> {
@@ -664,6 +711,40 @@ mod tests {
             return Err("Browser runtime test thread panicked".into());
         }
         bridge.shutdown();
+        Ok(())
+    }
+
+    #[test]
+    fn bridge_shutdown_interrupts_an_in_flight_browser_rpc() -> Result<(), Box<dyn Error>> {
+        let (commands_sender, commands_receiver) = crossbeam_channel::bounded(1);
+        let (_notifications_sender, notifications_receiver) = crossbeam_channel::bounded(1);
+        let mut bridge = BrowserAgentBridge::spawn(commands_sender, notifications_receiver)?;
+        let mut stream = connect_endpoint(bridge.endpoint())?;
+        stream.set_nonblocking(true)?;
+        stream.write_all(&encode_message(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getInfo",
+            "params": {"session_id": "task-1"}
+        }))?)?;
+
+        let Ok(BrowserCommand::AgentRpc {
+            request,
+            response: held_response,
+        }) = commands_receiver.recv_timeout(Duration::from_secs(2))
+        else {
+            return Err("Browser bridge did not dispatch the RPC".into());
+        };
+        assert_eq!(request.method, "getInfo");
+        thread::sleep(Duration::from_millis(50));
+
+        let started = Instant::now();
+        bridge.shutdown();
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "Bridge shutdown waited for the browser RPC response"
+        );
+        drop(held_response);
         Ok(())
     }
 
