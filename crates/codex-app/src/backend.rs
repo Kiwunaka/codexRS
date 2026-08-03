@@ -12891,6 +12891,7 @@ fn handle_notification(method: &str, params: Value, events: &dyn ActionEmitter) 
                 emit(
                     events,
                     Action::McpServerStartupStatusUpdated {
+                        thread_id: notification.thread_id,
                         name: notification.name,
                         status: map_mcp_startup_state(notification.status),
                         error: notification.error.map(|_| {
@@ -20556,7 +20557,7 @@ mod tests {
         assert!(!handle_notification(
             "mcpServer/startupStatus/updated",
             json!({
-                "threadId": null,
+                "threadId": "thread-1",
                 "name": "remote",
                 "status": "failed",
                 "error": "OAuth token expired: secret=do-not-expose",
@@ -20570,13 +20571,15 @@ mod tests {
         assert!(matches!(
             action,
             Action::McpServerStartupStatusUpdated {
+                thread_id: Some(thread_id),
                 name,
                 status: McpServerStartupState::Failed,
                 error: Some(error),
                 failure_reason: Some(
                     McpServerStartupFailureReason::ReauthenticationRequired
                 ),
-            } if name == "remote"
+            } if thread_id == "thread-1"
+                && name == "remote"
                 && error == "MCP server could not start. Check its configuration and try again."
         ));
     }

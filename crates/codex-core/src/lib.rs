@@ -5310,6 +5310,7 @@ pub enum Action {
         error: Option<String>,
     },
     McpServerStartupStatusUpdated {
+        thread_id: Option<String>,
         name: String,
         status: McpServerStartupState,
         error: Option<String>,
@@ -15523,11 +15524,17 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
         }
         Action::McpServerStartupStatusUpdated {
+            thread_id,
             name,
             status,
             error,
             failure_reason,
         } => {
+            if let Some(thread_id) = thread_id.as_deref()
+                && state.selected_task_id.as_deref() != Some(thread_id)
+            {
+                return Vec::new();
+            }
             let name = bounded_string(name.trim().to_owned(), 512);
             if name.is_empty() {
                 return Vec::new();
@@ -27714,7 +27721,10 @@ mod tests {
 
     #[test]
     fn mcp_server_editor_uses_stable_keys_and_surfaces_reauthentication() {
-        let mut state = AppState::default();
+        let mut state = AppState {
+            selected_task_id: Some("task-b".to_owned()),
+            ..AppState::default()
+        };
         let draft = McpServerDraft {
             name: " My / MCP ".to_owned(),
             transport: McpTransportKind::Stdio,
@@ -27803,10 +27813,30 @@ mod tests {
             )
             .is_empty()
         );
+        let previous_status_message = state.status_message.clone();
         assert!(
             reduce(
                 &mut state,
                 Action::McpServerStartupStatusUpdated {
+                    thread_id: Some("task-a".to_owned()),
+                    name: "my_-_mcp".to_owned(),
+                    status: McpServerStartupState::Failed,
+                    error: Some("foreign task failure".to_owned()),
+                    failure_reason: Some(McpServerStartupFailureReason::ReauthenticationRequired,),
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.marketplace.mcp_servers.as_slice(),
+            std::slice::from_ref(&server)
+        );
+        assert_eq!(state.status_message, previous_status_message);
+        assert!(
+            reduce(
+                &mut state,
+                Action::McpServerStartupStatusUpdated {
+                    thread_id: None,
                     name: "my_-_mcp".to_owned(),
                     status: McpServerStartupState::Failed,
                     error: Some("expired credentials".to_owned()),
