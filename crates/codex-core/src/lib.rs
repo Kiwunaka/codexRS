@@ -7944,12 +7944,6 @@ fn reload_mcp_servers_effect(state: &mut AppState, cwd: Option<PathBuf>) -> Effe
     }
 }
 
-fn installed_apps_needed(state: &AppState) -> bool {
-    state.marketplace.manage_mode
-        && (state.marketplace.selected_manage_tab == MarketplaceManageTab::Apps
-            || state.marketplace.installed_apps_status.is_some())
-}
-
 fn installed_apps_current_for_selected_task(state: &AppState) -> bool {
     state.marketplace.installed_apps_status == Some(LoadStatus::Ready)
         && state.marketplace.installed_apps_thread_id == state.selected_task_id
@@ -8007,14 +8001,12 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 refresh_skills_effect(state, composer_workspace_roots(state), false),
                 refresh_composer_plugins_effect(state, composer_workspace_roots(state), false),
                 refresh_apps_effect(state, false),
+                refresh_installed_apps_effect(state, false),
                 Effect::LoadComposerDesktopApps,
                 Effect::LoadComputerUsePolicy,
                 Effect::LoadAccount,
             ];
-            if installed_apps_needed(state) {
-                state.marketplace.installed_apps_status = Some(LoadStatus::Loading);
-                effects.push(refresh_installed_apps_effect(state, false));
-            }
+            state.marketplace.installed_apps_status = Some(LoadStatus::Loading);
             if let Some(effect) = load_pinned_tasks_effect(state) {
                 effects.push(effect);
             }
@@ -9901,11 +9893,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             if task_changed {
                 state.marketplace.apps_status = Some(LoadStatus::Loading);
+                state.marketplace.installed_apps_status = Some(LoadStatus::Loading);
                 effects.push(refresh_apps_effect(state, false));
-                if installed_apps_needed(state) {
-                    state.marketplace.installed_apps_status = Some(LoadStatus::Loading);
-                    effects.push(refresh_installed_apps_effect(state, false));
-                }
+                effects.push(refresh_installed_apps_effect(state, false));
                 if state.marketplace.mcp_status.is_some() {
                     state.marketplace.mcp_status = Some(LoadStatus::Loading);
                     let cwd = selected_task_cwds(state).into_iter().next();
@@ -11829,6 +11819,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 ));
                 return Vec::new();
             }
+            if !installed_apps_current_for_selected_task(state) {
+                return Vec::new();
+            }
             let Some(app) = state
                 .marketplace
                 .apps
@@ -11838,6 +11831,14 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             else {
                 return Vec::new();
             };
+            if !state
+                .marketplace
+                .installed_apps
+                .iter()
+                .any(|runtime| runtime.id == app.id && runtime.enabled && runtime.callable)
+            {
+                return Vec::new();
+            }
             let path = PathBuf::from(composer_app_uri(&app.id));
             if !state.composer_attachments.iter().any(|attachment| {
                 attachment.kind == ComposerAttachmentKind::App && attachment.path == path
@@ -19920,12 +19921,20 @@ mod tests {
                     force_refetch: false,
                     thread_id: None,
                 },
+                Effect::RefreshInstalledApps {
+                    force_refresh: false,
+                    thread_id: None,
+                },
                 Effect::LoadComposerDesktopApps,
                 Effect::LoadComputerUsePolicy,
                 Effect::LoadAccount,
             ]
         );
         assert_eq!(state.composer_controls.models_status, LoadStatus::Loading);
+        assert_eq!(
+            state.marketplace.installed_apps_status,
+            Some(LoadStatus::Loading)
+        );
         assert_eq!(state.account.status, LoadStatus::Loading);
         assert_eq!(
             state.composer_controls.permission_profiles_status,
@@ -21925,6 +21934,31 @@ mod tests {
         );
 
         reduce(&mut state, Action::AddComposerApp("calendar".to_owned()));
+        assert!(state.composer_attachments.is_empty());
+        reduce(
+            &mut state,
+            Action::InstalledAppsLoaded {
+                thread_id: None,
+                apps: vec![InstalledAppRuntime {
+                    id: "calendar".to_owned(),
+                    enabled: true,
+                    callable: false,
+                }],
+            },
+        );
+        reduce(&mut state, Action::AddComposerApp("calendar".to_owned()));
+        assert!(state.composer_attachments.is_empty());
+        reduce(
+            &mut state,
+            Action::InstalledAppsLoaded {
+                thread_id: None,
+                apps: vec![InstalledAppRuntime {
+                    id: "calendar".to_owned(),
+                    enabled: true,
+                    callable: true,
+                }],
+            },
+        );
         reduce(&mut state, Action::AddComposerApp("calendar".to_owned()));
         reduce(&mut state, Action::AddComposerApp("disabled".to_owned()));
         reduce(
@@ -22549,6 +22583,10 @@ mod tests {
                 },
                 Effect::RefreshApps {
                     force_refetch: false,
+                    thread_id: Some("t1".to_owned()),
+                },
+                Effect::RefreshInstalledApps {
+                    force_refresh: false,
                     thread_id: Some("t1".to_owned()),
                 },
             ]
@@ -29853,11 +29891,10 @@ mod tests {
             force_refetch: false,
             thread_id: Some("t1".to_owned()),
         }));
-        assert!(
-            !effects
-                .iter()
-                .any(|effect| matches!(effect, Effect::RefreshInstalledApps { .. }))
-        );
+        assert!(effects.contains(&Effect::RefreshInstalledApps {
+            force_refresh: false,
+            thread_id: Some("t1".to_owned()),
+        }));
         assert_eq!(state.marketplace.apps_status, Some(LoadStatus::Loading));
 
         assert!(

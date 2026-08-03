@@ -21804,6 +21804,9 @@ impl WorkspaceView {
         let app_result_count = composer_app_commands(
             &query.query,
             &self.state.marketplace.apps,
+            &self.state.marketplace.installed_apps,
+            self.state.marketplace.installed_apps_status == Some(LoadStatus::Ready)
+                && self.state.marketplace.installed_apps_thread_id == self.state.selected_task_id,
             &self.state.marketplace.composer_plugins,
         )
         .len();
@@ -21869,6 +21872,9 @@ impl WorkspaceView {
         let app_commands = composer_app_commands(
             &query.query,
             &self.state.marketplace.apps,
+            &self.state.marketplace.installed_apps,
+            self.state.marketplace.installed_apps_status == Some(LoadStatus::Ready)
+                && self.state.marketplace.installed_apps_thread_id == self.state.selected_task_id,
             &self.state.marketplace.composer_plugins,
         );
         let skill_commands =
@@ -22025,6 +22031,9 @@ impl WorkspaceView {
         let app_commands = composer_app_commands(
             &query.query,
             &self.state.marketplace.apps,
+            &self.state.marketplace.installed_apps,
+            self.state.marketplace.installed_apps_status == Some(LoadStatus::Ready)
+                && self.state.marketplace.installed_apps_thread_id == self.state.selected_task_id,
             &self.state.marketplace.composer_plugins,
         );
         let skill_commands =
@@ -44461,6 +44470,8 @@ fn installed_app_indices(
 fn composer_app_commands(
     query: &str,
     apps: &[AppCard],
+    installed_apps: &[InstalledAppRuntime],
+    installed_apps_current: bool,
     plugins: &[PluginCard],
 ) -> Vec<ComposerCatalogMention> {
     let search = query.trim().to_lowercase();
@@ -44478,7 +44489,14 @@ fn composer_app_commands(
     let mut matches = apps
         .iter()
         .filter(|app| {
-            app.is_accessible && app.enabled && !app.id.is_empty() && !app.name.is_empty()
+            installed_apps_current
+                && app.is_accessible
+                && app.enabled
+                && !app.id.is_empty()
+                && !app.name.is_empty()
+                && installed_apps
+                    .iter()
+                    .any(|runtime| runtime.id == app.id && runtime.enabled && runtime.callable)
         })
         .filter(|app| {
             std::iter::once(&app.name)
@@ -46921,23 +46939,49 @@ mod tests {
             is_running: true,
             window_count: 1,
         }];
+        let installed_apps = [
+            InstalledAppRuntime {
+                id: "calendar".to_owned(),
+                enabled: true,
+                callable: true,
+            },
+            InstalledAppRuntime {
+                id: "drive".to_owned(),
+                enabled: true,
+                callable: true,
+            },
+            InstalledAppRuntime {
+                id: "mail".to_owned(),
+                enabled: true,
+                callable: false,
+            },
+            InstalledAppRuntime {
+                id: "notes".to_owned(),
+                enabled: true,
+                callable: true,
+            },
+        ];
 
         let plugin_commands = composer_plugin_commands("", &plugins);
         assert_eq!(plugin_commands.len(), 1);
         assert_eq!(plugin_commands[0].title, "Computer");
 
-        let app_commands = composer_app_commands("", &apps, &plugins);
+        let app_commands = composer_app_commands("", &apps, &installed_apps, true, &plugins);
         assert_eq!(app_commands.len(), 3);
         assert_eq!(
             app_commands
                 .iter()
                 .map(|command| command.title.as_str())
                 .collect::<Vec<_>>(),
-            ["Calendar", "Drive", "Mail"]
+            ["Calendar", "Drive", "Notes"]
         );
         assert_eq!(
-            composer_app_commands("notes", &apps, &plugins)[0].id,
+            composer_app_commands("notes", &apps, &installed_apps, true, &plugins)[0].id,
             "notes"
+        );
+        assert!(composer_app_commands("mail", &apps, &installed_apps, true, &plugins).is_empty());
+        assert!(
+            composer_app_commands("calendar", &apps, &installed_apps, false, &plugins).is_empty()
         );
 
         assert!(composer_desktop_app_commands("", &desktop_apps, &plugins).is_empty());
