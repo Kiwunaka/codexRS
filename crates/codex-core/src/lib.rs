@@ -928,6 +928,13 @@ pub struct PendingWorktreeFork {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingTaskFork {
+    pub request_id: u64,
+    pub selection_task_id: Option<String>,
+    pub selection_generation: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskSearchResult {
     pub task: TaskSummary,
     pub snippet: String,
@@ -1147,6 +1154,7 @@ pub struct TimelineState {
     pub status: LoadStatus,
     pub generation: u64,
     runtime_generation: u64,
+    settings_generation: u64,
     runtime_status_loaded: bool,
     items: Vec<TimelineItem>,
     item_indices: HashMap<String, usize>,
@@ -1171,6 +1179,7 @@ impl Default for TimelineState {
             status: LoadStatus::Idle,
             generation: 0,
             runtime_generation: 0,
+            settings_generation: 0,
             runtime_status_loaded: false,
             items: Vec::new(),
             item_indices: HashMap::new(),
@@ -2511,6 +2520,7 @@ pub struct MarketplaceState {
     pub mcp_status: Option<LoadStatus>,
     mcp_generation: u64,
     pub skills_status: Option<LoadStatus>,
+    skills_generation: u64,
     pub query: String,
     pub selected_section: Option<MarketplaceSectionFilter>,
     pub plugins: Vec<PluginCard>,
@@ -2546,6 +2556,7 @@ pub struct MarketplaceState {
     pub marketplace_mutation_error: Option<String>,
     pub selected_plugin_id: Option<String>,
     pub plugin_detail_status: Option<LoadStatus>,
+    plugin_detail_generation: u64,
     pub plugin_detail: Option<PluginDetailView>,
     pub plugin_detail_error: Option<String>,
     pub selected_app_id: Option<String>,
@@ -4195,6 +4206,8 @@ pub struct AppState {
     pub tasks: Vec<TaskSummary>,
     pub next_task_cursor: Option<String>,
     pub task_search: TaskSearchState,
+    pub pending_task_fork: Option<PendingTaskFork>,
+    pub next_task_fork_request_id: u64,
     pub pending_worktree_fork: Option<PendingWorktreeFork>,
     pub queued_worktree_forks: VecDeque<PendingWorktreeFork>,
     pub next_worktree_fork_request_id: u64,
@@ -4203,6 +4216,7 @@ pub struct AppState {
     pub seen_model_upgrade_ids: Vec<String>,
     pub local_projects: Vec<LocalProjectSummary>,
     pub selected_task_id: Option<String>,
+    pub task_selection_generation: u64,
     pub new_chat_cwd: Option<PathBuf>,
     pub new_chat_draft_generation: u64,
     pub composer_draft_generation: u64,
@@ -4263,6 +4277,8 @@ impl Default for AppState {
             tasks: Vec::new(),
             next_task_cursor: None,
             task_search: TaskSearchState::default(),
+            pending_task_fork: None,
+            next_task_fork_request_id: 1,
             pending_worktree_fork: None,
             queued_worktree_forks: VecDeque::new(),
             next_worktree_fork_request_id: 1,
@@ -4271,6 +4287,7 @@ impl Default for AppState {
             seen_model_upgrade_ids: Vec::new(),
             local_projects: Vec::new(),
             selected_task_id: None,
+            task_selection_generation: 0,
             new_chat_cwd: None,
             new_chat_draft_generation: 0,
             composer_draft_generation: 0,
@@ -4514,6 +4531,15 @@ pub enum Action {
         kind: ArchivedTaskDeleteKind,
     },
     TaskCreated(TaskSummary),
+    ForkTaskCompleted {
+        request_id: u64,
+        task: TaskSummary,
+        title_copy_error: Option<String>,
+    },
+    ForkTaskFailed {
+        request_id: u64,
+        message: String,
+    },
     NewChatTaskCreated {
         task: TaskSummary,
         new_chat_draft_generation: u64,
@@ -4545,6 +4571,7 @@ pub enum Action {
     },
     TaskSettingsLoaded {
         task_id: String,
+        settings_generation: u64,
         model: Option<String>,
         effort: Option<String>,
         service_tier: Option<String>,
@@ -4554,6 +4581,7 @@ pub enum Action {
     },
     ThreadSettingsUpdateFailed {
         task_id: String,
+        settings_generation: u64,
         message: String,
     },
     LoadMoreTimeline,
@@ -5226,10 +5254,12 @@ pub enum Action {
     ClosePluginDetails,
     PluginDetailLoaded {
         plugin_id: String,
+        generation: u64,
         detail: PluginDetailView,
     },
     PluginDetailFailed {
         plugin_id: String,
+        generation: u64,
         message: String,
     },
     SelectMarketplaceTab(MarketplaceTab),
@@ -5358,10 +5388,14 @@ pub enum Action {
     RefreshSkills,
     SkillsInvalidated,
     SkillsLoaded {
+        generation: u64,
         skills: Vec<SkillCard>,
         errors: Vec<String>,
     },
-    SkillsFailed(String),
+    SkillsFailed {
+        generation: u64,
+        message: String,
+    },
     RefreshHooks,
     HooksLoaded(Vec<HookProjectEntry>),
     HooksFailed(String),
@@ -5745,6 +5779,7 @@ pub enum Effect {
         new_chat_draft_generation: u64,
     },
     ForkTask {
+        request_id: u64,
         task_id: String,
         cwd: Option<PathBuf>,
         title: String,
@@ -5846,9 +5881,11 @@ pub enum Effect {
     ResumeTask {
         task_id: String,
         generation: u64,
+        settings_generation: u64,
     },
     UpdateThreadSettings {
         task_id: String,
+        settings_generation: u64,
         model: Option<String>,
         effort: Option<String>,
         service_tier: Option<Option<String>>,
@@ -5974,10 +6011,12 @@ pub enum Effect {
     },
     ReadPlugin {
         plugin_id: String,
+        generation: u64,
         plugin_name: String,
         marketplace: String,
     },
     RefreshSkills {
+        generation: u64,
         cwds: Vec<PathBuf>,
         force_reload: bool,
     },
@@ -6962,9 +7001,14 @@ fn prepare_new_chat(state: &mut AppState, cwd: Option<PathBuf>) -> Vec<Effect> {
     if state.selected_task_id.is_some() || state.new_chat_cwd != cwd {
         clear_git_for_context_change(state);
         clear_mcp_auth_for_context_change(state, departing_task_id.as_deref());
+        state.marketplace.pending_skill_path = None;
     }
     let mut effects = clear_fuzzy_file_search(state);
     state.route = MainRoute::Tasks;
+    if state.selected_task_id.is_some() {
+        advance_task_selection_generation(state);
+        clear_pending_task_fork_status(state);
+    }
     state.selected_task_id = None;
     if departing_task_id.is_some() {
         state.marketplace.mcp_generation = state.marketplace.mcp_generation.saturating_add(1);
@@ -6984,10 +7028,11 @@ fn prepare_new_chat(state: &mut AppState, cwd: Option<PathBuf>) -> Vec<Effect> {
     state.composer_controls.goal_mode = false;
     advance_new_chat_draft_generation(state);
     state.marketplace.skills_status = Some(LoadStatus::Loading);
-    effects.push(Effect::RefreshSkills {
-        cwds: composer_workspace_roots(state),
-        force_reload: false,
-    });
+    effects.push(refresh_skills_effect(
+        state,
+        composer_workspace_roots(state),
+        false,
+    ));
     effects.push(refresh_composer_plugins_effect(
         state,
         composer_workspace_roots(state),
@@ -7005,6 +7050,18 @@ fn prepare_new_chat(state: &mut AppState, cwd: Option<PathBuf>) -> Vec<Effect> {
 fn advance_new_chat_draft_generation(state: &mut AppState) {
     if state.selected_task_id.is_none() {
         advance_composer_draft_generation(state);
+    }
+}
+
+fn advance_task_selection_generation(state: &mut AppState) {
+    state.task_selection_generation = state.task_selection_generation.wrapping_add(1);
+}
+
+fn clear_pending_task_fork_status(state: &mut AppState) {
+    if state.pending_task_fork.is_some()
+        && state.status_message.as_deref() == Some("Creating chat…")
+    {
+        state.status_message = None;
     }
 }
 
@@ -7071,13 +7128,55 @@ fn fork_task(state: &mut AppState, task_id: &str, new_worktree: bool) -> Vec<Eff
             Vec::new()
         }
     } else {
+        let request_id = state.next_task_fork_request_id;
+        state.next_task_fork_request_id = request_id.checked_add(1).unwrap_or(1);
+        state.pending_task_fork = Some(PendingTaskFork {
+            request_id,
+            selection_task_id: state.selected_task_id.clone(),
+            selection_generation: state.task_selection_generation,
+        });
         state.status_message = Some("Creating chat…".to_owned());
         vec![Effect::ForkTask {
+            request_id,
             task_id: task_id.to_owned(),
             cwd,
             title,
         }]
     }
+}
+
+fn record_task_without_selecting(state: &mut AppState, task: TaskSummary) {
+    let selected_task = state
+        .selected_task_id
+        .as_deref()
+        .and_then(|selected_task_id| {
+            state
+                .tasks
+                .iter()
+                .find(|existing| existing.id == selected_task_id)
+                .cloned()
+        });
+    let task_id = task.id.clone();
+    state.tasks.retain(|existing| existing.id != task_id);
+    state.tasks.insert(0, task);
+    state.tasks.truncate(MAX_VISIBLE_THREADS);
+    if let Some(selected_task) = selected_task
+        && !state
+            .tasks
+            .iter()
+            .any(|existing| existing.id == selected_task.id)
+        && let Some(last_task) = state.tasks.last_mut()
+    {
+        *last_task = selected_task;
+    }
+    state
+        .timelines
+        .entry(task_id.clone())
+        .or_insert(TimelineState {
+            runtime_status_loaded: true,
+            ..TimelineState::default()
+        });
+    state.goals.entry(task_id).or_default();
 }
 
 fn start_next_worktree_fork(state: &mut AppState) -> Vec<Effect> {
@@ -7143,10 +7242,11 @@ fn load_marketplace_route_effect(state: &mut AppState) -> Option<Effect> {
             ) =>
         {
             state.marketplace.skills_status = Some(LoadStatus::Loading);
-            Some(Effect::RefreshSkills {
-                cwds: composer_workspace_roots(state),
-                force_reload: false,
-            })
+            Some(refresh_skills_effect(
+                state,
+                composer_workspace_roots(state),
+                false,
+            ))
         }
         MarketplaceTab::Plugins | MarketplaceTab::Skills => None,
     }
@@ -7718,11 +7818,19 @@ fn clear_unresolved_detached_review_terminal(state: &mut AppState, task_id: &str
 fn resume_task_effect(state: &mut AppState, task_id: String) -> Effect {
     let timeline = state.timelines.entry(task_id.clone()).or_default();
     timeline.runtime_generation = timeline.runtime_generation.saturating_add(1);
+    timeline.settings_generation = timeline.settings_generation.saturating_add(1);
     timeline.runtime_status_loaded = false;
     Effect::ResumeTask {
         task_id,
         generation: timeline.runtime_generation,
+        settings_generation: timeline.settings_generation,
     }
+}
+
+fn advance_task_settings_generation(state: &mut AppState, task_id: &str) -> u64 {
+    let timeline = state.timelines.entry(task_id.to_owned()).or_default();
+    timeline.settings_generation = timeline.settings_generation.saturating_add(1);
+    timeline.settings_generation
 }
 
 fn remove_composer_plugin_attachments(state: &mut AppState, plugin_id: &str) {
@@ -7774,6 +7882,15 @@ fn refresh_composer_plugins_effect(
         generation: state.marketplace.composer_plugins_generation,
         cwds,
         force_refetch,
+    }
+}
+
+fn refresh_skills_effect(state: &mut AppState, cwds: Vec<PathBuf>, force_reload: bool) -> Effect {
+    state.marketplace.skills_generation = state.marketplace.skills_generation.saturating_add(1);
+    Effect::RefreshSkills {
+        generation: state.marketplace.skills_generation,
+        cwds,
+        force_reload,
     }
 }
 
@@ -7880,10 +7997,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 Effect::LoadModels,
                 Effect::LoadPermissionProfiles { cwd: None },
                 Effect::LoadPersonalization,
-                Effect::RefreshSkills {
-                    cwds: composer_workspace_roots(state),
-                    force_reload: false,
-                },
+                refresh_skills_effect(state, composer_workspace_roots(state), false),
                 refresh_composer_plugins_effect(state, composer_workspace_roots(state), false),
                 refresh_apps_effect(state, false),
                 Effect::LoadComposerDesktopApps,
@@ -8835,12 +8949,14 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.new_chat_cwd = Some(path.clone());
                 if workspace_changed {
                     advance_new_chat_draft_generation(state);
+                    state.marketplace.pending_skill_path = None;
                 }
                 state.marketplace.skills_status = Some(LoadStatus::Loading);
-                effects.push(Effect::RefreshSkills {
-                    cwds: composer_workspace_roots(state),
-                    force_reload: false,
-                });
+                effects.push(refresh_skills_effect(
+                    state,
+                    composer_workspace_roots(state),
+                    false,
+                ));
                 effects.push(refresh_composer_plugins_effect(
                     state,
                     composer_workspace_roots(state),
@@ -8914,11 +9030,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 effects = clear_fuzzy_file_search(state);
                 state.new_chat_cwd = None;
                 advance_new_chat_draft_generation(state);
+                state.marketplace.pending_skill_path = None;
                 state.marketplace.skills_status = Some(LoadStatus::Loading);
-                effects.push(Effect::RefreshSkills {
-                    cwds: Vec::new(),
-                    force_reload: false,
-                });
+                effects.push(refresh_skills_effect(state, Vec::new(), false));
                 effects.push(refresh_composer_plugins_effect(state, Vec::new(), false));
             }
             state.status_message = Some("Project removed".to_owned());
@@ -9180,6 +9294,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.timelines.remove(&task_id);
             state.goals.remove(&task_id);
             state.computer_use.remove(&task_id);
+            state.browser.remove(&task_id);
             if state.process_manager.task_id.as_deref() == Some(task_id.as_str()) {
                 state.process_manager = ProcessManagerState::default();
             }
@@ -9188,6 +9303,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 .retain(|approval| approval.task_id != task_id);
             if state.selected_task_id.as_deref() == Some(task_id.as_str()) {
                 clear_mcp_auth_for_context_change(state, Some(task_id.as_str()));
+                advance_task_selection_generation(state);
+                clear_pending_task_fork_status(state);
                 state.selected_task_id = None;
                 state.artifacts = ArtifactState::default();
                 clear_active_composer_draft(state);
@@ -9437,37 +9554,62 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 return reduce(state, Action::TaskCreated(task));
             }
 
-            let selected_task = state
-                .selected_task_id
-                .as_deref()
-                .and_then(|selected_task_id| {
-                    state
-                        .tasks
-                        .iter()
-                        .find(|existing| existing.id == selected_task_id)
-                        .cloned()
-                });
-            let task_id = task.id.clone();
-            state.tasks.retain(|existing| existing.id != task_id);
-            state.tasks.insert(0, task);
-            state.tasks.truncate(MAX_VISIBLE_THREADS);
-            if let Some(selected_task) = selected_task
-                && !state
-                    .tasks
-                    .iter()
-                    .any(|existing| existing.id == selected_task.id)
-                && let Some(last_task) = state.tasks.last_mut()
+            record_task_without_selecting(state, task);
+            Vec::new()
+        }
+        Action::ForkTaskCompleted {
+            request_id,
+            task,
+            title_copy_error,
+        } => {
+            let current = state.pending_task_fork.as_ref().is_some_and(|pending| {
+                pending.request_id == request_id
+                    && pending.selection_task_id == state.selected_task_id
+                    && pending.selection_generation == state.task_selection_generation
+            });
+            if state
+                .pending_task_fork
+                .as_ref()
+                .is_some_and(|pending| pending.request_id == request_id)
             {
-                *last_task = selected_task;
+                state.pending_task_fork = None;
             }
-            state
-                .timelines
-                .entry(task_id.clone())
-                .or_insert(TimelineState {
-                    runtime_status_loaded: true,
-                    ..TimelineState::default()
+            if current {
+                let effects = reduce(state, Action::TaskCreated(task));
+                state.status_message = title_copy_error.map(|error| {
+                    bounded_string(
+                        format!("Chat created, but its title could not be copied: {error}"),
+                        16 * 1024,
+                    )
                 });
-            state.goals.entry(task_id).or_default();
+                effects
+            } else {
+                record_task_without_selecting(state, task);
+                Vec::new()
+            }
+        }
+        Action::ForkTaskFailed {
+            request_id,
+            message,
+        } => {
+            let current = state.pending_task_fork.as_ref().is_some_and(|pending| {
+                pending.request_id == request_id
+                    && pending.selection_task_id == state.selected_task_id
+                    && pending.selection_generation == state.task_selection_generation
+            });
+            if state
+                .pending_task_fork
+                .as_ref()
+                .is_some_and(|pending| pending.request_id == request_id)
+            {
+                state.pending_task_fork = None;
+            }
+            if current {
+                state.status_message = Some(bounded_string(
+                    format!("Failed to create chat: {message}"),
+                    16 * 1024,
+                ));
+            }
             Vec::new()
         }
         Action::TaskCreated(task) => {
@@ -9478,6 +9620,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             let git_context_changed = previous_task_id.as_deref() != Some(task_id.as_str())
                 || previous_cwd.as_ref() != Some(&cwd);
             if previous_task_id.as_deref() != Some(task_id.as_str()) {
+                advance_task_selection_generation(state);
+                clear_pending_task_fork_status(state);
                 clear_active_composer_draft(state);
                 clear_mcp_auth_for_context_change(state, previous_task_id.as_deref());
             }
@@ -9641,6 +9785,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.tasks.truncate(MAX_VISIBLE_THREADS);
             }
             if task_changed {
+                advance_task_selection_generation(state);
+                clear_pending_task_fork_status(state);
                 state.artifacts = ArtifactState::default();
                 state.marketplace.mcp_resource_read = McpResourceReadState::default();
                 clear_mcp_auth_for_context_change(state, previous_task_id.as_deref());
@@ -9683,10 +9829,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             let selected_cwds = composer_workspace_roots(state);
             if selected_cwds != previous_cwds {
                 state.marketplace.skills_status = Some(LoadStatus::Loading);
-                effects.push(Effect::RefreshSkills {
-                    cwds: selected_cwds.clone(),
-                    force_reload: false,
-                });
+                state.marketplace.pending_skill_path = None;
+                effects.push(refresh_skills_effect(state, selected_cwds.clone(), false));
                 effects.push(refresh_composer_plugins_effect(state, selected_cwds, false));
                 state.marketplace.selected_plugin_id = None;
                 state.marketplace.plugin_detail_status = None;
@@ -9764,6 +9908,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::TaskSettingsLoaded {
             task_id,
+            settings_generation,
             model,
             effort,
             service_tier,
@@ -9771,7 +9916,12 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             approval_policy,
             approvals_reviewer,
         } => {
-            if state.selected_task_id.as_deref() != Some(task_id.as_str()) {
+            if state.selected_task_id.as_deref() != Some(task_id.as_str())
+                || state
+                    .timelines
+                    .get(&task_id)
+                    .is_none_or(|timeline| timeline.settings_generation != settings_generation)
+            {
                 return Vec::new();
             }
             apply_composer_settings(
@@ -9788,13 +9938,21 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             );
             Vec::new()
         }
-        Action::ThreadSettingsUpdateFailed { task_id, message } => {
-            state.status_message = Some(message);
-            if state.selected_task_id.as_deref() == Some(task_id.as_str()) {
-                vec![resume_task_effect(state, task_id)]
-            } else {
-                Vec::new()
+        Action::ThreadSettingsUpdateFailed {
+            task_id,
+            settings_generation,
+            message,
+        } => {
+            if state.selected_task_id.as_deref() != Some(task_id.as_str())
+                || state
+                    .timelines
+                    .get(&task_id)
+                    .is_none_or(|timeline| timeline.settings_generation != settings_generation)
+            {
+                return Vec::new();
             }
+            state.status_message = Some(message);
+            vec![resume_task_effect(state, task_id)]
         }
         Action::TaskRuntimeLoaded {
             task_id,
@@ -11289,8 +11447,10 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 advance_new_chat_draft_generation(state);
             }
             if let Some(task_id) = state.selected_task_id.clone() {
+                let settings_generation = advance_task_settings_generation(state, &task_id);
                 return vec![Effect::UpdateThreadSettings {
                     task_id,
+                    settings_generation,
                     model: Some(selected_model),
                     effort: state.composer_controls.selected_effort.clone(),
                     service_tier: Some(selected_service_tier),
@@ -11365,8 +11525,10 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     advance_new_chat_draft_generation(state);
                 }
                 if let Some(task_id) = state.selected_task_id.clone() {
+                    let settings_generation = advance_task_settings_generation(state, &task_id);
                     return vec![Effect::UpdateThreadSettings {
                         task_id,
+                        settings_generation,
                         model: None,
                         effort: Some(effort_id),
                         service_tier: None,
@@ -11423,8 +11585,10 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 advance_new_chat_draft_generation(state);
             }
             if let Some(task_id) = state.selected_task_id.clone() {
+                let settings_generation = advance_task_settings_generation(state, &task_id);
                 return vec![Effect::UpdateThreadSettings {
                     task_id,
+                    settings_generation,
                     model: None,
                     effort: None,
                     service_tier: Some(selected),
@@ -11462,14 +11626,18 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state
                 .selected_task_id
                 .clone()
-                .map(|task_id| Effect::UpdateThreadSettings {
-                    task_id,
-                    model: None,
-                    effort: None,
-                    service_tier: None,
-                    permissions: Some(mode.permissions),
-                    approval_policy: mode.approval_policy,
-                    approvals_reviewer: mode.approvals_reviewer,
+                .map(|task_id| {
+                    let settings_generation = advance_task_settings_generation(state, &task_id);
+                    Effect::UpdateThreadSettings {
+                        task_id,
+                        settings_generation,
+                        model: None,
+                        effort: None,
+                        service_tier: None,
+                        permissions: Some(mode.permissions),
+                        approval_policy: mode.approval_policy,
+                        approvals_reviewer: mode.approvals_reviewer,
+                    }
                 })
                 .into_iter()
                 .collect()
@@ -12945,7 +13113,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 || !computer_use
                     .applications
                     .iter()
-                    .any(|application| application.id == application_id)
+                    .any(|application| computer_app_id_matches(&application.id, &application_id))
             {
                 return Vec::new();
             }
@@ -14830,10 +14998,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             if manage_mode && state.marketplace.skills_status != Some(LoadStatus::Ready) {
                 state.marketplace.skills_status = Some(LoadStatus::Loading);
-                effects.push(Effect::RefreshSkills {
-                    cwds: skill_cwds,
-                    force_reload: false,
-                });
+                effects.push(refresh_skills_effect(state, skill_cwds, false));
             }
             effects
         }
@@ -14880,10 +15045,11 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 )
             {
                 state.marketplace.skills_status = Some(LoadStatus::Loading);
-                vec![Effect::RefreshSkills {
-                    cwds: composer_workspace_roots(state),
-                    force_reload: false,
-                }]
+                vec![refresh_skills_effect(
+                    state,
+                    composer_workspace_roots(state),
+                    false,
+                )]
             } else {
                 Vec::new()
             }
@@ -15166,6 +15332,8 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             };
             state.marketplace.selected_plugin_id = Some(plugin.id.clone());
             state.marketplace.plugin_detail_status = Some(LoadStatus::Loading);
+            state.marketplace.plugin_detail_generation =
+                state.marketplace.plugin_detail_generation.saturating_add(1);
             state.marketplace.plugin_detail = None;
             state.marketplace.plugin_detail_error = None;
             state.marketplace.pending_plugin_skill_name = None;
@@ -15175,6 +15343,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.marketplace.app_detail_error = None;
             vec![Effect::ReadPlugin {
                 plugin_id: plugin.id,
+                generation: state.marketplace.plugin_detail_generation,
                 plugin_name: plugin.install_name,
                 marketplace: plugin.marketplace,
             }]
@@ -15189,9 +15358,12 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::PluginDetailLoaded {
             plugin_id,
+            generation,
             mut detail,
         } => {
-            if state.marketplace.selected_plugin_id.as_deref() != Some(plugin_id.as_str()) {
+            if state.marketplace.selected_plugin_id.as_deref() != Some(plugin_id.as_str())
+                || generation != state.marketplace.plugin_detail_generation
+            {
                 return Vec::new();
             }
             detail.capabilities.truncate(MAX_PLUGIN_DETAIL_ITEMS);
@@ -15206,8 +15378,14 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.marketplace.plugin_detail_error = None;
             Vec::new()
         }
-        Action::PluginDetailFailed { plugin_id, message } => {
-            if state.marketplace.selected_plugin_id.as_deref() != Some(plugin_id.as_str()) {
+        Action::PluginDetailFailed {
+            plugin_id,
+            generation,
+            message,
+        } => {
+            if state.marketplace.selected_plugin_id.as_deref() != Some(plugin_id.as_str())
+                || generation != state.marketplace.plugin_detail_generation
+            {
                 return Vec::new();
             }
             state.marketplace.plugin_detail_status = Some(LoadStatus::Failed);
@@ -15248,10 +15426,11 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     ) =>
                 {
                     state.marketplace.skills_status = Some(LoadStatus::Loading);
-                    vec![Effect::RefreshSkills {
-                        cwds: composer_workspace_roots(state),
-                        force_reload: false,
-                    }]
+                    vec![refresh_skills_effect(
+                        state,
+                        composer_workspace_roots(state),
+                        false,
+                    )]
                 }
                 MarketplaceTab::Plugins | MarketplaceTab::Skills => Vec::new(),
             }
@@ -16017,25 +16196,28 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::RefreshSkills => {
             state.marketplace.skills_status = Some(LoadStatus::Loading);
-            vec![Effect::RefreshSkills {
-                cwds: composer_workspace_roots(state),
-                force_reload: true,
-            }]
+            vec![refresh_skills_effect(
+                state,
+                composer_workspace_roots(state),
+                true,
+            )]
         }
         Action::SkillsInvalidated => {
-            if state.marketplace.skills_status == Some(LoadStatus::Loading) {
-                return Vec::new();
-            }
             state.marketplace.skills_status = Some(LoadStatus::Loading);
-            vec![Effect::RefreshSkills {
-                cwds: composer_workspace_roots(state),
-                force_reload: false,
-            }]
+            vec![refresh_skills_effect(
+                state,
+                composer_workspace_roots(state),
+                false,
+            )]
         }
         Action::SkillsLoaded {
+            generation,
             mut skills,
             mut errors,
         } => {
+            if generation != state.marketplace.skills_generation {
+                return Vec::new();
+            }
             skills.truncate(MAX_SKILL_ITEMS);
             errors.truncate(MAX_SKILL_ITEMS);
             state.marketplace.skills = skills;
@@ -16043,7 +16225,13 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.marketplace.skill_errors = errors;
             Vec::new()
         }
-        Action::SkillsFailed(message) => {
+        Action::SkillsFailed {
+            generation,
+            message,
+        } => {
+            if generation != state.marketplace.skills_generation {
+                return Vec::new();
+            }
             state.marketplace.skills_status = Some(LoadStatus::Failed);
             state.marketplace.skill_errors = vec![message];
             Vec::new()
@@ -16489,6 +16677,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             requested_enabled,
             effective_enabled,
         } => {
+            if state.marketplace.pending_skill_path.as_ref() != Some(&path) {
+                return Vec::new();
+            }
             if let Some(skill) = state
                 .marketplace
                 .skills
@@ -16497,9 +16688,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             {
                 skill.enabled = effective_enabled;
             }
-            if state.marketplace.pending_skill_path.as_ref() == Some(&path) {
-                state.marketplace.pending_skill_path = None;
-            }
+            state.marketplace.pending_skill_path = None;
             if requested_enabled != effective_enabled {
                 state.status_message =
                     Some("Skill state is overridden by higher-priority configuration.".to_owned());
@@ -16507,9 +16696,10 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::SkillMutationFailed { path, message } => {
-            if state.marketplace.pending_skill_path.as_ref() == Some(&path) {
-                state.marketplace.pending_skill_path = None;
+            if state.marketplace.pending_skill_path.as_ref() != Some(&path) {
+                return Vec::new();
             }
+            state.marketplace.pending_skill_path = None;
             state.status_message = Some(message);
             Vec::new()
         }
@@ -18875,24 +19065,25 @@ mod tests {
         BrowserOriginElicitationDecision, BrowserPermissionResource, BrowserPermissionValue,
         BrowserPermissionsState, BrowserResourceElicitationDecision, BrowserSitePermission,
         BrowserTabState, ChatMemoryPreferences, CommandApprovalContext, ComposerAttachment,
-        ComposerAttachmentKind, ComputerApplicationState, ComputerUseState, ConnectionStatus,
-        DiffMarkerStyle, Effect, FeedbackClassification, FuzzyFileMatchType, FuzzyFileResult,
-        GitBranchConflictState, GitCommitNextStep, GitCommitPhase, GitDiffScope, GitPreferences,
-        GitPullRequestNextStep, GitPullRequestPhase, GitPullRequestProvider, GitPullRequestState,
-        GitReviewCommitState, GitReviewMode, GitState, GitWorktreeState, HookCard, HookEventName,
-        HookHandlerType, HookProjectEntry, HookSource, HookTrustStatus, ImportBatch, ImportHistory,
-        ImportItemSuccess, ImportItemType, ImportMigrationDetails, ImportMigrationItem,
-        ImportProvider, ImportProviderItems, ImportTypeResult, InspectorPane, InstalledAppRuntime,
-        IntegratedTerminalShell, KeyboardShortcutPreferences, KeyboardShortcutUpdateTarget,
-        LoadStatus, LocalProjectSummary, MAX_ACCOUNT_DAILY_USAGE_BUCKETS, MAX_ACCOUNT_FIELD_BYTES,
-        MAX_BROWSER_DOWNLOADS, MAX_COMPOSER_BYTES, MAX_GIT_BRANCH_BYTES, MAX_GIT_DIFF_BYTES,
-        MAX_GIT_INSTRUCTIONS_BYTES, MAX_GIT_SHA_BYTES, MAX_PINNED_TASK_ID_BYTES,
-        MAX_PLUGIN_DETAIL_ITEMS, MAX_REVIEW_START_ERROR_BYTES, MAX_TIMELINE_ITEMS,
-        MAX_TURN_DIFF_BYTES, MAX_VISIBLE_THREADS, MainRoute, MarketplaceManageTab,
-        MarketplaceSectionFilter, MarketplaceSourceCard, MarketplaceTab, MarketplaceUpgradeFailure,
-        McpAuthStatus, McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
-        McpElicitationContent, McpElicitationDecision, McpElicitationValue, McpFormElicitation,
-        McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpFormOption, McpFormStringFormat,
+        ComposerAttachmentKind, ComposerControlsState, ComputerApplicationState, ComputerUseState,
+        ConnectionStatus, DiffMarkerStyle, Effect, FeedbackClassification, FuzzyFileMatchType,
+        FuzzyFileResult, GitBranchConflictState, GitCommitNextStep, GitCommitPhase, GitDiffScope,
+        GitPreferences, GitPullRequestNextStep, GitPullRequestPhase, GitPullRequestProvider,
+        GitPullRequestState, GitReviewCommitState, GitReviewMode, GitState, GitWorktreeState,
+        HookCard, HookEventName, HookHandlerType, HookProjectEntry, HookSource, HookTrustStatus,
+        ImportBatch, ImportHistory, ImportItemSuccess, ImportItemType, ImportMigrationDetails,
+        ImportMigrationItem, ImportProvider, ImportProviderItems, ImportTypeResult, InspectorPane,
+        InstalledAppRuntime, IntegratedTerminalShell, KeyboardShortcutPreferences,
+        KeyboardShortcutUpdateTarget, LoadStatus, LocalProjectSummary,
+        MAX_ACCOUNT_DAILY_USAGE_BUCKETS, MAX_ACCOUNT_FIELD_BYTES, MAX_BROWSER_DOWNLOADS,
+        MAX_COMPOSER_BYTES, MAX_GIT_BRANCH_BYTES, MAX_GIT_DIFF_BYTES, MAX_GIT_INSTRUCTIONS_BYTES,
+        MAX_GIT_SHA_BYTES, MAX_PINNED_TASK_ID_BYTES, MAX_PLUGIN_DETAIL_ITEMS,
+        MAX_REVIEW_START_ERROR_BYTES, MAX_TIMELINE_ITEMS, MAX_TURN_DIFF_BYTES, MAX_VISIBLE_THREADS,
+        MainRoute, MarketplaceManageTab, MarketplaceSectionFilter, MarketplaceSourceCard,
+        MarketplaceTab, MarketplaceUpgradeFailure, McpAuthStatus, McpBrowserOriginElicitation,
+        McpBrowserResourceElicitation, McpElicitation, McpElicitationContent,
+        McpElicitationDecision, McpElicitationValue, McpFormElicitation, McpFormField,
+        McpFormFieldKind, McpFormImagePickerItem, McpFormOption, McpFormStringFormat,
         McpResourceCard, McpResourceContentCard, McpServerCard, McpServerDraft,
         McpServerStartupFailureReason, McpServerStartupState, McpTransportKind, McpUrlElicitation,
         ModelOption, OutputArtifact, OutputArtifactKind, PendingWorktreeForkPhase,
@@ -19658,6 +19849,7 @@ mod tests {
                 Effect::LoadPermissionProfiles { cwd: None },
                 Effect::LoadPersonalization,
                 Effect::RefreshSkills {
+                    generation: 1,
                     cwds: Vec::new(),
                     force_reload: false,
                 },
@@ -20353,6 +20545,7 @@ mod tests {
             reduce(&mut state, Action::SelectModel("gpt-fast".to_owned())),
             [Effect::UpdateThreadSettings {
                 task_id: "t1".to_owned(),
+                settings_generation: 1,
                 model: Some("gpt-fast".to_owned()),
                 effort: Some("medium".to_owned()),
                 service_tier: Some(None),
@@ -20368,6 +20561,7 @@ mod tests {
             ),
             [Effect::UpdateThreadSettings {
                 task_id: "t1".to_owned(),
+                settings_generation: 2,
                 model: None,
                 effort: Some("xhigh".to_owned()),
                 service_tier: None,
@@ -20380,6 +20574,7 @@ mod tests {
             reduce(&mut state, Action::SelectServiceTier("priority".to_owned()),),
             [Effect::UpdateThreadSettings {
                 task_id: "t1".to_owned(),
+                settings_generation: 3,
                 model: None,
                 effort: None,
                 service_tier: Some(Some("priority".to_owned())),
@@ -20395,6 +20590,7 @@ mod tests {
             ),
             [Effect::UpdateThreadSettings {
                 task_id: "t1".to_owned(),
+                settings_generation: 4,
                 model: None,
                 effort: None,
                 service_tier: None,
@@ -20441,12 +20637,14 @@ mod tests {
                 &mut state,
                 Action::ThreadSettingsUpdateFailed {
                     task_id: "t1".to_owned(),
+                    settings_generation: 4,
                     message: "settings rejected".to_owned(),
                 },
             ),
             [Effect::ResumeTask {
                 task_id: "t1".to_owned(),
                 generation: 1,
+                settings_generation: 5,
             }]
         );
         assert_eq!(state.status_message.as_deref(), Some("settings rejected"));
@@ -20573,11 +20771,13 @@ mod tests {
                 requirements: PermissionRequirements::default(),
             },
         );
+        state.timelines.entry("t1".to_owned()).or_default();
 
         reduce(
             &mut state,
             Action::TaskSettingsLoaded {
                 task_id: "t1".to_owned(),
+                settings_generation: 0,
                 model: Some("gpt-fast".to_owned()),
                 effort: Some("xhigh".to_owned()),
                 service_tier: Some("priority".to_owned()),
@@ -20637,6 +20837,89 @@ mod tests {
                 && effort == "xhigh"
                 && service_tier == "priority"
         ));
+    }
+
+    #[test]
+    fn stale_task_settings_do_not_overwrite_a_later_local_choice() {
+        let mut state = AppState {
+            tasks: vec![task("t1")],
+            selected_task_id: Some("t1".to_owned()),
+            ..AppState::default()
+        };
+        reduce(
+            &mut state,
+            Action::ModelsLoaded(vec![
+                model("gpt-default", true, "medium"),
+                model("gpt-fast", false, "high"),
+            ]),
+        );
+        state
+            .timelines
+            .entry("t1".to_owned())
+            .or_default()
+            .settings_generation = 1;
+
+        reduce(&mut state, Action::SelectModel("gpt-fast".to_owned()));
+        reduce(
+            &mut state,
+            Action::TaskSettingsLoaded {
+                task_id: "t1".to_owned(),
+                settings_generation: 1,
+                model: Some("gpt-default".to_owned()),
+                effort: Some("medium".to_owned()),
+                service_tier: None,
+                permissions: None,
+                approval_policy: None,
+                approvals_reviewer: None,
+            },
+        );
+
+        assert_eq!(
+            state.composer_controls.selected_model.as_deref(),
+            Some("gpt-fast")
+        );
+    }
+
+    #[test]
+    fn stale_task_settings_from_an_earlier_selection_are_ignored() {
+        let mut state = AppState {
+            tasks: vec![task("t1"), task("t2")],
+            composer_controls: ComposerControlsState {
+                selected_model: Some("gpt-fast".to_owned()),
+                ..ComposerControlsState::default()
+            },
+            ..AppState::default()
+        };
+        reduce(
+            &mut state,
+            Action::ModelsLoaded(vec![
+                model("gpt-default", true, "medium"),
+                model("gpt-fast", false, "high"),
+            ]),
+        );
+
+        reduce(&mut state, Action::SelectTask("t1".to_owned()));
+        reduce(&mut state, Action::SelectTask("t2".to_owned()));
+        reduce(&mut state, Action::SelectTask("t1".to_owned()));
+        reduce(
+            &mut state,
+            Action::TaskSettingsLoaded {
+                task_id: "t1".to_owned(),
+                settings_generation: 1,
+                model: Some("gpt-default".to_owned()),
+                effort: Some("medium".to_owned()),
+                service_tier: None,
+                permissions: None,
+                approval_policy: None,
+                approvals_reviewer: None,
+            },
+        );
+
+        assert_eq!(state.selected_task_id.as_deref(), Some("t1"));
+        assert_eq!(
+            state.composer_controls.selected_model.as_deref(),
+            Some("gpt-fast")
+        );
     }
 
     #[test]
@@ -21081,6 +21364,7 @@ mod tests {
             reduce(&mut state, Action::BeginNewChat),
             [
                 Effect::RefreshSkills {
+                    generation: 1,
                     cwds: vec![repository.clone()],
                     force_reload: false,
                 },
@@ -21148,17 +21432,144 @@ mod tests {
     }
 
     #[test]
-    fn skills_invalidation_coalesces_while_loading() {
+    fn skills_invalidation_supersedes_an_in_flight_load() {
         let mut state = AppState::default();
         assert_eq!(
             reduce(&mut state, Action::SkillsInvalidated),
             [Effect::RefreshSkills {
+                generation: 1,
                 cwds: Vec::new(),
                 force_reload: false,
             }]
         );
         assert_eq!(state.marketplace.skills_status, Some(LoadStatus::Loading));
-        assert!(reduce(&mut state, Action::SkillsInvalidated).is_empty());
+        assert_eq!(
+            reduce(&mut state, Action::SkillsInvalidated),
+            [Effect::RefreshSkills {
+                generation: 2,
+                cwds: Vec::new(),
+                force_reload: false,
+            }]
+        );
+        reduce(
+            &mut state,
+            Action::SkillsLoaded {
+                generation: 1,
+                skills: Vec::new(),
+                errors: Vec::new(),
+            },
+        );
+        assert_eq!(state.marketplace.skills_status, Some(LoadStatus::Loading));
+        reduce(
+            &mut state,
+            Action::SkillsLoaded {
+                generation: 2,
+                skills: Vec::new(),
+                errors: Vec::new(),
+            },
+        );
+        assert_eq!(state.marketplace.skills_status, Some(LoadStatus::Ready));
+    }
+
+    #[test]
+    fn stale_skills_are_ignored_after_workspace_change() {
+        fn skill(name: &str, path: PathBuf) -> SkillCard {
+            SkillCard {
+                name: name.to_owned(),
+                display_name: name.to_owned(),
+                description: String::new(),
+                path,
+                scope: SkillScope::Repo,
+                enabled: true,
+            }
+        }
+
+        let mut state = AppState::default();
+        let first_root = repository_path();
+        let second_root = first_root.with_file_name("repo-second");
+        let mut first = task_in_repository("first");
+        first.cwd = first_root.clone();
+        let mut second = task_in_repository("second");
+        second.cwd = second_root.clone();
+        state.tasks = vec![first, second];
+
+        reduce(&mut state, Action::SelectTask("first".to_owned()));
+        reduce(&mut state, Action::SelectTask("second".to_owned()));
+        reduce(
+            &mut state,
+            Action::SkillsLoaded {
+                generation: 1,
+                skills: vec![skill("first", first_root.join("SKILL.md"))],
+                errors: Vec::new(),
+            },
+        );
+        assert_eq!(state.marketplace.skills_status, Some(LoadStatus::Loading));
+        assert!(state.marketplace.skills.is_empty());
+
+        let second_skill = skill("second", second_root.join("SKILL.md"));
+        reduce(
+            &mut state,
+            Action::SkillsLoaded {
+                generation: 2,
+                skills: vec![second_skill.clone()],
+                errors: Vec::new(),
+            },
+        );
+        assert_eq!(state.marketplace.skills, vec![second_skill]);
+    }
+
+    #[test]
+    fn stale_skill_mutation_is_ignored_after_workspace_change() {
+        let mut state = AppState::default();
+        let first_root = repository_path();
+        let second_root = first_root.with_file_name("repo-second");
+        let path = first_root
+            .join(".agents")
+            .join("skills")
+            .join("review")
+            .join("SKILL.md");
+        let mut first = task_in_repository("first");
+        first.cwd = first_root;
+        let mut second = task_in_repository("second");
+        second.cwd = second_root;
+        state.tasks = vec![first, second];
+        state.marketplace.skills = vec![SkillCard {
+            name: "review".to_owned(),
+            display_name: "Review".to_owned(),
+            description: String::new(),
+            path: path.clone(),
+            scope: SkillScope::Repo,
+            enabled: true,
+        }];
+
+        reduce(&mut state, Action::SelectTask("first".to_owned()));
+        reduce(
+            &mut state,
+            Action::SetSkillEnabled {
+                path: path.clone(),
+                enabled: false,
+            },
+        );
+        reduce(&mut state, Action::SelectTask("second".to_owned()));
+        assert!(state.marketplace.pending_skill_path.is_none());
+
+        reduce(
+            &mut state,
+            Action::SkillEnabledChanged {
+                path: path.clone(),
+                requested_enabled: false,
+                effective_enabled: false,
+            },
+        );
+        reduce(
+            &mut state,
+            Action::SkillMutationFailed {
+                path,
+                message: "stale failure".to_owned(),
+            },
+        );
+        assert!(state.marketplace.skills[0].enabled);
+        assert_ne!(state.status_message.as_deref(), Some("stale failure"));
     }
 
     #[test]
@@ -21172,6 +21583,7 @@ mod tests {
         reduce(
             &mut state,
             Action::SkillsLoaded {
+                generation: 0,
                 skills: vec![SkillCard {
                     name: "review".to_owned(),
                     display_name: "Code review".to_owned(),
@@ -21341,6 +21753,7 @@ mod tests {
             reduce(&mut state, Action::BeginProjectlessChat),
             [
                 Effect::RefreshSkills {
+                    generation: 1,
                     cwds: Vec::new(),
                     force_reload: false,
                 },
@@ -21509,6 +21922,7 @@ mod tests {
             path: first.clone(),
         }));
         assert!(remove_effects.contains(&Effect::RefreshSkills {
+            generation: 2,
             cwds: Vec::new(),
             force_reload: false,
         }));
@@ -21549,6 +21963,7 @@ mod tests {
         assert_eq!(state.composer_attachments, [attachment]);
         assert!(state.composer_controls.plan_mode);
         assert!(effects.contains(&Effect::RefreshSkills {
+            generation: 1,
             cwds: vec![workspace.clone()],
             force_reload: false,
         }));
@@ -21593,6 +22008,7 @@ mod tests {
             reduce(&mut state, Action::UseGitWorktree(worktree.clone())),
             [
                 Effect::RefreshSkills {
+                    generation: 1,
                     cwds: vec![worktree.clone()],
                     force_reload: false,
                 },
@@ -21875,6 +22291,7 @@ mod tests {
                 Effect::ResumeTask {
                     task_id: "t1".to_owned(),
                     generation: 1,
+                    settings_generation: 1,
                 },
                 Effect::LoadTimeline {
                     task_id: "t1".to_owned(),
@@ -21892,6 +22309,7 @@ mod tests {
                     cwd: repository.clone(),
                 },
                 Effect::RefreshSkills {
+                    generation: 1,
                     cwds: vec![repository.clone()],
                     force_reload: false,
                 },
@@ -22317,6 +22735,7 @@ mod tests {
             &mut state,
             Action::PluginDetailLoaded {
                 plugin_id: "shared@workspace".to_owned(),
+                generation: 1,
                 detail: PluginDetailView {
                     plugin_id: "shared@workspace".to_owned(),
                     description: "late workspace A detail".to_owned(),
@@ -23418,6 +23837,7 @@ mod tests {
         assert_eq!(
             reduce(&mut state, Action::SubmitComposer),
             [Effect::ForkTask {
+                request_id: 1,
                 task_id: "t1".to_owned(),
                 cwd: Some(repository.clone()),
                 title: "Task".to_owned(),
@@ -23431,6 +23851,7 @@ mod tests {
             reduce(&mut state, Action::SubmitComposer),
             [
                 Effect::RefreshSkills {
+                    generation: 1,
                     cwds: vec![repository.clone()],
                     force_reload: false,
                 },
@@ -23490,11 +23911,116 @@ mod tests {
                 Action::ForkTaskInCurrentWorkspace("t1".to_owned())
             ),
             [Effect::ForkTask {
+                request_id: 1,
                 task_id: "t1".to_owned(),
                 cwd: Some(repository),
                 title: "Task".to_owned(),
             }]
         );
+    }
+
+    #[test]
+    fn current_normal_fork_completion_selects_the_fork() {
+        let mut state = AppState::default();
+        reduce(
+            &mut state,
+            Action::TaskCreated(task_in_repository("source")),
+        );
+        reduce(
+            &mut state,
+            Action::ComposerChanged("source draft".to_owned()),
+        );
+
+        assert!(matches!(
+            reduce(&mut state, Action::ForkSelectedTask).as_slice(),
+            [Effect::ForkTask {
+                request_id: 1,
+                task_id,
+                ..
+            }] if task_id == "source"
+        ));
+
+        let effects = reduce(
+            &mut state,
+            Action::ForkTaskCompleted {
+                request_id: 1,
+                task: task_in_repository("fork"),
+                title_copy_error: None,
+            },
+        );
+
+        assert_eq!(state.selected_task_id.as_deref(), Some("fork"));
+        assert!(state.composer.is_empty());
+        assert!(state.pending_task_fork.is_none());
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::RefreshGit { .. }))
+        );
+    }
+
+    #[test]
+    fn stale_normal_fork_completion_and_failure_preserve_a_returned_task() {
+        let mut state = AppState::default();
+        reduce(
+            &mut state,
+            Action::TaskCreated(task_in_repository("source")),
+        );
+        reduce(
+            &mut state,
+            Action::TaskCreated(task_in_repository("current")),
+        );
+        reduce(&mut state, Action::SelectTask("source".to_owned()));
+        reduce(
+            &mut state,
+            Action::ComposerChanged("source draft".to_owned()),
+        );
+        reduce(&mut state, Action::ForkSelectedTask);
+        reduce(&mut state, Action::ForkSelectedTask);
+
+        reduce(&mut state, Action::SelectTask("current".to_owned()));
+        assert!(state.status_message.is_none());
+        reduce(&mut state, Action::SelectTask("source".to_owned()));
+        reduce(
+            &mut state,
+            Action::ComposerChanged("returned source draft".to_owned()),
+        );
+        reduce(
+            &mut state,
+            Action::SetStatus("Returned source status".to_owned()),
+        );
+        reduce(
+            &mut state,
+            Action::ForkTaskCompleted {
+                request_id: 1,
+                task: task_in_repository("late-fork"),
+                title_copy_error: Some("late title failure".to_owned()),
+            },
+        );
+
+        assert_eq!(state.selected_task_id.as_deref(), Some("source"));
+        assert_eq!(state.composer, "returned source draft");
+        assert_eq!(
+            state.status_message.as_deref(),
+            Some("Returned source status")
+        );
+        assert!(state.tasks.iter().any(|task| task.id == "late-fork"));
+
+        reduce(
+            &mut state,
+            Action::ForkTaskFailed {
+                request_id: 2,
+                message: "late failure".to_owned(),
+            },
+        );
+
+        assert_eq!(state.selected_task_id.as_deref(), Some("source"));
+        assert_eq!(state.composer, "returned source draft");
+        assert_eq!(
+            state.status_message.as_deref(),
+            Some("Returned source status")
+        );
+        assert!(state.pending_task_fork.is_none());
     }
 
     #[test]
@@ -23984,6 +24510,7 @@ mod tests {
                 Effect::ResumeTask {
                     task_id,
                     generation,
+                    ..
                 } if task_id == "t1" => Some(*generation),
                 _ => None,
             })
@@ -24204,6 +24731,7 @@ mod tests {
             [Effect::ResumeTask {
                 task_id: "background".to_owned(),
                 generation: 1,
+                settings_generation: 1,
             }]
         );
         assert_eq!(
@@ -27669,7 +28197,7 @@ mod tests {
             Action::ComputerWindowsLoaded {
                 task_id: "t1".to_owned(),
                 applications: vec![ComputerApplicationState {
-                    id: "aumid:contoso.editor!app".to_owned(),
+                    id: "AUMID:Contoso.Editor!App".to_owned(),
                     display_name: Some("Editor".to_owned()),
                     last_used_date: None,
                     use_count: None,
@@ -27821,6 +28349,7 @@ mod tests {
         let mut state = AppState::default();
         reduce(&mut state, Action::TaskCreated(task("t1")));
         state.background_completion_task_id = Some("t1".to_owned());
+        state.browser.entry("t1".to_owned()).or_default();
 
         assert_eq!(
             reduce(&mut state, Action::ArchiveTask("t1".to_owned())),
@@ -27834,6 +28363,7 @@ mod tests {
 
         assert!(state.tasks.is_empty());
         assert!(state.timelines.is_empty());
+        assert!(state.browser.is_empty());
         assert_eq!(state.selected_task_id, None);
         assert_eq!(state.background_completion_task_id, None);
     }
@@ -28679,6 +29209,7 @@ mod tests {
                 Action::SelectMarketplaceTab(MarketplaceTab::Skills)
             ),
             [Effect::RefreshSkills {
+                generation: 1,
                 cwds: vec![repository.clone()],
                 force_reload: false,
             }]
@@ -28687,6 +29218,7 @@ mod tests {
         assert_eq!(
             reduce(&mut state, Action::RefreshSkills),
             [Effect::RefreshSkills {
+                generation: 2,
                 cwds: vec![repository],
                 force_reload: true,
             }]
@@ -28883,6 +29415,7 @@ mod tests {
                     thread_id: None,
                 },
                 Effect::RefreshSkills {
+                    generation: 1,
                     cwds: Vec::new(),
                     force_reload: false,
                 },
@@ -30299,6 +30832,7 @@ mod tests {
             ),
             [Effect::ReadPlugin {
                 plugin_id: "gmail@openai-curated-remote".to_owned(),
+                generation: 1,
                 plugin_name: "gmail".to_owned(),
                 marketplace: "openai-curated-remote".to_owned(),
             }]
@@ -30306,6 +30840,20 @@ mod tests {
         assert_eq!(
             state.marketplace.plugin_detail_status,
             Some(LoadStatus::Loading)
+        );
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::OpenPluginDetails {
+                    plugin_id: "gmail@openai-curated-remote".to_owned(),
+                },
+            ),
+            [Effect::ReadPlugin {
+                plugin_id: "gmail@openai-curated-remote".to_owned(),
+                generation: 2,
+                plugin_name: "gmail".to_owned(),
+                marketplace: "openai-curated-remote".to_owned(),
+            }]
         );
 
         let detail = PluginDetailView {
@@ -30339,7 +30887,8 @@ mod tests {
             reduce(
                 &mut state,
                 Action::PluginDetailLoaded {
-                    plugin_id: "stale-plugin".to_owned(),
+                    plugin_id: "gmail@openai-curated-remote".to_owned(),
+                    generation: 1,
                     detail: detail.clone(),
                 },
             )
@@ -30352,6 +30901,7 @@ mod tests {
                 &mut state,
                 Action::PluginDetailLoaded {
                     plugin_id: "gmail@openai-curated-remote".to_owned(),
+                    generation: 2,
                     detail: detail.clone(),
                 },
             )
@@ -30673,6 +31223,7 @@ mod tests {
         reduce(
             &mut state,
             Action::SkillsLoaded {
+                generation: 0,
                 skills: vec![skill],
                 errors: Vec::new(),
             },

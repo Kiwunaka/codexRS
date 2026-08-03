@@ -358,6 +358,7 @@ pub(crate) enum BrowserCommand {
         context_id: String,
         tab_id: String,
     },
+    CloseContext(String),
     Resize {
         width: u32,
         height: u32,
@@ -587,6 +588,11 @@ impl BrowserSession {
             &self.commands,
             BrowserCommand::CloseTab { context_id, tab_id },
         )
+    }
+
+    pub fn close_context(&self, context_id: &str) -> Result<(), BrowserCommandError> {
+        let context_id = checked_context_id(context_id)?;
+        send_command(&self.commands, BrowserCommand::CloseContext(context_id))
     }
 
     pub fn resize(&self, width: u32, height: u32) -> Result<(), BrowserCommandError> {
@@ -1983,7 +1989,7 @@ struct BrowserRuntime {
     pending_visibility_context_ids: HashSet<String>,
     surface_viewport_width: u32,
     surface_viewport_height: u32,
-    viewport_overridden: bool,
+    viewport_overrides: HashMap<String, (u32, u32)>,
     viewport_width: u32,
     viewport_height: u32,
 }
@@ -2030,7 +2036,7 @@ impl BrowserRuntime {
             surface_viewport_height: config
                 .viewport_height
                 .clamp(MIN_VIEWPORT_HEIGHT, MAX_VIEWPORT_HEIGHT),
-            viewport_overridden: false,
+            viewport_overrides: HashMap::new(),
             viewport_width: config
                 .viewport_width
                 .clamp(MIN_VIEWPORT_WIDTH, MAX_VIEWPORT_WIDTH),
@@ -2158,6 +2164,7 @@ impl BrowserRuntime {
             BrowserCommand::CloseTab { context_id, tab_id } => {
                 self.close_tab(&context_id, &tab_id)?;
             }
+            BrowserCommand::CloseContext(context_id) => self.close_context(&context_id)?,
             BrowserCommand::Resize { width, height } => self.resize(width, height)?,
             BrowserCommand::SyncSurfaceState {
                 context_id,
@@ -2432,12 +2439,12 @@ impl BrowserRuntime {
             }
             "browser_viewport_set" => {
                 let (width, height) = checked_agent_viewport(params)?;
-                self.set_agent_viewport(width, height)
+                self.set_agent_viewport(&context_id, width, height)
                     .map_err(BrowserAgentRpcError::request)?;
                 Ok(json!({}))
             }
             "browser_viewport_reset" => {
-                self.reset_agent_viewport()
+                self.reset_agent_viewport(&context_id)
                     .map_err(BrowserAgentRpcError::request)?;
                 Ok(json!({}))
             }
@@ -2758,8 +2765,9 @@ impl BrowserRuntime {
         let index = self
             .agent_tab_index(&context_id, agent_tab_id)
             .ok_or_else(|| BrowserAgentRpcError::request(format!("Unknown tab: {agent_tab_id}")))?;
-        let x = finite_coordinate(params.get("x"), self.viewport_width)?;
-        let y = finite_coordinate(params.get("y"), self.viewport_height)?;
+        let (viewport_width, viewport_height) = self.effective_viewport(&context_id);
+        let x = finite_coordinate(params.get("x"), viewport_width)?;
+        let y = finite_coordinate(params.get("y"), viewport_height)?;
         let session_id = self.tabs[index].session_id.clone();
         self.cdp
             .request(
@@ -2880,6 +2888,8 @@ impl BrowserRuntime {
             self.close_tab(&context_id, &tab_id)
                 .map_err(BrowserAgentRpcError::request)?;
         }
+        self.reset_agent_viewport(&context_id)
+            .map_err(BrowserAgentRpcError::request)?;
         Ok(Value::Null)
     }
 
@@ -3859,6 +3869,7 @@ impl BrowserRuntime {
         self.attach_target(context_id, target_id, origin)?;
         self.active_index = self.tabs.len().saturating_sub(1);
         self.active_context_id = context_id.to_owned();
+        self.set_active_viewport(context_id);
         self.active_tab_ids.insert(
             context_id.to_owned(),
             self.tabs[self.active_index].public.id.clone(),
@@ -3883,6 +3894,7 @@ impl BrowserRuntime {
         self.stop_screencast(self.active_index)?;
         self.active_index = index;
         self.active_context_id = context_id.to_owned();
+        self.set_active_viewport(context_id);
         self.active_tab_ids
             .insert(context_id.to_owned(), tab_id.to_owned());
         self.cdp
@@ -3907,6 +3919,9 @@ impl BrowserRuntime {
         self.cdp
             .request("Target.closeTarget", json!({"targetId": tab_id}), None)?;
         self.tabs.remove(index);
+        if !self.tabs.iter().any(|tab| tab.context_id == context_id) {
+            self.viewport_overrides.remove(context_id);
+        }
         self.agent_child_sessions
             .retain(|_, child| child.agent_tab_id != agent_tab_id);
         if index < self.active_index {
@@ -3937,6 +3952,64 @@ impl BrowserRuntime {
         Ok(())
     }
 
+    fn close_context(&mut self, context_id: &str) -> Result<(), String> {
+        let was_active = self.active_context_id == context_id
+            && self
+                .tabs
+                .get(self.active_index)
+                .is_some_and(|tab| tab.context_id == context_id);
+        if was_active {
+            self.stop_screencast(self.active_index)?;
+        }
+
+        let indices = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, tab)| (tab.context_id == context_id).then_some(index))
+            .collect::<Vec<_>>();
+        for index in indices.into_iter().rev() {
+            let tab_id = self.tabs[index].public.id.clone();
+            let agent_tab_id = self.tabs[index].agent_id;
+            self.revoke_download_grant_for_tab(agent_tab_id)?;
+            self.emit_agent_notification(context_id, "onCDPDetach", json!({"tabId": agent_tab_id}));
+            self.cdp
+                .request("Target.closeTarget", json!({"targetId": tab_id}), None)?;
+            self.tabs.remove(index);
+            self.agent_child_sessions
+                .retain(|_, child| child.agent_tab_id != agent_tab_id);
+            if index < self.active_index {
+                self.active_index = self.active_index.saturating_sub(1);
+            }
+        }
+
+        self.active_tab_ids.remove(context_id);
+        self.cached_agent_expressions
+            .retain(|(cached_context_id, _, _), _| cached_context_id != context_id);
+        self.cached_agent_expression_order
+            .retain(|(cached_context_id, _, _)| cached_context_id != context_id);
+        self.pending_visibility_context_ids.remove(context_id);
+        self.viewport_overrides.remove(context_id);
+        if self.surface_context_id.as_deref() == Some(context_id) {
+            self.surface_context_id = None;
+            self.surface_visible = false;
+        }
+
+        self.active_index = self.active_index.min(self.tabs.len().saturating_sub(1));
+
+        if was_active {
+            self.active_context_id.clear();
+            if let Some(next_context_id) = self
+                .tabs
+                .get(self.active_index)
+                .map(|tab| tab.context_id.clone())
+            {
+                self.activate_context(&next_context_id)?;
+            }
+        }
+        Ok(())
+    }
+
     fn activate_context(&mut self, context_id: &str) -> Result<(), String> {
         if self.active_context_id == context_id
             && self
@@ -3963,6 +4036,7 @@ impl BrowserRuntime {
         }
         self.active_index = index;
         self.active_context_id = context_id.to_owned();
+        self.set_active_viewport(context_id);
         let tab_id = self.tabs[index].public.id.clone();
         self.active_tab_ids
             .insert(context_id.to_owned(), tab_id.clone());
@@ -3977,10 +4051,14 @@ impl BrowserRuntime {
     fn resize(&mut self, width: u32, height: u32) -> Result<(), String> {
         self.surface_viewport_width = width.clamp(MIN_VIEWPORT_WIDTH, MAX_VIEWPORT_WIDTH);
         self.surface_viewport_height = height.clamp(MIN_VIEWPORT_HEIGHT, MAX_VIEWPORT_HEIGHT);
-        if self.viewport_overridden {
-            return Ok(());
+        let context_ids: HashSet<String> =
+            self.tabs.iter().map(|tab| tab.context_id.clone()).collect();
+        for context_id in context_ids {
+            if !self.viewport_overrides.contains_key(&context_id) {
+                self.apply_context_viewport(&context_id)?;
+            }
         }
-        self.apply_viewport(self.surface_viewport_width, self.surface_viewport_height)
+        Ok(())
     }
 
     fn sync_surface_state(&mut self, context_id: Option<String>, visible: bool) {
@@ -3991,24 +4069,50 @@ impl BrowserRuntime {
         }
     }
 
-    fn set_agent_viewport(&mut self, width: u32, height: u32) -> Result<(), String> {
-        self.viewport_overridden = true;
-        self.apply_viewport(width, height)
+    fn set_agent_viewport(
+        &mut self,
+        context_id: &str,
+        width: u32,
+        height: u32,
+    ) -> Result<(), String> {
+        self.viewport_overrides
+            .insert(context_id.to_owned(), (width, height));
+        self.apply_context_viewport(context_id)
     }
 
-    fn reset_agent_viewport(&mut self) -> Result<(), String> {
-        self.viewport_overridden = false;
-        self.apply_viewport(self.surface_viewport_width, self.surface_viewport_height)
+    fn reset_agent_viewport(&mut self, context_id: &str) -> Result<(), String> {
+        self.viewport_overrides.remove(context_id);
+        self.apply_context_viewport(context_id)
     }
 
-    fn apply_viewport(&mut self, width: u32, height: u32) -> Result<(), String> {
+    fn effective_viewport(&self, context_id: &str) -> (u32, u32) {
+        effective_viewport(
+            &self.viewport_overrides,
+            context_id,
+            self.surface_viewport_width,
+            self.surface_viewport_height,
+        )
+    }
+
+    fn set_active_viewport(&mut self, context_id: &str) {
+        let (width, height) = self.effective_viewport(context_id);
         self.viewport_width = width;
         self.viewport_height = height;
+    }
+
+    fn apply_context_viewport(&mut self, context_id: &str) -> Result<(), String> {
+        let (width, height) = self.effective_viewport(context_id);
         for index in 0..self.tabs.len() {
-            self.set_viewport(index)?;
+            if self.tabs[index].context_id == context_id {
+                self.set_viewport(index, width, height)?;
+            }
         }
-        self.stop_screencast(self.active_index)?;
-        self.start_screencast(self.active_index)?;
+        if self.active_context_id == context_id {
+            self.viewport_width = width;
+            self.viewport_height = height;
+            self.stop_screencast(self.active_index)?;
+            self.start_screencast(self.active_index)?;
+        }
         Ok(())
     }
 
@@ -4173,11 +4277,12 @@ impl BrowserRuntime {
             },
             session_id,
         });
-        self.set_viewport(self.tabs.len().saturating_sub(1))?;
+        let (width, height) = self.effective_viewport(context_id);
+        self.set_viewport(self.tabs.len().saturating_sub(1), width, height)?;
         Ok(())
     }
 
-    fn set_viewport(&mut self, index: usize) -> Result<(), String> {
+    fn set_viewport(&mut self, index: usize, width: u32, height: u32) -> Result<(), String> {
         let session_id = self
             .tabs
             .get(index)
@@ -4187,8 +4292,8 @@ impl BrowserRuntime {
         self.cdp.request(
             "Emulation.setDeviceMetricsOverride",
             json!({
-                "width": self.viewport_width,
-                "height": self.viewport_height,
+                "width": width,
+                "height": height,
                 "deviceScaleFactor": 1,
                 "mobile": false,
             }),
@@ -4366,6 +4471,18 @@ fn checked_agent_browser_id(params: &Value) -> Result<&str, BrowserAgentRpcError
                 && !id.chars().any(char::is_control)
         })
         .ok_or_else(|| BrowserAgentRpcError::request("Browser command requires a browser_id"))
+}
+
+fn effective_viewport(
+    overrides: &HashMap<String, (u32, u32)>,
+    context_id: &str,
+    surface_width: u32,
+    surface_height: u32,
+) -> (u32, u32) {
+    overrides
+        .get(context_id)
+        .copied()
+        .unwrap_or((surface_width, surface_height))
 }
 
 fn checked_agent_viewport(params: &Value) -> Result<(u32, u32), BrowserAgentRpcError> {
@@ -5096,7 +5213,7 @@ mod tests {
         allowed_agent_cdp_method, browser_agent_tab_matches, browser_command,
         browser_origin_pattern_matches, browser_permission_for_url, cached_agent_expression_key,
         cdp_key_name, checked_agent_browser_id, checked_agent_viewport, checked_download_url,
-        checked_navigation_url, control_download_transfer, create_browser_job,
+        checked_navigation_url, control_download_transfer, create_browser_job, effective_viewport,
         graceful_browser_exit, move_download_to_destination, next_browser_command,
         normalize_browser_origin, parse_devtools_marker, record_agent_child_session,
         remove_agent_child_session, resolve_browser_binary, safe_download_filename,
@@ -6314,5 +6431,39 @@ mod tests {
             .is_err()
         );
         assert!(checked_agent_browser_id(&json!({"browser_id": ""})).is_err());
+    }
+
+    #[test]
+    fn agent_viewport_overrides_are_scoped_to_their_context() {
+        let mut overrides = HashMap::from([("task-a".to_owned(), (640, 480))]);
+
+        assert_eq!(
+            effective_viewport(&overrides, "task-a", 1_280, 800),
+            (640, 480)
+        );
+        assert_eq!(
+            effective_viewport(&overrides, "task-b", 1_280, 800),
+            (1_280, 800)
+        );
+
+        overrides.insert("task-b".to_owned(), (900, 700));
+        assert_eq!(
+            effective_viewport(&overrides, "task-a", 1_280, 800),
+            (640, 480)
+        );
+        assert_eq!(
+            effective_viewport(&overrides, "task-b", 1_280, 800),
+            (900, 700)
+        );
+
+        overrides.remove("task-b");
+        assert_eq!(
+            effective_viewport(&overrides, "task-a", 1_280, 800),
+            (640, 480)
+        );
+        assert_eq!(
+            effective_viewport(&overrides, "task-b", 1_280, 800),
+            (1_280, 800)
+        );
     }
 }
