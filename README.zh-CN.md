@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/codexrs-hero.png" alt="codexRS 原生工作区" width="100%">
+  <img src="docs/assets/codexrs-hero-v2.png" alt="codexRS 原生工作区" width="100%">
 </p>
 
 <h1 align="center">codexRS</h1>
@@ -22,6 +22,16 @@
   <a href="https://github.com/Kiwunaka/codexRS/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/Kiwunaka/codexRS?style=flat"></a>
   <a href="https://github.com/Kiwunaka/codexRS/graphs/contributors"><img alt="Contributors" src="https://img.shields.io/github/contributors/Kiwunaka/codexRS"></a>
   <img alt="Windows 与 Linux" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-2f81f7">
+</p>
+
+<p align="center">
+  <a href="https://github.com/Kiwunaka/codexRS/releases/download/v0.1.0-rc.12/codexrs-v0.1.0-rc.12-windows-x86_64.zip"><img alt="下载 Windows 版本" src="https://img.shields.io/badge/下载-Windows%20x86__64-2f81f7?style=for-the-badge&logo=windows11&logoColor=white"></a>
+  <a href="https://github.com/Kiwunaka/codexRS/releases/download/v0.1.0-rc.12/codexrs-v0.1.0-rc.12-linux-x86_64.tar.gz"><img alt="下载 Linux 版本" src="https://img.shields.io/badge/下载-Linux%20x86__64-f0a050?style=for-the-badge&logo=linux&logoColor=white"></a>
+  <a href="https://github.com/Kiwunaka/codexRS/releases/download/v0.1.0-rc.12/SHA256SUMS.txt"><img alt="SHA-256 校验和" src="https://img.shields.io/badge/校验-SHA--256-3fb950?style=for-the-badge"></a>
+</p>
+
+<p align="center">
+  <sub>v0.1.0-rc.12 · 未签名便携预览版 · 需要官方 Codex CLI</sub>
 </p>
 
 > [!IMPORTANT]
@@ -158,6 +168,9 @@ cargo run -p codex-app --bin codexrs
 欢迎贡献。请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 与
 [AGENTS.md](AGENTS.md)。大型功能应先通过 issue 或 Discussions 明确行为契约。
 
+- [适合首次贡献的任务](https://github.com/Kiwunaka/codexRS/labels/good%20first%20issue)
+- [需要帮助](https://github.com/Kiwunaka/codexRS/labels/help%20wanted)
+- [讨论区](https://github.com/Kiwunaka/codexRS/discussions)
 - [路线图](ROADMAP.md)
 - [Codex Desktop 对等矩阵](docs/parity-matrix.md)
 - [支持](SUPPORT.md)
@@ -173,7 +186,7 @@ cargo run -p codex-app --bin codexrs
 
 ## Star 趋势
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Kiwunaka/codexRS&type=Date)](https://star-history.com/#Kiwunaka/codexRS&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=Kiwunaka/codexRS&type=Date)](https://www.star-history.com/?repos=Kiwunaka%2FcodexRS&type=date&legend=top-left)
 
 ## 许可证与上游声明
 

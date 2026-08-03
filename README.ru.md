@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="docs/assets/codexrs-hero.png" alt="Нативное рабочее пространство codexRS" width="100%">
+  <img src="docs/assets/codexrs-hero-v2.png" alt="Нативное рабочее пространство codexRS" width="100%">
 </p>
 
 <h1 align="center">codexRS</h1>
 
 <p align="center">
-  Нативная замена Codex Desktop на Rust с целью полного функционального и UX-паритета.<br>
-  Совместимость с официальным app-server без Electron, WebView и браузерного runtime.
+  Рабочий процесс Codex Desktop, пересобранный как нативное Rust-приложение для Windows и Linux.<br>
+  Официальный app-server без Electron, WebView, Node.js и встроенного браузерного runtime.
 </p>
 
 <p align="center">
@@ -24,75 +24,93 @@
   <img alt="Windows и Linux" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-2f81f7">
 </p>
 
-> [!IMPORTANT]
-> Это дерево предназначено для предварительного релиза. На Windows уже пройден
-> сквозной smoke-тест исходной сборки с точным stable-эталоном. Linux проверяется
-> в нативном CI, но до стабильного релиза нужны тесты на большем числе окружений.
+<p align="center">
+  <a href="https://github.com/Kiwunaka/codexRS/releases/download/v0.1.0-rc.12/codexrs-v0.1.0-rc.12-windows-x86_64.zip"><img alt="Скачать для Windows" src="https://img.shields.io/badge/Скачать-Windows%20x86__64-2f81f7?style=for-the-badge&logo=windows11&logoColor=white"></a>
+  <a href="https://github.com/Kiwunaka/codexRS/releases/download/v0.1.0-rc.12/codexrs-v0.1.0-rc.12-linux-x86_64.tar.gz"><img alt="Скачать для Linux" src="https://img.shields.io/badge/Скачать-Linux%20x86__64-f0a050?style=for-the-badge&logo=linux&logoColor=white"></a>
+  <a href="https://github.com/Kiwunaka/codexRS/releases/download/v0.1.0-rc.12/SHA256SUMS.txt"><img alt="Контрольные суммы SHA-256" src="https://img.shields.io/badge/Проверить-SHA--256-3fb950?style=for-the-badge"></a>
+</p>
+
+<p align="center">
+  <sub>v0.1.0-rc.12 · неподписанный portable preview · нужна официальная Codex CLI</sub>
+</p>
+
+> [!WARNING]
+> codexRS пока release candidate, а не стабильный релиз. Windows-сборка
+> запускается из готового архива прямо в CI. Linux собирается и стартует в
+> Ubuntu CI, но его ещё нужно прогнать на большем числе desktop-окружений.
+> Перед включением Computer Use прочитайте
+> [текущие ограничения](docs/known-failures.md#active-release-candidate-limitations).
 
 ## Зачем нужен codexRS
 
-Codex Desktop удобен, но многим нужен более компактный и прозрачный нативный
-клиент. Такой, где понятно, какой процесс запущен, кто владеет данными и где
-стоят пределы по памяти и очередям. codexRS устроен именно так:
+codexRS сохраняет привычный рабочий процесс Codex, но заменяет desktop-оболочку
+на нативное приложение на Rust и GPUI. По умолчанию оно направлено прямо на
+`~/.codex`, однако живые auth, история, SQLite, JSONL и логи остаются за
+официальным `codex app-server`. Сам клиент их напрямую не открывает.
 
-- нативный интерфейс на Rust и GPUI;
-- без Electron, Tauri, Wry, WebView, Node.js и встроенного браузера;
-- источником истины остаётся официальный `codex app-server`;
-- по умолчанию клиент работает прямо с `~/.codex`;
-- сам codexRS не открывает живые auth, SQLite, JSONL и логи Codex.
+- **Нативный интерфейс.** Внутри нет Electron, Tauri, Wry, WebView, Node.js и
+  встроенного браузерного runtime.
+- **Один источник данных.** Аккаунт, задачи, модели, approvals, плагины и
+  история идут через официальный app-server.
+- **Весь рабочий цикл в одном окне.** Чаты, потоковые ответы, Git, ветки,
+  worktree, staged/unstaged diff, pull request, терминал, файлы, Browser,
+  Computer Use, Apps, плагины и Marketplace.
+- **Windows и Linux.** Один Rust-workspace собирается нативно на обеих
+  платформах, а платформенный код изолирован в `codex-platform`.
+- **Предсказуемые границы.** У фреймов, очередей, страниц истории, диффов,
+  скриншотов, логов и вывода процессов есть жёсткие лимиты.
 
 Эталон поведения: Codex Desktop `26.721.3996.0` со встроенной Codex CLI
 [`0.146.0-alpha.3.1`](https://github.com/openai/codex/releases/tag/rust-v0.146.0-alpha.3.1).
-Этот бинарник нужен для сверки совместимости. В репозиторий и сборки он не
-входит.
+Эталонный бинарник не входит в репозиторий, сборки и runtime codexRS.
 
-## Что уже работает
+## Что работает сейчас
 
-| Область | Текущее состояние |
+| Область | Что есть в текущем RC |
 | --- | --- |
-| Задачи | Ограниченные страницы, resume, fork, composer, потоковая лента и approvals |
-| Репозиторий | Статус, staged/unstaged, большие виртуализированные диффы, переключение веток и безопасные соседние worktree |
-| Терминал | Нативная PTY/ConPTY-сессия с ограниченным VT-выводом |
-| Computer Use | Windows: поиск окон и управление с разрешением для конкретного приложения, доступом на задачу и allowlist под управлением app-server; Linux: ограниченное read-only наблюдение со скриншотами окон X11/XWayland при непустом `DISPLAY` |
-| Плагины | Нативные вкладки каталога, ограниченная загрузка изображений, управление установленными и источниками, создание, add/remove/upgrade marketplace, установка и удаление через app-server |
-| Хранилище | Отдельный single-writer SQLite для настроек codexRS и ограниченного реестра локальных проектов с именами и закреплением |
-| Платформы | Windows проверен исходной сборкой; в Ubuntu CI собираются и тестируются UI, app-server, Git и PTY; Linux Computer Use даёт наблюдение со скриншотами X11/XWayland при непустом `DISPLAY` |
+| Задачи и composer | Новые и возобновлённые задачи, потоковая лента, fork, steer, stop, approvals, Plan, Goal, вложения, команды, поиск и уведомления о фоновых завершениях |
+| Репозиторий | Ветки, безопасные соседние worktree, коммиты, staged/unstaged, виртуализированный unified/split diff, review и защищённые сценарии GitHub pull request |
+| Терминал и файлы | Нативный PTY/ConPTY, ограниченный scrollback, безопасный preview файлов и outputs, кликабельные ссылки на файлы из ответов |
+| Browser | Изолированное управление браузером, вкладки в контексте задачи, разрешения, скачивания, загрузки и agent-действия |
+| Computer Use | Windows: поиск окон, скриншоты, accessibility, ввод, Esc-прерывание, системный overlay, запуск приложений и разрешения; Linux: пока только скриншоты X11/XWayland |
+| Расширения | Skills, плагины, MCP Apps, упоминания desktop-приложений и Marketplace с add/remove/upgrade/install через app-server |
+| Настройки и хранение | Настройки аккаунта, моделей и runtime плюс маленькая single-writer база codexRS только для UI и списка локальных проектов |
 
-Computer Use включается отдельно для каждой задачи. Windows предоставляет
-описанный ниже полный срез discovery и управления. В Linux доступно только
-ограниченное read-only наблюдение со скриншотами окон X11/XWayland при
-непустом `DISPLAY`; извлечение текста, ввод, запуск приложений, постоянные
-разрешения, overlay и мониторинг прерываний недоступны, а pure Wayland без
-XWayland не поддерживается. В Windows каждое чтение или действие
-передаёт точный `Window { app, id, title? }` из ограниченного discovery;
-codexRS заново находит непрозрачный ID и проверяет текущего владельца окна.
-Выбор окна в нативном инспекторе — только ручное удобство. Перед первым
-действием с каждым приложением codexRS запрашивает доступ к его реальному
-идентификатору. На Windows packaged-приложения сохраняют AUMID с исходным
-регистром. Executable получает stable-форму с GUID известной папки, когда это
-возможно, иначе — абсолютный путь с исходным регистром; старые `process:` ID
-по-прежнему распознаются при сопоставлении. Общие host-процессы и слишком
-длинные ID блокируются. `Allow once` действует в текущей задаче, а
-`Always allow` сохраняется через официальный app-server, но ни одно разрешение
-не обходит product-policy запрет для Codex, терминалов, менеджеров паролей,
-identity- и security-поверхностей. Нативный каталог Windows ограниченно читает обе папки
-Start Menu, execution aliases и manifests установленных пакетов, показывает
-приложения и запускает их; прямой запуск моделью проходит ту же per-app
-проверку. Снимки не сохраняются на диск и уменьшаются до заданного
-лимита до отправки в протокол. У каждого снимка есть короткоживущий ID, поэтому
-координаты с уменьшенного изображения переводятся обратно в координаты
-настоящего окна. На Windows дерево доступности и действия по индексам выполняет
-отдельный нативный Rust-helper под надзором: максимум 512 элементов и 128 КиБ,
-таймаут запроса 10 секунд, зависший сторонний UI Automation provider
-останавливается вместе с helper и не замораживает клиент. Методы ввода сами
-выводят точное целевое окно на передний план, а `activate_window` остаётся
-явным recovery-действием как в stable Window2.
-Перед защищённым вводом обязан появиться нативный индикатор поверх окон с
-точным текстом stable: `ChatGPT is using your computer` / `Esc to cancel`.
-Он живёт до конца Computer Use-хода, не забирает фокус и клики, не попадает в
-скриншоты; если индикатор не показался, действие блокируется. На Windows этим
-окном владеет поставляемый рядом `codex-computer-use-overlay.exe`: обмен с ним
-ограничен, а Job Object гарантированно завершает helper вместе с клиентом.
+Точный статус каждого контракта есть в [матрице паритета](docs/parity-matrix.md).
+Самые крупные оставшиеся куски: полноценный Linux Computer Use, scheduled
+tasks, подписанные установщики и обновления, полный keyboard/screen-reader pass,
+действия с отдельными hunk в diff и финальный визуальный паритет.
+
+## Экономия ресурсов без выдуманных процентов
+
+| Решение | Что это даёт |
+| --- | --- |
+| Нет встроенных Chromium и Node.js | Клиент не поставляет и не держит второй браузерный стек только ради отрисовки интерфейса |
+| История читается страницами через app-server | При старте не сканируются гигабайты живых JSONL и не загружается целиком вся история |
+| Виртуализированные diff и timeline | Большой review не заставляет интерфейс постоянно держать отрисованными все строки |
+| Ограниченные очереди и byte budget | Всплеск событий создаёт backpressure или resync, а не бесконечно растущую очередь |
+| Фиксированный scrollback и лимиты скриншотов | Долгий терминал и Computer Use не накапливают данные без верхней границы |
+| Thin LTO и удаление debug symbols | Portable-сборки остаются компактными: последние архивы занимают примерно 15 МиБ для Windows и 18 МиБ для Linux |
+
+Размер архива не равен расходу RAM. Честного одинакового memory-бенчмарка
+codexRS против Codex Desktop пока нет, поэтому мы не рисуем «на 70% меньше
+памяти» из воздуха. Реальная оптимизация сейчас - отсутствие встроенного web
+runtime и явный предел у каждого пути роста. Все числа собраны в
+[списке лимитов](docs/known-failures.md#current-budgets).
+
+## Какие проблемы уже закрыты
+
+| Наблюдавшаяся проблема | Как ведёт себя codexRS |
+| --- | --- |
+| Multi-root пути на Windows могли приводить к белому экрану | Нативные `Path`/`PathBuf` не прогоняют пути дисков через браузерные shim |
+| Одна строка JSONL достигала 594 127 437 байт | Живая история напрямую не читается, доступ идёт ограниченными страницами app-server |
+| История при старте доходила примерно до 9 ГБ | `thread/list` работает постранично и запрашивает только метаданные state database |
+| Уведомления файловой системы порождали поток `git.exe` | Обновления объединяются с debounce, одновременно идёт одна backend Git-операция |
+| Cleanup создавал шторм `taskkill`, `conhost` и WMI | Дерево процессов завершается под надзором: сначала мягко, затем один ограниченный fallback |
+| Поздний async-ответ перетирал более новое состояние UI | Результаты workspace, task, Browser, Marketplace, diff, settings и fork привязаны к поколению запроса |
+
+Это regression-входы, а не поведение, которое копируется из эталона. Полный
+список и доказательства лежат в [docs/known-failures.md](docs/known-failures.md).
 
 ## Архитектура
 
@@ -132,17 +150,19 @@ codex --version
 
 ### 2. Скачайте portable preview
 
-Скачивайте только со страницы [GitHub Releases](https://github.com/Kiwunaka/codexRS/releases).
-Каждый предварительный релиз содержит `codexrs-<tag>-windows-x86_64.zip` и
-`codexrs-<tag>-linux-x86_64.tar.gz`, а также `SHA256SUMS.txt`; подставьте полный
-тег выбранного релиза вместо `<tag>`. Проверьте checksum до
-распаковки: в Linux выполните
-`grep ' \./codexrs-<tag>-linux-x86_64.tar.gz$' SHA256SUMS.txt | sha256sum -c -`,
-а в Windows сравните
-`(Get-FileHash .\codexrs-<tag>-windows-x86_64.zip -Algorithm SHA256).Hash`
-с соответствующей строкой. Checksum помогает заметить повреждение после
-загрузки с доверенной страницы релиза, но не является независимой подписью
-издателя.
+Текущий preview: **v0.1.0-rc.12**.
+
+- [Windows x86_64, ZIP](https://github.com/Kiwunaka/codexRS/releases/download/v0.1.0-rc.12/codexrs-v0.1.0-rc.12-windows-x86_64.zip)
+- [Linux x86_64, tar.gz](https://github.com/Kiwunaka/codexRS/releases/download/v0.1.0-rc.12/codexrs-v0.1.0-rc.12-linux-x86_64.tar.gz)
+- [Контрольные суммы SHA-256](https://github.com/Kiwunaka/codexRS/releases/download/v0.1.0-rc.12/SHA256SUMS.txt)
+- [Все релизы и release notes](https://github.com/Kiwunaka/codexRS/releases)
+
+Проверьте архив до распаковки. В Linux выполните
+`grep 'codexrs-v0.1.0-rc.12-linux-x86_64.tar.gz$' SHA256SUMS.txt | sha256sum -c -`.
+В Windows сравните
+`(Get-FileHash .\codexrs-v0.1.0-rc.12-windows-x86_64.zip -Algorithm SHA256).Hash`
+с нужной строкой. Checksum помогает найти повреждение при передаче, но не
+является независимой подписью издателя.
 
 Это неподписанные portable-архивы технического preview. Они не устанавливают
 ярлык в Start Menu, URI handler, деинсталлятор или updater. Распакуйте их в
@@ -213,12 +233,18 @@ cargo run -p codex-app --bin codexrs
 решать понятную задачу или подтверждённую ошибку. Большие функции лучше сначала
 обсудить в issue или Discussions, чтобы до кода согласовать контракт.
 
+- [Задачи для первого контрибьюта](https://github.com/Kiwunaka/codexRS/labels/good%20first%20issue)
+- [Нужна помощь](https://github.com/Kiwunaka/codexRS/labels/help%20wanted)
+- [Обсуждения](https://github.com/Kiwunaka/codexRS/discussions)
 - [План развития](ROADMAP.md)
 - [Матрица паритета с Codex Desktop](docs/parity-matrix.md)
 - [Поддержка](SUPPORT.md)
 - [Безопасность](SECURITY.md)
 - [Кодекс поведения](CODE_OF_CONDUCT.md)
 - [Разбор похожих проектов](docs/prior-art.md)
+
+Если codexRS решает вашу боль, поставьте звезду. Так проект увидит больше людей,
+которые могут помочь с кодом и тестированием.
 
 ## Контрибьюторы
 
@@ -228,7 +254,7 @@ cargo run -p codex-app --bin codexrs
 
 ## Рост проекта
 
-[![История звёзд](https://api.star-history.com/svg?repos=Kiwunaka/codexRS&type=Date)](https://star-history.com/#Kiwunaka/codexRS&Date)
+[![История звёзд](https://api.star-history.com/svg?repos=Kiwunaka/codexRS&type=Date)](https://www.star-history.com/?repos=Kiwunaka%2FcodexRS&type=date&legend=top-left)
 
 ## Лицензия и связь с upstream
 

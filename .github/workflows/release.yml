@@ -142,7 +142,7 @@ jobs:
           Copy-Item target/release/codex-computer-use-overlay.exe $root
           Copy-Item README.md,README.ru.md,README.zh-CN.md,LICENSE,CHANGELOG.md,CONTRIBUTING.md,AGENTS.md,ROADMAP.md,SUPPORT.md,SECURITY.md,CODE_OF_CONDUCT.md,THIRD_PARTY_LICENSES.html $root
           Copy-Item docs/architecture.md,docs/parity-matrix.md,docs/platform-support.md,docs/prior-art.md (Join-Path $root "docs")
-          Copy-Item docs/assets/codexrs-hero.png (Join-Path $root "docs/assets")
+          Copy-Item docs/assets/codexrs-hero-v2.png (Join-Path $root "docs/assets")
           Compress-Archive -Path $root -DestinationPath "dist/$name.zip"
 
       - name: Package Linux
@@ -156,7 +156,7 @@ jobs:
           install -m 0755 target/release/codexrs "${root}/codexrs"
           cp README.md README.ru.md README.zh-CN.md LICENSE CHANGELOG.md CONTRIBUTING.md AGENTS.md ROADMAP.md SUPPORT.md SECURITY.md CODE_OF_CONDUCT.md THIRD_PARTY_LICENSES.html "${root}/"
           cp docs/architecture.md docs/parity-matrix.md docs/platform-support.md docs/prior-art.md "${root}/docs/"
-          cp docs/assets/codexrs-hero.png "${root}/docs/assets/"
+          cp docs/assets/codexrs-hero-v2.png "${root}/docs/assets/"
           tar -C dist -czf "dist/${name}.tar.gz" "${name}"
 
       - name: Linux archive desktop startup smoke
