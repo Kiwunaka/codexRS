@@ -258,6 +258,17 @@ fn right_panels_hide_for_width_transition(
             && matches!(previous, None | Some(ShellWidthClass::Wide)))
 }
 
+fn thread_find_right_offset_for_shell(
+    width_class: Option<ShellWidthClass>,
+    inline_offset: f32,
+) -> f32 {
+    if width_class == Some(ShellWidthClass::Wide) {
+        inline_offset
+    } else {
+        16.0
+    }
+}
+
 fn task_workspace_active(route: MainRoute, selected_task_id: Option<&str>) -> bool {
     route == MainRoute::Tasks && selected_task_id.is_some()
 }
@@ -12109,7 +12120,10 @@ impl WorkspaceView {
         if self.state.terminal_dock_open
             && self.state.terminal.location == TerminalDockLocation::Right
         {
-            return self.terminal_right_width + 16.0;
+            return thread_find_right_offset_for_shell(
+                self.shell_width_class,
+                self.terminal_right_width + 16.0,
+            );
         }
         let inspector_width = match self.state.inspector {
             InspectorPane::Changes => CHANGES_INSPECTOR_WIDTH,
@@ -12124,7 +12138,7 @@ impl WorkspaceView {
                 INSPECTOR_WIDTH
             }
         };
-        inspector_width + 16.0
+        thread_find_right_offset_for_shell(self.shell_width_class, inspector_width + 16.0)
     }
 
     fn render_thread_find_bar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
@@ -45574,8 +45588,8 @@ mod tests {
         settings_section_matches, settings_section_refreshes_account, shell_width_class,
         sidebar_layout_width, split_diff_rows, startup_recovery_card, status_context_total_label,
         status_rate_limit_label, status_rate_limit_reset_metadata_at, task_slot_id,
-        task_workspace_active, terminal_tab_label, timeline_activity_content,
-        turn_diff_update_is_accepted, usage_limit_reset_summary_copy,
+        task_workspace_active, terminal_tab_label, thread_find_right_offset_for_shell,
+        timeline_activity_content, turn_diff_update_is_accepted, usage_limit_reset_summary_copy,
         usage_settings_requires_sign_in, validate_plugin_logo_dimensions, worktree_fork_queue_full,
         worktree_use_disabled,
     };
@@ -47731,6 +47745,19 @@ mod tests {
             Some(ShellWidthClass::Compact),
             ShellWidthClass::Compact,
         ));
+        assert_eq!(
+            thread_find_right_offset_for_shell(Some(ShellWidthClass::Wide), 696.0),
+            696.0
+        );
+        assert_eq!(
+            thread_find_right_offset_for_shell(Some(ShellWidthClass::Compact), 696.0),
+            16.0
+        );
+        assert_eq!(
+            thread_find_right_offset_for_shell(Some(ShellWidthClass::Narrow), 696.0),
+            16.0
+        );
+        assert_eq!(thread_find_right_offset_for_shell(None, 696.0), 16.0);
     }
 
     #[test]
