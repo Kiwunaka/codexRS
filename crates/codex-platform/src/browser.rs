@@ -28,6 +28,8 @@ use crate::browser_agent::{
     BrowserAgentBridge, BrowserAgentNotification, BrowserAgentRequest, BrowserAgentRpcError,
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 #[cfg(windows)]
 use std::os::windows::io::AsRawHandle;
 #[cfg(windows)]
@@ -456,7 +458,7 @@ impl BrowserSession {
         let executable = config
             .executable
             .clone()
-            .filter(|path| path.is_file())
+            .filter(|path| is_browser_executable(path))
             .or_else(resolve_browser_binary)
             .ok_or(BrowserError::MissingBrowser)?;
         fs::create_dir_all(&config.profile_dir).map_err(BrowserError::Profile)?;
@@ -781,7 +783,7 @@ pub fn resolve_browser_binary() -> Option<PathBuf> {
     if let Some(configured) = std::env::var_os("CODEX_RS_BROWSER_BIN")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .filter(|path| path.is_file())
+        .filter(|path| is_browser_executable(path))
     {
         return Some(configured);
     }
@@ -967,16 +969,36 @@ fn safe_absolute_path(path: PathBuf) -> Option<PathBuf> {
 
 fn find_path_executable(names: &[&str]) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
-    for directory in std::env::split_paths(&path) {
+    find_path_executable_in(std::env::split_paths(&path), names)
+}
+
+fn find_path_executable_in(
+    directories: impl IntoIterator<Item = PathBuf>,
+    names: &[&str],
+) -> Option<PathBuf> {
+    for directory in directories {
         if let Some(candidate) = names
             .iter()
             .map(|name| directory.join(name))
-            .find(|candidate| candidate.is_file())
+            .find(|candidate| is_browser_executable(candidate))
         {
             return Some(candidate);
         }
     }
     None
+}
+
+fn is_browser_executable(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        path.metadata()
+            .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+    }
+
+    #[cfg(not(unix))]
+    {
+        path.is_file()
+    }
 }
 
 fn send_command(
@@ -4997,6 +5019,8 @@ mod tests {
     use std::fs;
     use std::io::{self, Read as _, Write as _};
     use std::net::TcpListener;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -5028,6 +5052,8 @@ mod tests {
         MAX_XDG_USER_DIRS_BYTES, decode_xdg_double_quoted, linux_user_dirs_config_path,
         parse_xdg_download_dir, read_xdg_download_dir,
     };
+    #[cfg(unix)]
+    use super::{find_path_executable_in, is_browser_executable};
 
     fn runtime_value(
         cdp: &mut CdpClient,
@@ -5055,6 +5081,45 @@ mod tests {
             .pointer("/result/value")
             .cloned()
             .ok_or_else(|| io::Error::other("Chromium did not return a WebUI value"))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_browser_resolver_requires_an_executable_file() -> Result<(), Box<dyn Error>> {
+        let root = std::env::temp_dir().join(format!(
+            "codexrs-browser-resolver-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
+        ));
+        let result = (|| {
+            let first = root.join("first");
+            let second = root.join("second");
+            fs::create_dir_all(&first)?;
+            fs::create_dir_all(&second)?;
+            let non_executable = first.join("chromium");
+            let executable = second.join("chromium");
+            fs::write(&non_executable, b"not executable")?;
+            fs::write(&executable, b"executable")?;
+
+            let mut non_executable_permissions = fs::metadata(&non_executable)?.permissions();
+            non_executable_permissions.set_mode(0o644);
+            fs::set_permissions(&non_executable, non_executable_permissions)?;
+            let mut executable_permissions = fs::metadata(&executable)?.permissions();
+            executable_permissions.set_mode(0o100);
+            fs::set_permissions(&executable, executable_permissions)?;
+
+            assert!(!is_browser_executable(&first));
+            assert!(!is_browser_executable(&non_executable));
+            assert!(is_browser_executable(&executable));
+            assert_eq!(
+                find_path_executable_in(vec![first, second], &["chromium"]),
+                Some(executable)
+            );
+            Ok::<(), io::Error>(())
+        })();
+        let _ = fs::remove_dir_all(&root);
+        result?;
+        Ok(())
     }
 
     #[test]

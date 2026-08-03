@@ -57,9 +57,10 @@ use codex_core::{
     STANDARD_SERVICE_TIER_ID, ServiceTierOption, SkillCard, SkillScope, TaskRunStatus,
     TaskSearchResult, TaskSummary, TerminalDockLocation, TerminalTabState, ThreadGoalStatus,
     TimelineCitation, TimelineItem, TimelineKind, UsageLimitWindow, UserInputAnswer,
-    UserInputAnswers, UserInputRequest, appearance_code_theme_supports_variant,
-    composer_plugin_display_name, composer_plugin_is_mentionable, is_appearance_code_theme_id,
-    reduce, selected_thread_runtime_ready, validate_mcp_form_content,
+    UserInputAnswers, UserInputRequest, account_auth_refresh_blocked,
+    appearance_code_theme_supports_variant, composer_plugin_display_name,
+    composer_plugin_is_mentionable, is_appearance_code_theme_id, reduce,
+    selected_thread_runtime_ready, validate_mcp_form_content,
 };
 use codex_platform::{
     BackgroundCompletionNotifier, computer_use_platform_available, default_browser_download_dir,
@@ -1272,6 +1273,18 @@ fn is_supported_external_url(url: &str) -> bool {
             .is_some_and(|uri| {
                 matches!(uri.scheme_str(), Some("https" | "http")) && uri.host().is_some()
             })
+}
+
+fn mcp_authentication_start_is_accepted(
+    name: &str,
+    pending_name: Option<&str>,
+    stored_scope: Option<Option<&str>>,
+    thread_id: Option<&str>,
+    selected_task_id: Option<&str>,
+) -> bool {
+    pending_name == Some(name)
+        && stored_scope == Some(thread_id)
+        && thread_id.is_none_or(|thread_id| selected_task_id == Some(thread_id))
 }
 
 fn selected_approval_request(state: &AppState) -> Option<&ApprovalRequest> {
@@ -3513,7 +3526,7 @@ impl PaletteCommand {
     }
 
     const fn requires_task_workspace(self) -> bool {
-        matches!(self, Self::ToggleReviewPanel)
+        matches!(self, Self::FindInThread | Self::ToggleReviewPanel)
     }
 
     const fn requires_repository(self) -> bool {
@@ -7096,7 +7109,21 @@ impl WorkspaceView {
                 Action::McpServerAuthenticationStarted {
                     name,
                     authorization_url,
-                } => Some((name.clone(), authorization_url.clone())),
+                    thread_id,
+                } if mcp_authentication_start_is_accepted(
+                    name,
+                    self.state.marketplace.pending_mcp_auth_name.as_deref(),
+                    self.state
+                        .marketplace
+                        .mcp_auth_scopes
+                        .get(name)
+                        .map(|scope| scope.as_deref()),
+                    thread_id.as_deref(),
+                    self.state.selected_task_id.as_deref(),
+                ) =>
+                {
+                    Some((name.clone(), authorization_url.clone(), thread_id.clone()))
+                }
                 _ => None,
             };
             let account_authentication = match &action {
@@ -7263,12 +7290,13 @@ impl WorkspaceView {
             if let Some(authorization_url) = account_authentication {
                 self.open_account_login_url(&authorization_url, cx);
             }
-            if let Some((name, authorization_url)) = mcp_authentication {
+            if let Some((name, authorization_url, thread_id)) = mcp_authentication {
                 if is_supported_external_url(&authorization_url) {
                     cx.open_url(&authorization_url);
                 } else {
                     self.dispatch(
                         Action::McpServerAuthenticationCompleted {
+                            thread_id,
                             name,
                             success: false,
                             error: Some(
@@ -35915,6 +35943,7 @@ impl WorkspaceView {
     fn render_profile_settings(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let account = self.state.account.clone();
         let loading = account.status == LoadStatus::Loading;
+        let refresh_disabled = account_refresh_disabled(&account);
         let device_code = account_device_code(&account);
         let mut cards = Vec::new();
 
@@ -35947,6 +35976,7 @@ impl WorkspaceView {
                         Button::new("retry-account-profile")
                             .label("Retry")
                             .small()
+                            .disabled(refresh_disabled)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.dispatch(Action::RefreshAccount, cx);
                             })),
@@ -36223,7 +36253,7 @@ impl WorkspaceView {
                         Button::new("refresh-account-profile")
                             .label(if loading { "Refreshing…" } else { "Refresh" })
                             .small()
-                            .disabled(loading)
+                            .disabled(refresh_disabled)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.dispatch(Action::RefreshAccount, cx);
                             })),
@@ -36244,6 +36274,7 @@ impl WorkspaceView {
     fn render_usage_settings(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let account = self.state.account.clone();
         let loading = account.status == LoadStatus::Loading;
+        let refresh_disabled = account_refresh_disabled(&account);
         let mut cards = Vec::new();
 
         if account.status == LoadStatus::Failed {
@@ -36275,6 +36306,7 @@ impl WorkspaceView {
                         Button::new("retry-account-usage")
                             .label("Retry")
                             .small()
+                            .disabled(refresh_disabled)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.dispatch(Action::RefreshAccount, cx);
                             })),
@@ -36515,7 +36547,7 @@ impl WorkspaceView {
                         Button::new("refresh-account-usage")
                             .label(if loading { "Refreshing…" } else { "Refresh" })
                             .small()
-                            .disabled(loading)
+                            .disabled(refresh_disabled)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.dispatch(Action::RefreshAccount, cx);
                             })),
@@ -45162,6 +45194,10 @@ const fn settings_section_refreshes_account(section: SettingsSection) -> bool {
     matches!(section, SettingsSection::Profile | SettingsSection::Usage)
 }
 
+fn account_refresh_disabled(account: &AccountState) -> bool {
+    account.status == LoadStatus::Loading || account_auth_refresh_blocked(account.auth_operation)
+}
+
 fn usage_settings_requires_sign_in(account: &AccountState) -> bool {
     account.status == LoadStatus::Ready
         && account.profile.is_none()
@@ -45567,19 +45603,20 @@ mod tests {
         MODEL_AVAILABILITY_NUX_SOL_COPY, NavigationHistory, NavigationLocation, PaletteCommand,
         PaletteGroup, ReasoningEffortStep, SettingsSection, ShellWidthClass, TaskCopyKind,
         ThreadFindSurface, accelerators_conflict, account_daily_usage_rows, account_device_code,
-        adjacent_task_id, app_chatgpt_url, app_mention_prompt, appearance_color,
-        appearance_color_value, appearance_theme_share_string, archived_chat_groups,
-        archived_chat_projects, archived_delete_confirmation_copy, background_chat_running_count,
-        background_chat_window_title, background_completion_notification_transition,
-        background_terminal_summary, bedrock_workspace_notice,
-        bottom_terminal_panel_toggle_available, bounded_keyboard_shortcut_search_query,
-        bounded_settings_search_query, bounded_thread_find_query, browser_display_url,
-        browser_navigation_url, browser_surface_coordinates, build_plugin_catalog_sections,
-        case_insensitive_match_ranges, command_task_slot, composer_app_commands,
-        composer_at_skill_commands, composer_desktop_app_commands, composer_file_query,
-        composer_file_search_max_height, composer_model_picker_items, composer_model_placeholder,
-        composer_plugin_commands, composer_service_tier_command_for_query,
-        composer_service_tier_commands, composer_skill_command_for_query, composer_skill_commands,
+        account_refresh_disabled, adjacent_task_id, app_chatgpt_url, app_mention_prompt,
+        appearance_color, appearance_color_value, appearance_theme_share_string,
+        archived_chat_groups, archived_chat_projects, archived_delete_confirmation_copy,
+        background_chat_running_count, background_chat_window_title,
+        background_completion_notification_transition, background_terminal_summary,
+        bedrock_workspace_notice, bottom_terminal_panel_toggle_available,
+        bounded_keyboard_shortcut_search_query, bounded_settings_search_query,
+        bounded_thread_find_query, browser_display_url, browser_navigation_url,
+        browser_surface_coordinates, build_plugin_catalog_sections, case_insensitive_match_ranges,
+        command_task_slot, composer_app_commands, composer_at_skill_commands,
+        composer_desktop_app_commands, composer_file_query, composer_file_search_max_height,
+        composer_model_picker_items, composer_model_placeholder, composer_plugin_commands,
+        composer_service_tier_command_for_query, composer_service_tier_commands,
+        composer_skill_command_for_query, composer_skill_commands,
         composer_slash_command_for_prefix, connection_send_failure, decode_mcp_form_image_data_url,
         default_branch_name, diff_file_review_rows, diff_file_sections,
         extract_code_comment_findings, fetch_plugin_logo_blocking, find_timeline_matches,
@@ -45591,10 +45628,10 @@ mod tests {
         is_supported_external_url, is_supported_plugin_logo_url, is_terminal_shortcut_key,
         keyboard_shortcut_search_matches, keyboard_shortcut_settings_matches,
         keyboard_shortcut_stable_order, linked_pull_request_merge_command_enabled,
-        mcp_auth_status_label, modal_surface_max_height, modal_surface_width,
-        model_availability_nux_candidate, model_upgrade_learn_more_visible, normalized_accelerator,
-        output_artifact_type_label, parse_appearance_theme_share_string, parse_mcp_list,
-        parse_mcp_record, parse_unified_diff, plugin_logo_format,
+        mcp_auth_status_label, mcp_authentication_start_is_accepted, modal_surface_max_height,
+        modal_surface_width, model_availability_nux_candidate, model_upgrade_learn_more_visible,
+        normalized_accelerator, output_artifact_type_label, parse_appearance_theme_share_string,
+        parse_mcp_list, parse_mcp_record, parse_unified_diff, plugin_logo_format,
         process_manager_auto_refresh_allowed, project_trigger_matches, project_workspace_options,
         pull_request_merge_submission_enabled, reasoning_effort_target, reduced_motion_enabled,
         remote_control_status_label, render_conversation_markdown, replace_composer_file_query,
@@ -47031,6 +47068,7 @@ mod tests {
         assert!(!PaletteCommand::ToggleReviewPanel.requires_selected_chat());
         assert!(PaletteCommand::ToggleReviewPanel.requires_task_workspace());
         assert!(!PaletteCommand::FindInThread.requires_selected_chat());
+        assert!(PaletteCommand::FindInThread.requires_task_workspace());
         assert!(PaletteCommand::ToggleTerminal.requires_selected_chat());
         assert!(PaletteCommand::LogOut.requires_account());
         assert!(!PaletteCommand::Feedback.requires_account());
@@ -48126,6 +48164,19 @@ mod tests {
             requires_openai_auth: true,
             ..AccountState::default()
         };
+        assert!(!account_refresh_disabled(&account));
+        account.status = LoadStatus::Loading;
+        assert!(account_refresh_disabled(&account));
+        account.status = LoadStatus::Ready;
+        for operation in [
+            AccountAuthOperation::StartingLogin,
+            AccountAuthOperation::AwaitingLogin,
+            AccountAuthOperation::CancelingLogin,
+        ] {
+            account.auth_operation = operation;
+            assert!(account_refresh_disabled(&account));
+        }
+        account.auth_operation = AccountAuthOperation::Idle;
         assert!(usage_settings_requires_sign_in(&account));
         account.auth_operation = AccountAuthOperation::LoggingOut;
         assert!(!usage_settings_requires_sign_in(&account));
@@ -48852,6 +48903,45 @@ mod tests {
         ));
         assert!(!is_supported_external_url("javascript:alert(1)"));
         assert!(!is_supported_external_url("file:///tmp/app.html"));
+    }
+
+    #[test]
+    fn mcp_authentication_side_effect_requires_pending_current_start() {
+        assert!(mcp_authentication_start_is_accepted(
+            "github",
+            Some("github"),
+            Some(Some("task-a")),
+            Some("task-a"),
+            Some("task-a")
+        ));
+        assert!(!mcp_authentication_start_is_accepted(
+            "github",
+            Some("github"),
+            Some(Some("task-a")),
+            Some("task-a"),
+            Some("task-b")
+        ));
+        assert!(!mcp_authentication_start_is_accepted(
+            "github",
+            Some("calendar"),
+            Some(None),
+            None,
+            Some("task-b")
+        ));
+        assert!(mcp_authentication_start_is_accepted(
+            "github",
+            Some("github"),
+            Some(None),
+            None,
+            Some("task-b")
+        ));
+        assert!(!mcp_authentication_start_is_accepted(
+            "github",
+            Some("github"),
+            Some(None),
+            Some("task-b"),
+            Some("task-b")
+        ));
     }
 
     #[test]

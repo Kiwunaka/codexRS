@@ -2524,6 +2524,7 @@ pub struct MarketplaceState {
     pub pending_app_id: Option<String>,
     pub pending_mcp_key: Option<String>,
     pub pending_mcp_auth_name: Option<String>,
+    pub mcp_auth_scopes: HashMap<String, Option<String>>,
     pub mcp_mutation_error: Option<String>,
     pub pending_skill_path: Option<PathBuf>,
     pub pending_plugin_skill_name: Option<String>,
@@ -3765,6 +3766,15 @@ pub enum AccountAuthOperation {
     LoggingOut,
 }
 
+pub const fn account_auth_refresh_blocked(operation: AccountAuthOperation) -> bool {
+    matches!(
+        operation,
+        AccountAuthOperation::StartingLogin
+            | AccountAuthOperation::AwaitingLogin
+            | AccountAuthOperation::CancelingLogin
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountState {
     pub status: LoadStatus,
@@ -4183,6 +4193,7 @@ pub struct AppState {
     pub local_projects: Vec<LocalProjectSummary>,
     pub selected_task_id: Option<String>,
     pub new_chat_cwd: Option<PathBuf>,
+    pub new_chat_draft_generation: u64,
     pub timelines: HashMap<String, TimelineState>,
     pub goals: HashMap<String, ThreadGoalState>,
     pub composer: String,
@@ -4249,6 +4260,7 @@ impl Default for AppState {
             local_projects: Vec::new(),
             selected_task_id: None,
             new_chat_cwd: None,
+            new_chat_draft_generation: 0,
             timelines: HashMap::new(),
             goals: HashMap::new(),
             composer: String::new(),
@@ -4489,6 +4501,10 @@ pub enum Action {
         kind: ArchivedTaskDeleteKind,
     },
     TaskCreated(TaskSummary),
+    NewChatTaskCreated {
+        task: TaskSummary,
+        new_chat_draft_generation: u64,
+    },
     TasksLoaded {
         generation: u64,
         tasks: Vec<TaskSummary>,
@@ -4784,6 +4800,7 @@ pub enum Action {
     SubmitComposer,
     ComposerSubmissionFailed {
         task_id: Option<String>,
+        new_chat_draft_generation: Option<u64>,
         prompt: RetryableUserMessage,
         message: String,
     },
@@ -5303,10 +5320,12 @@ pub enum Action {
         name: String,
     },
     McpServerAuthenticationStarted {
+        thread_id: Option<String>,
         name: String,
         authorization_url: String,
     },
     McpServerAuthenticationCompleted {
+        thread_id: Option<String>,
         name: String,
         success: bool,
         error: Option<String>,
@@ -5689,6 +5708,7 @@ pub enum Effect {
         plan_mode: bool,
         goal_objective: Option<String>,
         memory_preferences: Option<ChatMemoryPreferences>,
+        new_chat_draft_generation: u64,
     },
     ForkTask {
         task_id: String,
@@ -5870,21 +5890,25 @@ pub enum Effect {
         request_id: String,
         decision: ApprovalDecision,
     },
+    RespondStandardApproval {
+        request: ApprovalRequest,
+        decision: ApprovalDecision,
+    },
     RespondUserInput {
-        request_id: String,
+        request: UserInputRequest,
         answers: UserInputAnswers,
     },
     RespondMcpElicitation {
-        request_id: String,
+        request: McpElicitation,
         decision: McpElicitationDecision,
         content: Option<McpElicitationContent>,
     },
     RespondBrowserOriginElicitation {
-        request_id: String,
+        request: McpElicitation,
         decision: BrowserOriginElicitationDecision,
     },
     RespondBrowserResourceElicitation {
-        request_id: String,
+        request: McpElicitation,
         decision: BrowserResourceElicitationDecision,
     },
     RefreshMarketplace {
@@ -5970,6 +5994,7 @@ pub enum Effect {
     },
     AuthenticateMcpServer {
         name: String,
+        thread_id: Option<String>,
     },
     ReloadMcpServers {
         generation: u64,
@@ -6848,9 +6873,50 @@ fn change_fuzzy_file_search(state: &mut AppState, query: Option<String>) -> Vec<
     effects
 }
 
+fn clear_mcp_auth_for_context_change(state: &mut AppState, departing_task_id: Option<&str>) {
+    let Some(departing_task_id) = departing_task_id else {
+        return;
+    };
+    let scoped_names = state
+        .marketplace
+        .mcp_auth_scopes
+        .iter()
+        .filter_map(|(name, scope)| {
+            (scope.as_deref() == Some(departing_task_id)).then_some(name.clone())
+        })
+        .collect::<HashSet<_>>();
+    if scoped_names.is_empty() {
+        return;
+    }
+    state
+        .marketplace
+        .mcp_auth_scopes
+        .retain(|_, scope| scope.as_deref() != Some(departing_task_id));
+    if state
+        .marketplace
+        .pending_mcp_auth_name
+        .as_deref()
+        .is_some_and(|name| scoped_names.contains(name))
+    {
+        state.marketplace.pending_mcp_auth_name = None;
+    }
+    for server in state
+        .marketplace
+        .mcp_servers
+        .iter_mut()
+        .chain(&mut state.marketplace.plugin_mcp_servers)
+    {
+        if scoped_names.contains(&server.key) {
+            server.authorization_url = None;
+        }
+    }
+}
+
 fn prepare_new_chat(state: &mut AppState, cwd: Option<PathBuf>) -> Vec<Effect> {
+    let departing_task_id = state.selected_task_id.clone();
     if state.selected_task_id.is_some() || state.new_chat_cwd != cwd {
         clear_git_for_context_change(state);
+        clear_mcp_auth_for_context_change(state, departing_task_id.as_deref());
     }
     let mut effects = clear_fuzzy_file_search(state);
     state.route = MainRoute::Tasks;
@@ -6866,6 +6932,7 @@ fn prepare_new_chat(state: &mut AppState, cwd: Option<PathBuf>) -> Vec<Effect> {
     state.chat_memory.new_chat_preferences = None;
     state.composer_controls.plan_mode = false;
     state.composer_controls.goal_mode = false;
+    advance_new_chat_draft_generation(state);
     state.marketplace.skills_status = Some(LoadStatus::Loading);
     effects.push(Effect::RefreshSkills {
         cwds: composer_workspace_roots(state),
@@ -6883,6 +6950,12 @@ fn prepare_new_chat(state: &mut AppState, cwd: Option<PathBuf>) -> Vec<Effect> {
         inspector: state.inspector,
     });
     effects
+}
+
+fn advance_new_chat_draft_generation(state: &mut AppState) {
+    if state.selected_task_id.is_none() {
+        state.new_chat_draft_generation = state.new_chat_draft_generation.wrapping_add(1);
+    }
 }
 
 fn clear_active_composer_draft(state: &mut AppState) {
@@ -7067,6 +7140,26 @@ fn clear_pull_request_diff(state: &mut AppState) {
     state.pull_requests.diff_head_revision = None;
     state.pull_requests.unified_diff.clear();
     state.pull_requests.diff_error = None;
+}
+
+fn invalidate_pull_requests_for_workspace_change(state: &mut AppState) {
+    state.pull_requests.generation = state.pull_requests.generation.saturating_add(1);
+    state.pull_requests.detail_generation = state.pull_requests.detail_generation.saturating_add(1);
+    state.pull_requests.diff_generation = state.pull_requests.diff_generation.saturating_add(1);
+    state.pull_requests.status = LoadStatus::Idle;
+    state.pull_requests.items.clear();
+    state.pull_requests.total_count = 0;
+    state.pull_requests.next_cursor = None;
+    state.pull_requests.truncated = false;
+    state.pull_requests.loading_more = false;
+    state.pull_requests.selected = None;
+    state.pull_requests.detail_status = LoadStatus::Idle;
+    state.pull_requests.detail = None;
+    state.pull_requests.error = None;
+    state.pull_requests.detail_error = None;
+    state.pull_requests.detail_tab = PullRequestDetailTab::Summary;
+    state.pull_requests.mutation_error = None;
+    clear_pull_request_diff(state);
 }
 
 fn begin_pull_request_diff(state: &mut AppState) -> Vec<Effect> {
@@ -8650,13 +8743,17 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     Some("The selected project folder is unavailable.".to_owned());
                 Vec::new()
             } else {
-                if state.new_chat_cwd.as_ref() != Some(&path) {
+                let workspace_changed = state.new_chat_cwd.as_ref() != Some(&path);
+                if workspace_changed {
                     clear_git_for_context_change(state);
                 }
                 remember_local_project(state, &path);
                 let mut effects = clear_fuzzy_file_search(state);
                 state.route = MainRoute::Tasks;
                 state.new_chat_cwd = Some(path.clone());
+                if workspace_changed {
+                    advance_new_chat_draft_generation(state);
+                }
                 state.marketplace.skills_status = Some(LoadStatus::Loading);
                 effects.push(Effect::RefreshSkills {
                     cwds: composer_workspace_roots(state),
@@ -8734,6 +8831,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             if state.selected_task_id.is_none() && state.new_chat_cwd.as_ref() == Some(&path) {
                 effects = clear_fuzzy_file_search(state);
                 state.new_chat_cwd = None;
+                advance_new_chat_draft_generation(state);
                 state.marketplace.skills_status = Some(LoadStatus::Loading);
                 effects.push(Effect::RefreshSkills {
                     cwds: Vec::new(),
@@ -9007,6 +9105,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 .approvals
                 .retain(|approval| approval.task_id != task_id);
             if state.selected_task_id.as_deref() == Some(task_id.as_str()) {
+                clear_mcp_auth_for_context_change(state, Some(task_id.as_str()));
                 state.selected_task_id = None;
                 state.artifacts = ArtifactState::default();
                 clear_active_composer_draft(state);
@@ -9215,6 +9314,49 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             });
             Vec::new()
         }
+        Action::NewChatTaskCreated {
+            task,
+            new_chat_draft_generation,
+        } => {
+            if state.selected_task_id.is_none()
+                && state.new_chat_draft_generation == new_chat_draft_generation
+            {
+                return reduce(state, Action::TaskCreated(task));
+            }
+
+            let selected_task = state
+                .selected_task_id
+                .as_deref()
+                .and_then(|selected_task_id| {
+                    state
+                        .tasks
+                        .iter()
+                        .find(|existing| existing.id == selected_task_id)
+                        .cloned()
+                });
+            let task_id = task.id.clone();
+            state.tasks.retain(|existing| existing.id != task_id);
+            state.tasks.insert(0, task);
+            state.tasks.truncate(MAX_VISIBLE_THREADS);
+            if let Some(selected_task) = selected_task
+                && !state
+                    .tasks
+                    .iter()
+                    .any(|existing| existing.id == selected_task.id)
+                && let Some(last_task) = state.tasks.last_mut()
+            {
+                *last_task = selected_task;
+            }
+            state
+                .timelines
+                .entry(task_id.clone())
+                .or_insert(TimelineState {
+                    runtime_status_loaded: true,
+                    ..TimelineState::default()
+                });
+            state.goals.entry(task_id).or_default();
+            Vec::new()
+        }
         Action::TaskCreated(task) => {
             let task_id = task.id.clone();
             let cwd = task.cwd.clone();
@@ -9224,6 +9366,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 || previous_cwd.as_ref() != Some(&cwd);
             if previous_task_id.as_deref() != Some(task_id.as_str()) {
                 clear_active_composer_draft(state);
+                clear_mcp_auth_for_context_change(state, previous_task_id.as_deref());
             }
             remember_local_project(state, &cwd);
             state.new_chat_cwd = None;
@@ -9387,6 +9530,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             if task_changed {
                 state.artifacts = ArtifactState::default();
                 state.marketplace.mcp_resource_read = McpResourceReadState::default();
+                clear_mcp_auth_for_context_change(state, previous_task_id.as_deref());
                 state.marketplace.selected_app_id = None;
                 state.marketplace.app_detail_status = None;
                 state.marketplace.app_detail = None;
@@ -9412,6 +9556,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 || previous_cwd != selected_cwd;
             if git_context_changed {
                 clear_git_for_context_change(state);
+            }
+            if previous_cwd != selected_cwd {
+                invalidate_pull_requests_for_workspace_change(state);
             }
             let mut effects = selected_cwd.map_or_else(Vec::new, |cwd| {
                 let generation = next_git_refresh_generation(state);
@@ -10399,6 +10546,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             preferences.use_memories = enabled;
             state.chat_memory.new_chat_preferences = Some(preferences);
+            advance_new_chat_draft_generation(state);
             Vec::new()
         }
         Action::SetChatGenerateMemories(enabled) => {
@@ -10413,6 +10561,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 }
                 preferences.generate_memories = enabled;
                 state.chat_memory.new_chat_preferences = Some(preferences);
+                advance_new_chat_draft_generation(state);
                 return Vec::new();
             };
             if state.connection != ConnectionStatus::Online
@@ -10902,6 +11051,13 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }]
         }
         Action::SelectModel(model_id) => {
+            let previous_settings = (state.selected_task_id.is_none()).then(|| {
+                (
+                    state.composer_controls.selected_model.clone(),
+                    state.composer_controls.selected_effort.clone(),
+                    state.composer_controls.selected_service_tier.clone(),
+                )
+            });
             let Some(model) = state
                 .composer_controls
                 .models
@@ -10945,6 +11101,16 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 None => None,
             };
             state.composer_controls.selected_service_tier = selected_service_tier.clone();
+            if previous_settings.is_some_and(|previous| {
+                previous
+                    != (
+                        state.composer_controls.selected_model.clone(),
+                        state.composer_controls.selected_effort.clone(),
+                        state.composer_controls.selected_service_tier.clone(),
+                    )
+            }) {
+                advance_new_chat_draft_generation(state);
+            }
             if let Some(task_id) = state.selected_task_id.clone() {
                 return vec![Effect::UpdateThreadSettings {
                     task_id,
@@ -11014,7 +11180,13 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                         .any(|effort| effort.id == effort_id)
                 });
             if valid {
+                let changed = state.selected_task_id.is_none()
+                    && state.composer_controls.selected_effort.as_deref()
+                        != Some(effort_id.as_str());
                 state.composer_controls.selected_effort = Some(effort_id.clone());
+                if changed {
+                    advance_new_chat_draft_generation(state);
+                }
                 if let Some(task_id) = state.selected_task_id.clone() {
                     return vec![Effect::UpdateThreadSettings {
                         task_id,
@@ -11043,6 +11215,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::SelectServiceTier(service_tier_id) => {
+            let previous_service_tier = state.composer_controls.selected_service_tier.clone();
             let selected = if service_tier_id == STANDARD_SERVICE_TIER_ID {
                 None
             } else {
@@ -11069,6 +11242,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 Some(service_tier_id)
             };
             state.composer_controls.selected_service_tier = selected.clone();
+            if state.selected_task_id.is_none() && previous_service_tier != selected {
+                advance_new_chat_draft_generation(state);
+            }
             if let Some(task_id) = state.selected_task_id.clone() {
                 return vec![Effect::UpdateThreadSettings {
                     task_id,
@@ -11099,7 +11275,13 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             let Some(mode) = mode else {
                 return Vec::new();
             };
+            let changed = state.selected_task_id.is_none()
+                && state.composer_controls.selected_permission_mode.as_deref()
+                    != Some(mode_id.as_str());
             state.composer_controls.selected_permission_mode = Some(mode_id);
+            if changed {
+                advance_new_chat_draft_generation(state);
+            }
             state
                 .selected_task_id
                 .clone()
@@ -11122,6 +11304,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     state.composer_controls.goal_mode = false;
                 }
                 state.composer_error = None;
+                advance_new_chat_draft_generation(state);
             } else {
                 state.composer_error = Some("Choose a model before enabling Plan mode.".to_owned());
             }
@@ -11137,13 +11320,18 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     state.composer_controls.plan_mode = false;
                 }
                 state.composer_error = None;
+                advance_new_chat_draft_generation(state);
             }
             Vec::new()
         }
         Action::ComposerChanged(text) => {
             if text.len() <= MAX_COMPOSER_BYTES {
+                let changed = state.composer != text;
                 state.composer = text;
                 state.composer_error = None;
+                if changed {
+                    advance_new_chat_draft_generation(state);
+                }
             } else {
                 state.composer_error = Some("Message exceeds the 256 KiB limit.".to_owned());
             }
@@ -11187,6 +11375,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::AddComposerAttachments(paths) => {
+            let attachment_count = state.composer_attachments.len();
             for path in paths {
                 if state.composer_attachments.len() >= MAX_COMPOSER_ATTACHMENTS {
                     state.composer_error = Some(format!(
@@ -11204,6 +11393,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 {
                     state.composer_attachments.push(attachment);
                 }
+            }
+            if state.composer_attachments.len() != attachment_count {
+                advance_new_chat_draft_generation(state);
             }
             Vec::new()
         }
@@ -11231,6 +11423,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     kind: ComposerAttachmentKind::Skill,
                 });
                 state.composer_error = None;
+                advance_new_chat_draft_generation(state);
             }
             Vec::new()
         }
@@ -11260,6 +11453,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     kind: ComposerAttachmentKind::App,
                 });
                 state.composer_error = None;
+                advance_new_chat_draft_generation(state);
             }
             Vec::new()
         }
@@ -11297,6 +11491,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     kind: ComposerAttachmentKind::Plugin,
                 });
                 state.composer_error = None;
+                advance_new_chat_draft_generation(state);
             }
             if plugin.installed {
                 Vec::new()
@@ -11357,6 +11552,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     kind: ComposerAttachmentKind::Plugin,
                 });
                 state.composer_error = None;
+                advance_new_chat_draft_generation(state);
             }
             if plugin.installed {
                 Vec::new()
@@ -11375,6 +11571,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             if index < state.composer_attachments.len() {
                 state.composer_attachments.remove(index);
                 state.composer_error = None;
+                advance_new_chat_draft_generation(state);
             }
             Vec::new()
         }
@@ -11591,6 +11788,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     plan_mode: false,
                     goal_objective: Some(text),
                     memory_preferences: state.chat_memory.new_chat_preferences,
+                    new_chat_draft_generation: state.new_chat_draft_generation,
                 }];
             }
             if text.is_empty() && state.composer_attachments.is_empty() {
@@ -11672,16 +11870,24 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     plan_mode,
                     goal_objective: None,
                     memory_preferences: state.chat_memory.new_chat_preferences,
+                    new_chat_draft_generation: state.new_chat_draft_generation,
                 }]
             }
         }
         Action::ComposerSubmissionFailed {
             task_id,
+            new_chat_draft_generation,
             mut prompt,
             message,
         } => {
             state.status_message = Some(bounded_string(message, 16 * 1024));
-            if state.selected_task_id == task_id {
+            let owns_task = task_id
+                .as_deref()
+                .is_some_and(|task_id| state.selected_task_id.as_deref() == Some(task_id));
+            let owns_new_chat_draft = task_id.is_none()
+                && state.selected_task_id.is_none()
+                && new_chat_draft_generation == Some(state.new_chat_draft_generation);
+            if owns_task || owns_new_chat_draft {
                 normalize_retryable_user_message(&mut prompt);
                 restore_retry_prompt(state, &prompt);
             }
@@ -12168,11 +12374,17 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 .iter()
                 .position(|request| request.request_id == request_id);
             if let Some(position) = position {
-                state.approvals.remove(position);
-                vec![Effect::RespondApproval {
-                    request_id,
-                    decision,
-                }]
+                let Some(request) = state.approvals.remove(position) else {
+                    return Vec::new();
+                };
+                if request.kind == ApprovalKind::DynamicTool {
+                    vec![Effect::RespondApproval {
+                        request_id,
+                        decision,
+                    }]
+                } else {
+                    vec![Effect::RespondStandardApproval { request, decision }]
+                }
             } else {
                 Vec::new()
             }
@@ -12219,11 +12431,10 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.status_message = Some("The structured input response is invalid.".to_owned());
                 return Vec::new();
             }
-            state.user_input_requests.remove(position);
-            vec![Effect::RespondUserInput {
-                request_id,
-                answers,
-            }]
+            let Some(request) = state.user_input_requests.remove(position) else {
+                return Vec::new();
+            };
+            vec![Effect::RespondUserInput { request, answers }]
         }
         Action::McpElicitationRequested(mut request) => {
             if state
@@ -12296,9 +12507,11 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 ) => None,
                 (_, McpElicitationDecision::Decline | McpElicitationDecision::Cancel) => None,
             };
-            state.mcp_elicitations.remove(position);
+            let Some(request) = state.mcp_elicitations.remove(position) else {
+                return Vec::new();
+            };
             vec![Effect::RespondMcpElicitation {
-                request_id,
+                request,
                 decision,
                 content,
             }]
@@ -12331,7 +12544,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                         .find(|site| site.origin == request.origin)
                         .cloned()
                         .unwrap_or(BrowserSitePermission {
-                            origin: request.origin,
+                            origin: request.origin.clone(),
                             browse: BrowserPermissionValue::Default,
                             download: BrowserPermissionValue::Default,
                             upload: BrowserPermissionValue::Default,
@@ -12364,7 +12577,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 | BrowserOriginElicitationDecision::Deny => {}
             }
             effects.push(Effect::RespondBrowserOriginElicitation {
-                request_id,
+                request: McpElicitation::BrowserOrigin(request),
                 decision,
             });
             effects
@@ -12396,7 +12609,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     .find(|site| site.origin == request.origin)
                     .cloned()
                     .unwrap_or(BrowserSitePermission {
-                        origin: request.origin,
+                        origin: request.origin.clone(),
                         browse: BrowserPermissionValue::Default,
                         download: BrowserPermissionValue::Default,
                         upload: BrowserPermissionValue::Default,
@@ -12415,7 +12628,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 }
             }
             effects.push(Effect::RespondBrowserResourceElicitation {
-                request_id,
+                request: McpElicitation::BrowserResource(request),
                 decision,
             });
             effects
@@ -13823,6 +14036,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::RefreshAccount => {
+            if account_auth_refresh_blocked(state.account.auth_operation) {
+                return Vec::new();
+            }
             state.account.status = LoadStatus::Loading;
             state.account.error = None;
             state.account.usage_error = None;
@@ -15466,18 +15682,32 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 return Vec::new();
             }
             state.marketplace.pending_mcp_auth_name = Some(name.clone());
-            vec![Effect::AuthenticateMcpServer { name }]
+            state
+                .marketplace
+                .mcp_auth_scopes
+                .insert(name.clone(), state.selected_task_id.clone());
+            vec![Effect::AuthenticateMcpServer {
+                name,
+                thread_id: state.selected_task_id.clone(),
+            }]
         }
         Action::McpServerAuthenticationStarted {
+            thread_id,
             name,
             authorization_url,
         } => {
-            if state.marketplace.pending_mcp_auth_name.as_deref() != Some(name.as_str()) {
+            if state.marketplace.pending_mcp_auth_name.as_deref() != Some(name.as_str())
+                || state.marketplace.mcp_auth_scopes.get(&name) != Some(&thread_id)
+                || thread_id
+                    .as_deref()
+                    .is_some_and(|thread_id| state.selected_task_id.as_deref() != Some(thread_id))
+            {
                 return Vec::new();
             }
             state.marketplace.pending_mcp_auth_name = None;
             let authorization_url = bounded_string(authorization_url.trim().to_owned(), 8 * 1024);
             if authorization_url.is_empty() {
+                state.marketplace.mcp_auth_scopes.remove(&name);
                 state.status_message =
                     Some("MCP server returned an empty authorization URL.".to_owned());
                 return Vec::new();
@@ -15497,10 +15727,18 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::McpServerAuthenticationCompleted {
+            thread_id,
             name,
             success,
             error,
         } => {
+            if state.marketplace.mcp_auth_scopes.get(&name) != Some(&thread_id)
+                || thread_id
+                    .as_deref()
+                    .is_some_and(|thread_id| state.selected_task_id.as_deref() != Some(thread_id))
+            {
+                return Vec::new();
+            }
             if state
                 .marketplace
                 .pending_mcp_auth_name
@@ -15509,12 +15747,13 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             {
                 state.marketplace.pending_mcp_auth_name = None;
             }
+            state.marketplace.mcp_auth_scopes.remove(&name);
             for server in state
                 .marketplace
                 .mcp_servers
                 .iter_mut()
                 .chain(&mut state.marketplace.plugin_mcp_servers)
-                .filter(|server| server.key == name || server.name == name)
+                .filter(|server| server.key == name)
             {
                 server.authorization_url = None;
             }
@@ -18453,6 +18692,35 @@ mod tests {
         }
     }
 
+    fn oauth_mcp_server(key: &str) -> McpServerCard {
+        McpServerCard {
+            key: key.to_owned(),
+            name: key.to_owned(),
+            enabled: true,
+            read_only: false,
+            transport: Some(McpTransportKind::StreamableHttp),
+            command: String::new(),
+            args: Vec::new(),
+            env: Vec::new(),
+            env_vars: Vec::new(),
+            cwd: String::new(),
+            url: "https://mcp.example/mcp".to_owned(),
+            bearer_token_env_var: String::new(),
+            http_headers: Vec::new(),
+            env_http_headers: Vec::new(),
+            auth_status: McpAuthStatus::NotLoggedIn,
+            authorization_url: None,
+            startup_state: None,
+            startup_error: None,
+            startup_failure_reason: None,
+            server_info: None,
+            tools: Vec::new(),
+            resources: Vec::new(),
+            resource_templates: Vec::new(),
+            inspection_truncated: false,
+        }
+    }
+
     fn pull_request(number: u64) -> PullRequestSummary {
         PullRequestSummary {
             identity: PullRequestIdentity {
@@ -18559,7 +18827,7 @@ mod tests {
             }),
         };
 
-        assert!(reduce(&mut state, Action::ApprovalRequested(request)).is_empty());
+        assert!(reduce(&mut state, Action::ApprovalRequested(request.clone())).is_empty());
         assert_eq!(state.tasks[0].status, TaskRunStatus::WaitingForApproval);
         assert_eq!(
             reduce(
@@ -18569,12 +18837,15 @@ mod tests {
                     decision: ApprovalDecision::AcceptWithExecpolicyAmendment(amendment.clone()),
                 },
             ),
-            vec![Effect::RespondApproval {
-                request_id: "approval-command-1".to_owned(),
+            vec![Effect::RespondStandardApproval {
+                request: request.clone(),
                 decision: ApprovalDecision::AcceptWithExecpolicyAmendment(amendment),
             }]
         );
         assert!(state.approvals.is_empty());
+
+        assert!(reduce(&mut state, Action::ApprovalRequested(request)).is_empty());
+        assert_eq!(state.approvals.len(), 1);
     }
 
     #[test]
@@ -18608,7 +18879,7 @@ mod tests {
             }],
         };
 
-        assert!(reduce(&mut state, Action::UserInputRequested(request)).is_empty());
+        assert!(reduce(&mut state, Action::UserInputRequested(request.clone())).is_empty());
         assert_eq!(state.user_input_requests.len(), 1);
         assert_eq!(state.tasks[0].status, TaskRunStatus::WaitingForApproval);
 
@@ -18627,11 +18898,25 @@ mod tests {
                 }
             ),
             vec![Effect::RespondUserInput {
-                request_id: "request-input-1".to_owned(),
-                answers,
+                request: request.clone(),
+                answers: answers.clone(),
             }]
         );
         assert!(state.user_input_requests.is_empty());
+
+        assert!(reduce(&mut state, Action::UserInputRequested(request)).is_empty());
+        assert_eq!(state.user_input_requests.len(), 1);
+        assert!(matches!(
+            reduce(
+                &mut state,
+                Action::ResolveUserInput {
+                    request_id: "request-input-1".to_owned(),
+                    answers,
+                }
+            )
+            .as_slice(),
+            [Effect::RespondUserInput { .. }]
+        ));
     }
 
     #[test]
@@ -18732,6 +19017,7 @@ mod tests {
             )
             .is_empty()
         );
+        let expected_request = state.mcp_elicitations[0].clone();
         assert_eq!(
             reduce(
                 &mut state,
@@ -18742,7 +19028,7 @@ mod tests {
                 }
             ),
             vec![Effect::RespondMcpElicitation {
-                request_id: "request-1".to_owned(),
+                request: expected_request,
                 decision: McpElicitationDecision::Accept,
                 content: None,
             }]
@@ -18800,7 +19086,7 @@ mod tests {
                 Effect::PersistBrowserPermissions(site_permissions.clone()),
                 Effect::ConfigureBrowserPermissions(site_permissions.clone()),
                 Effect::RespondBrowserOriginElicitation {
-                    request_id: "browser-request-site".to_owned(),
+                    request: request("browser-request-site"),
                     decision: BrowserOriginElicitationDecision::AllowSite,
                 },
             ]
@@ -18832,7 +19118,7 @@ mod tests {
                 Effect::PersistBrowserPermissions(all_permissions.clone()),
                 Effect::ConfigureBrowserPermissions(all_permissions.clone()),
                 Effect::RespondBrowserOriginElicitation {
-                    request_id: "browser-request-all".to_owned(),
+                    request: request("browser-request-all"),
                     decision: BrowserOriginElicitationDecision::AllowAll,
                 },
             ]
@@ -18894,7 +19180,10 @@ mod tests {
                 Effect::PersistBrowserPermissions(expected.clone()),
                 Effect::ConfigureBrowserPermissions(expected.clone()),
                 Effect::RespondBrowserResourceElicitation {
-                    request_id: "browser-resource-always".to_owned(),
+                    request: request(
+                        "browser-resource-always",
+                        BrowserPermissionResource::Download,
+                    ),
                     decision: BrowserResourceElicitationDecision::AlwaysAllow,
                 },
             ]
@@ -18921,7 +19210,10 @@ mod tests {
                 }
             ),
             [Effect::RespondBrowserResourceElicitation {
-                request_id: "browser-resource-session".to_owned(),
+                request: request(
+                    "browser-resource-session",
+                    BrowserPermissionResource::Upload,
+                ),
                 decision: BrowserResourceElicitationDecision::AllowConversation,
             }]
         );
@@ -19017,6 +19309,7 @@ mod tests {
         );
         assert_eq!(state.mcp_elicitations.len(), 1);
 
+        let expected_request = state.mcp_elicitations[0].clone();
         let valid = McpElicitationContent {
             fields: vec![
                 (
@@ -19040,7 +19333,7 @@ mod tests {
                 }
             ),
             vec![Effect::RespondMcpElicitation {
-                request_id: "request-form-1".to_owned(),
+                request: expected_request,
                 decision: McpElicitationDecision::Accept,
                 content: Some(valid),
             }]
@@ -20547,6 +20840,7 @@ mod tests {
             &mut state,
             Action::ComposerChanged("start the implementation".to_owned()),
         );
+        let new_chat_draft_generation = state.new_chat_draft_generation;
         assert_eq!(
             reduce(&mut state, Action::SubmitComposer),
             [Effect::CreateTask {
@@ -20573,6 +20867,7 @@ mod tests {
                 plan_mode: true,
                 goal_objective: None,
                 memory_preferences: None,
+                new_chat_draft_generation,
             }]
         );
         assert!(state.composer.is_empty());
@@ -21074,6 +21369,7 @@ mod tests {
             &mut state,
             Action::ComposerChanged("Reach native parity".to_owned()),
         );
+        let new_chat_draft_generation = state.new_chat_draft_generation;
 
         assert_eq!(
             reduce(&mut state, Action::SubmitComposer),
@@ -21101,6 +21397,7 @@ mod tests {
                 plan_mode: false,
                 goal_objective: Some("Reach native parity".to_owned()),
                 memory_preferences: None,
+                new_chat_draft_generation,
             }]
         );
         assert!(!state.composer_controls.goal_mode);
@@ -21997,6 +22294,7 @@ mod tests {
             &mut state,
             Action::ComposerSubmissionFailed {
                 task_id: Some("t1".to_owned()),
+                new_chat_draft_generation: None,
                 prompt: prompt.clone(),
                 message: "Could not run the shell command.".to_owned(),
             },
@@ -22009,6 +22307,7 @@ mod tests {
             &mut state,
             Action::ComposerSubmissionFailed {
                 task_id: Some("t1".to_owned()),
+                new_chat_draft_generation: None,
                 prompt,
                 message: "late failure".to_owned(),
             },
@@ -22105,6 +22404,7 @@ mod tests {
             &mut state,
             Action::ComposerSubmissionFailed {
                 task_id: Some("t1".to_owned()),
+                new_chat_draft_generation: None,
                 prompt: prompt.clone(),
                 message: "failed to start turn".to_owned(),
             },
@@ -22123,6 +22423,7 @@ mod tests {
             &mut state,
             Action::ComposerSubmissionFailed {
                 task_id: Some("t1".to_owned()),
+                new_chat_draft_generation: None,
                 prompt,
                 message: "late failure".to_owned(),
             },
@@ -22130,6 +22431,258 @@ mod tests {
         assert!(state.composer.is_empty());
         assert!(state.composer_attachments.is_empty());
         assert_eq!(state.status_message.as_deref(), Some("late failure"));
+    }
+
+    #[test]
+    fn late_new_chat_creation_failure_restores_only_the_matching_draft_generation() {
+        let workspace_a = repository_path();
+        let workspace_b = workspace_a.with_file_name("other-workspace");
+        let attachment_a = ComposerAttachment {
+            path: workspace_a.join("request-a.md"),
+            name: "request-a.md".to_owned(),
+            kind: ComposerAttachmentKind::Mention,
+        };
+        let attachment_b = ComposerAttachment {
+            path: workspace_b.join("draft-b.md"),
+            name: "draft-b.md".to_owned(),
+            kind: ComposerAttachmentKind::Mention,
+        };
+
+        let mut state = AppState::default();
+        state.composer_controls.selected_model = Some("gpt-fast".to_owned());
+        state.new_chat_cwd = Some(workspace_a.clone());
+        reduce(
+            &mut state,
+            Action::AddComposerAttachments(vec![attachment_a.path.clone()]),
+        );
+        reduce(&mut state, Action::ComposerChanged("request A".to_owned()));
+        let submission_generation = match reduce(&mut state, Action::SubmitComposer).as_slice() {
+            [
+                Effect::CreateTask {
+                    new_chat_draft_generation,
+                    ..
+                },
+            ] => *new_chat_draft_generation,
+            _ => panic!("new-chat submission should create a task"),
+        };
+
+        reduce(&mut state, Action::TogglePlanMode);
+        reduce(
+            &mut state,
+            Action::SelectComposerWorkspace(workspace_b.clone()),
+        );
+        reduce(
+            &mut state,
+            Action::AddComposerAttachments(vec![attachment_b.path.clone()]),
+        );
+        reduce(&mut state, Action::ComposerChanged("draft B".to_owned()));
+        let newer_generation = state.new_chat_draft_generation;
+        assert_ne!(newer_generation, submission_generation);
+
+        reduce(
+            &mut state,
+            Action::ComposerSubmissionFailed {
+                task_id: None,
+                new_chat_draft_generation: Some(submission_generation),
+                prompt: RetryableUserMessage {
+                    text: "request A".to_owned(),
+                    attachments: vec![attachment_a],
+                },
+                message: "create failed".to_owned(),
+            },
+        );
+        assert_eq!(state.composer, "draft B");
+        assert_eq!(state.composer_attachments, [attachment_b]);
+        assert_eq!(state.new_chat_cwd.as_ref(), Some(&workspace_b));
+        assert!(state.composer_controls.plan_mode);
+
+        let mut untouched = AppState::default();
+        let attachment = ComposerAttachment {
+            path: workspace_a.join("retry.md"),
+            name: "retry.md".to_owned(),
+            kind: ComposerAttachmentKind::Mention,
+        };
+        reduce(
+            &mut untouched,
+            Action::AddComposerAttachments(vec![attachment.path.clone()]),
+        );
+        reduce(
+            &mut untouched,
+            Action::ComposerChanged("retry A".to_owned()),
+        );
+        let matching_generation = match reduce(&mut untouched, Action::SubmitComposer).as_slice() {
+            [
+                Effect::CreateTask {
+                    new_chat_draft_generation,
+                    ..
+                },
+            ] => *new_chat_draft_generation,
+            _ => panic!("new-chat submission should create a task"),
+        };
+        reduce(
+            &mut untouched,
+            Action::ComposerSubmissionFailed {
+                task_id: None,
+                new_chat_draft_generation: Some(matching_generation),
+                prompt: RetryableUserMessage {
+                    text: "retry A".to_owned(),
+                    attachments: vec![attachment.clone()],
+                },
+                message: "create failed".to_owned(),
+            },
+        );
+        assert_eq!(untouched.composer, "retry A");
+        assert_eq!(untouched.composer_attachments, [attachment]);
+    }
+
+    #[test]
+    fn stale_new_chat_creation_keeps_the_newer_draft_and_initializes_the_task() {
+        let workspace_a = repository_path();
+        let workspace_b = workspace_a.with_file_name("newer-workspace");
+        let attachment_a = workspace_a.join("request-a.md");
+        let attachment_b = workspace_b.join("draft-b.md");
+        let mut state = AppState::default();
+        state.composer_controls.selected_model = Some("gpt-fast".to_owned());
+        state.new_chat_cwd = Some(workspace_a.clone());
+        reduce(
+            &mut state,
+            Action::AddComposerAttachments(vec![attachment_a]),
+        );
+        reduce(&mut state, Action::ComposerChanged("request A".to_owned()));
+        let submission_generation = match reduce(&mut state, Action::SubmitComposer).as_slice() {
+            [
+                Effect::CreateTask {
+                    new_chat_draft_generation,
+                    ..
+                },
+            ] => *new_chat_draft_generation,
+            _ => panic!("new-chat submission should create a task"),
+        };
+
+        reduce(&mut state, Action::TogglePlanMode);
+        reduce(
+            &mut state,
+            Action::SelectComposerWorkspace(workspace_b.clone()),
+        );
+        reduce(
+            &mut state,
+            Action::AddComposerAttachments(vec![attachment_b.clone()]),
+        );
+        reduce(&mut state, Action::ComposerChanged("draft B".to_owned()));
+        state.artifacts.selected_path = Some(workspace_b.join("artifact.txt"));
+        state.chat_memory.new_chat_preferences = Some(ChatMemoryPreferences {
+            generate_memories: false,
+            use_memories: true,
+        });
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::NewChatTaskCreated {
+                    task: task_in_repository("created-a"),
+                    new_chat_draft_generation: submission_generation,
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(state.selected_task_id, None);
+        assert_eq!(state.composer, "draft B");
+        assert_eq!(state.composer_attachments.len(), 1);
+        assert_eq!(state.composer_attachments[0].path, attachment_b);
+        assert_eq!(state.new_chat_cwd.as_ref(), Some(&workspace_b));
+        assert!(state.composer_controls.plan_mode);
+        assert_eq!(
+            state.chat_memory.new_chat_preferences,
+            Some(ChatMemoryPreferences {
+                generate_memories: false,
+                use_memories: true,
+            })
+        );
+        assert_eq!(
+            state.artifacts.selected_path,
+            Some(workspace_b.join("artifact.txt"))
+        );
+        assert!(state.tasks.iter().any(|task| task.id == "created-a"));
+        assert!(state.timelines["created-a"].runtime_status_loaded);
+        assert!(state.goals.contains_key("created-a"));
+
+        let Some(timeline) = state.timelines.get_mut("created-a") else {
+            panic!("stale task creation initializes its timeline");
+        };
+        timeline.active_turn_id = Some("already-started".to_owned());
+        let preserved_goal = ThreadGoalState {
+            status: LoadStatus::Ready,
+            goal: Some(ThreadGoal {
+                task_id: "created-a".to_owned(),
+                objective: "Preserve this goal".to_owned(),
+                status: ThreadGoalStatus::Active,
+                tokens_used: 1,
+                token_budget: Some(10),
+                time_used_seconds: 2,
+                created_at: 3,
+                updated_at: 4,
+            }),
+            completed_goal: None,
+            completed_goal_turn_id: None,
+        };
+        state
+            .goals
+            .insert("created-a".to_owned(), preserved_goal.clone());
+        assert!(
+            reduce(
+                &mut state,
+                Action::NewChatTaskCreated {
+                    task: task_in_repository("created-a"),
+                    new_chat_draft_generation: submission_generation,
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.timelines["created-a"].active_turn_id.as_deref(),
+            Some("already-started")
+        );
+        assert_eq!(state.goals["created-a"], preserved_goal);
+
+        let selected_task = task("selected-tail");
+        let mut saturated = AppState {
+            tasks: (0..MAX_VISIBLE_THREADS - 1)
+                .map(|index| task(&format!("visible-{index}")))
+                .chain(std::iter::once(selected_task.clone()))
+                .collect(),
+            selected_task_id: Some(selected_task.id.clone()),
+            ..AppState::default()
+        };
+        reduce(
+            &mut saturated,
+            Action::NewChatTaskCreated {
+                task: task("created-at-cap"),
+                new_chat_draft_generation: 0,
+            },
+        );
+        assert_eq!(saturated.tasks.len(), MAX_VISIBLE_THREADS);
+        assert_eq!(saturated.selected_task_id, Some(selected_task.id.clone()));
+        assert!(saturated.tasks.contains(&selected_task));
+
+        let mut matching = AppState::default();
+        let effects = reduce(
+            &mut matching,
+            Action::NewChatTaskCreated {
+                task: task_in_repository("created-matching"),
+                new_chat_draft_generation: 0,
+            },
+        );
+        assert_eq!(
+            matching.selected_task_id.as_deref(),
+            Some("created-matching")
+        );
+        assert!(matching.new_chat_cwd.is_none());
+        assert!(matching.timelines["created-matching"].runtime_status_loaded);
+        assert!(matching.goals.contains_key("created-matching"));
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::RefreshGit { .. } | Effect::RefreshApps { .. }
+        )));
     }
 
     #[test]
@@ -23496,6 +24049,68 @@ mod tests {
             ]
         );
         assert_eq!(state.pull_requests.status, LoadStatus::Loading);
+    }
+
+    #[test]
+    fn changing_pull_request_workspace_invalidates_the_inbox_before_reloading() {
+        let first_root = PathBuf::from("C:\\repo-a");
+        let second_root = PathBuf::from("C:\\repo-b");
+        let mut first = task_in_repository("first");
+        first.cwd = first_root;
+        let mut second = task_in_repository("second");
+        second.cwd = second_root.clone();
+        let summary = pull_request(42);
+        let identity = summary.identity.clone();
+        let mut state = AppState {
+            tasks: vec![first, second],
+            selected_task_id: Some("first".to_owned()),
+            ..AppState::default()
+        };
+        state.pull_requests.generation = 4;
+        state.pull_requests.status = LoadStatus::Ready;
+        state.pull_requests.items = vec![summary];
+        state.pull_requests.total_count = 2;
+        state.pull_requests.next_cursor = Some("next-page".to_owned());
+        state.pull_requests.truncated = true;
+        state.pull_requests.selected = Some(identity);
+        state.pull_requests.detail_generation = 5;
+        state.pull_requests.detail_status = LoadStatus::Ready;
+        state.pull_requests.diff_generation = 6;
+        state.pull_requests.diff_status = LoadStatus::Ready;
+        state.pull_requests.diff_head_revision = Some("abc123".to_owned());
+        state.pull_requests.unified_diff = "stale diff".to_owned();
+        state.pull_requests.pending_mutation = Some(PullRequestMutationKind::Approve);
+        state.pull_requests.mutation_generation = 7;
+
+        reduce(&mut state, Action::SelectTask("second".to_owned()));
+
+        assert_eq!(state.pull_requests.generation, 5);
+        assert_eq!(state.pull_requests.status, LoadStatus::Idle);
+        assert!(state.pull_requests.items.is_empty());
+        assert_eq!(state.pull_requests.next_cursor, None);
+        assert_eq!(state.pull_requests.selected, None);
+        assert_eq!(state.pull_requests.detail_status, LoadStatus::Idle);
+        assert_eq!(state.pull_requests.diff_status, LoadStatus::Idle);
+        assert!(state.pull_requests.unified_diff.is_empty());
+        assert_eq!(
+            state.pull_requests.pending_mutation,
+            Some(PullRequestMutationKind::Approve)
+        );
+        assert_eq!(state.pull_requests.mutation_generation, 7);
+
+        assert!(
+            reduce(&mut state, Action::Navigate(MainRoute::PullRequests)).contains(
+                &Effect::SearchPullRequests {
+                    generation: 6,
+                    cwd: second_root,
+                    relationship: PullRequestRelationship::ReviewRequested,
+                    lifecycle: PullRequestLifecycle::Open,
+                    query: String::new(),
+                    cursor: None,
+                    append: false,
+                }
+            )
+        );
     }
 
     #[test]
@@ -26496,6 +27111,22 @@ mod tests {
     }
 
     #[test]
+    fn account_refresh_preserves_awaiting_login() {
+        let mut state = AppState::default();
+        state.account.status = LoadStatus::Ready;
+        state.account.auth_operation = AccountAuthOperation::AwaitingLogin;
+        state.account.login_id = Some("login-1".to_owned());
+
+        assert!(reduce(&mut state, Action::RefreshAccount).is_empty());
+        assert_eq!(state.account.status, LoadStatus::Ready);
+        assert_eq!(
+            state.account.auth_operation,
+            AccountAuthOperation::AwaitingLogin
+        );
+        assert_eq!(state.account.login_id.as_deref(), Some("login-1"));
+    }
+
+    #[test]
     fn stale_account_load_does_not_cancel_logout() {
         let mut state = AppState::default();
         state.account.profile = Some(AccountProfile {
@@ -27855,12 +28486,14 @@ mod tests {
             ),
             [Effect::AuthenticateMcpServer {
                 name: "calendar".to_owned(),
+                thread_id: Some("task-a".to_owned()),
             }]
         );
         assert!(
             reduce(
                 &mut state,
                 Action::McpServerAuthenticationStarted {
+                    thread_id: Some("task-a".to_owned()),
                     name: "calendar".to_owned(),
                     authorization_url: "https://example.com/oauth".to_owned(),
                 },
@@ -27886,6 +28519,7 @@ mod tests {
             reduce(
                 &mut state,
                 Action::McpServerAuthenticationCompleted {
+                    thread_id: Some("task-a".to_owned()),
                     name: "calendar".to_owned(),
                     success: true,
                     error: None,
@@ -27897,6 +28531,43 @@ mod tests {
             }]
         );
         assert!(state.marketplace.mcp_servers[0].authorization_url.is_none());
+
+        assert!(matches!(
+            reduce(
+                &mut state,
+                Action::AuthenticateMcpServer {
+                    name: "calendar".to_owned(),
+                },
+            )
+            .as_slice(),
+            [Effect::AuthenticateMcpServer { .. }]
+        ));
+        assert!(
+            reduce(
+                &mut state,
+                Action::McpServerAuthenticationStarted {
+                    thread_id: Some("task-a".to_owned()),
+                    name: "calendar".to_owned(),
+                    authorization_url: "   ".to_owned(),
+                },
+            )
+            .is_empty()
+        );
+        assert!(!state.marketplace.mcp_auth_scopes.contains_key("calendar"));
+        let rejected_message = state.status_message.clone();
+        assert!(
+            reduce(
+                &mut state,
+                Action::McpServerAuthenticationCompleted {
+                    thread_id: Some("task-a".to_owned()),
+                    name: "calendar".to_owned(),
+                    success: true,
+                    error: None,
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(state.status_message, rejected_message);
     }
 
     #[test]
@@ -27942,6 +28613,281 @@ mod tests {
             Some(LoadStatus::Loading)
         );
         assert!(state.marketplace.mcp_resource_read.contents.is_empty());
+    }
+
+    #[test]
+    fn stale_mcp_oauth_events_are_ignored_after_task_change() {
+        let mut state = AppState {
+            tasks: vec![task_in_repository("task-a"), task_in_repository("task-b")],
+            ..AppState::default()
+        };
+        state.marketplace.mcp_servers = vec![McpServerCard {
+            key: "github".to_owned(),
+            name: "GitHub".to_owned(),
+            enabled: true,
+            read_only: false,
+            transport: Some(McpTransportKind::StreamableHttp),
+            command: String::new(),
+            args: Vec::new(),
+            env: Vec::new(),
+            env_vars: Vec::new(),
+            cwd: String::new(),
+            url: "https://mcp.github.example/mcp".to_owned(),
+            bearer_token_env_var: String::new(),
+            http_headers: Vec::new(),
+            env_http_headers: Vec::new(),
+            auth_status: McpAuthStatus::NotLoggedIn,
+            authorization_url: None,
+            startup_state: None,
+            startup_error: None,
+            startup_failure_reason: None,
+            server_info: None,
+            tools: Vec::new(),
+            resources: Vec::new(),
+            resource_templates: Vec::new(),
+            inspection_truncated: false,
+        }];
+
+        reduce(&mut state, Action::SelectTask("task-a".to_owned()));
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::AuthenticateMcpServer {
+                    name: "github".to_owned(),
+                },
+            ),
+            [Effect::AuthenticateMcpServer {
+                name: "github".to_owned(),
+                thread_id: Some("task-a".to_owned()),
+            }]
+        );
+        assert_eq!(
+            state.marketplace.pending_mcp_auth_name.as_deref(),
+            Some("github")
+        );
+
+        reduce(&mut state, Action::SelectTask("task-b".to_owned()));
+        assert!(state.marketplace.pending_mcp_auth_name.is_none());
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::AuthenticateMcpServer {
+                    name: "github".to_owned(),
+                },
+            ),
+            [Effect::AuthenticateMcpServer {
+                name: "github".to_owned(),
+                thread_id: Some("task-b".to_owned()),
+            }]
+        );
+        state.marketplace.mcp_servers[0].authorization_url =
+            Some("https://mcp.github.example/task-b".to_owned());
+        state.status_message = Some("task-b status".to_owned());
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::McpServerAuthenticationStarted {
+                    thread_id: None,
+                    name: "github".to_owned(),
+                    authorization_url: "https://mcp.github.example/global".to_owned(),
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.marketplace.pending_mcp_auth_name.as_deref(),
+            Some("github")
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::McpServerAuthenticationStarted {
+                    thread_id: Some("task-a".to_owned()),
+                    name: "github".to_owned(),
+                    authorization_url: "https://mcp.github.example/task-a".to_owned(),
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.marketplace.pending_mcp_auth_name.as_deref(),
+            Some("github")
+        );
+        assert!(
+            reduce(
+                &mut state,
+                Action::McpServerAuthenticationCompleted {
+                    thread_id: Some("task-a".to_owned()),
+                    name: "github".to_owned(),
+                    success: true,
+                    error: None,
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            state.marketplace.mcp_servers[0]
+                .authorization_url
+                .as_deref(),
+            Some("https://mcp.github.example/task-b")
+        );
+        assert_eq!(state.status_message.as_deref(), Some("task-b status"));
+    }
+
+    #[test]
+    fn global_mcp_oauth_survives_task_changes_while_scoped_oauth_is_cleared() {
+        let mut state = AppState {
+            tasks: vec![task_in_repository("task-a"), task_in_repository("task-b")],
+            ..AppState::default()
+        };
+        state.marketplace.mcp_servers = vec![oauth_mcp_server("github")];
+        state.marketplace.mcp_servers[0].name = "plugin-github".to_owned();
+        state.marketplace.plugin_mcp_servers = vec![oauth_mcp_server("plugin-github")];
+
+        let assert_global_auth_survives = |state: &AppState| {
+            assert_eq!(state.marketplace.mcp_auth_scopes.get("github"), Some(&None));
+            assert_eq!(
+                state.marketplace.mcp_servers[0]
+                    .authorization_url
+                    .as_deref(),
+                Some("https://mcp.example/global-oauth")
+            );
+        };
+        let assert_scoped_plugin_auth_cleared = |state: &AppState| {
+            assert!(state.marketplace.pending_mcp_auth_name.is_none());
+            assert!(
+                !state
+                    .marketplace
+                    .mcp_auth_scopes
+                    .contains_key("plugin-github")
+            );
+            assert!(
+                state.marketplace.plugin_mcp_servers[0]
+                    .authorization_url
+                    .is_none()
+            );
+        };
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::AuthenticateMcpServer {
+                    name: "github".to_owned(),
+                },
+            ),
+            [Effect::AuthenticateMcpServer {
+                name: "github".to_owned(),
+                thread_id: None,
+            }]
+        );
+        reduce(&mut state, Action::SelectTask("task-a".to_owned()));
+        assert_eq!(
+            state.marketplace.pending_mcp_auth_name.as_deref(),
+            Some("github")
+        );
+        assert_eq!(state.marketplace.mcp_auth_scopes.get("github"), Some(&None));
+        reduce(
+            &mut state,
+            Action::McpServerAuthenticationStarted {
+                thread_id: None,
+                name: "github".to_owned(),
+                authorization_url: "https://mcp.example/global-oauth".to_owned(),
+            },
+        );
+        reduce(&mut state, Action::SelectTask("task-b".to_owned()));
+        assert_global_auth_survives(&state);
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::AuthenticateMcpServer {
+                    name: "plugin-github".to_owned(),
+                },
+            ),
+            [Effect::AuthenticateMcpServer {
+                name: "plugin-github".to_owned(),
+                thread_id: Some("task-b".to_owned()),
+            }]
+        );
+        reduce(
+            &mut state,
+            Action::McpServerAuthenticationStarted {
+                thread_id: Some("task-b".to_owned()),
+                name: "plugin-github".to_owned(),
+                authorization_url: "https://mcp.example/task-b-oauth".to_owned(),
+            },
+        );
+        assert_global_auth_survives(&state);
+        assert_eq!(
+            state.marketplace.mcp_auth_scopes.get("plugin-github"),
+            Some(&Some("task-b".to_owned()))
+        );
+
+        reduce(&mut state, Action::SelectTask("task-a".to_owned()));
+        assert_global_auth_survives(&state);
+        assert_scoped_plugin_auth_cleared(&state);
+
+        reduce(
+            &mut state,
+            Action::AuthenticateMcpServer {
+                name: "plugin-github".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::McpServerAuthenticationStarted {
+                thread_id: Some("task-a".to_owned()),
+                name: "plugin-github".to_owned(),
+                authorization_url: "https://mcp.example/task-a-oauth".to_owned(),
+            },
+        );
+        reduce(&mut state, Action::BeginNewChat);
+        assert_eq!(state.selected_task_id, None);
+        assert_global_auth_survives(&state);
+        assert_scoped_plugin_auth_cleared(&state);
+
+        reduce(&mut state, Action::SelectTask("task-a".to_owned()));
+        reduce(
+            &mut state,
+            Action::AuthenticateMcpServer {
+                name: "plugin-github".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::McpServerAuthenticationStarted {
+                thread_id: Some("task-a".to_owned()),
+                name: "plugin-github".to_owned(),
+                authorization_url: "https://mcp.example/task-a-oauth".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::TaskCreated(task_in_repository("task-b")),
+        );
+        assert_eq!(state.selected_task_id.as_deref(), Some("task-b"));
+        assert_global_auth_survives(&state);
+        assert_scoped_plugin_auth_cleared(&state);
+
+        reduce(
+            &mut state,
+            Action::AuthenticateMcpServer {
+                name: "plugin-github".to_owned(),
+            },
+        );
+        reduce(
+            &mut state,
+            Action::McpServerAuthenticationStarted {
+                thread_id: Some("task-b".to_owned()),
+                name: "plugin-github".to_owned(),
+                authorization_url: "https://mcp.example/task-b-oauth".to_owned(),
+            },
+        );
+        reduce(&mut state, Action::TaskArchived("task-b".to_owned()));
+        assert_eq!(state.selected_task_id, None);
+        assert_global_auth_survives(&state);
+        assert_scoped_plugin_auth_cleared(&state);
     }
 
     #[test]

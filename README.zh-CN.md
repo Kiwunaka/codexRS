@@ -94,7 +94,7 @@ codex --version
 仅从 [GitHub Releases](https://github.com/Kiwunaka/codexRS/releases)
 页面下载。每个预览版都包含 `codexrs-<tag>-windows-x86_64.zip`、
 `codexrs-<tag>-linux-x86_64.tar.gz` 和 `SHA256SUMS.txt`；请将 `<tag>`
-替换为完整 release tag，例如 `v0.1.0-rc.6`。
+替换为所选 release 的完整 tag。
 解压前请校验 checksum：Linux 可运行
 `grep ' \./codexrs-<tag>-linux-x86_64.tar.gz$' SHA256SUMS.txt | sha256sum -c -`；Windows
 可将 `(Get-FileHash .\codexrs-<tag>-windows-x86_64.zip -Algorithm SHA256).Hash`

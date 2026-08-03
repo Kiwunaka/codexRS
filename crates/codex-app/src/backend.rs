@@ -1363,6 +1363,7 @@ enum BackendCommand {
     Shutdown,
 }
 
+#[derive(Clone)]
 enum PendingApproval {
     Command {
         id: Value,
@@ -6517,6 +6518,7 @@ fn run_effect(
             plan_mode,
             goal_objective,
             memory_preferences,
+            new_chat_draft_generation,
         } => {
             let runtime_workspace_roots = cwd.clone().map(|path| vec![path]);
             let dynamic_tools = computer_use_dynamic_tools_for_platform();
@@ -6549,7 +6551,13 @@ fn run_effect(
                     if computer_use_attached {
                         computer_capable_threads.insert(task_id.clone());
                     }
-                    emit(events, Action::TaskCreated(task));
+                    emit(
+                        events,
+                        Action::NewChatTaskCreated {
+                            task,
+                            new_chat_draft_generation,
+                        },
+                    );
                     if let Some(preferences) = memory_preferences {
                         emit(
                             events,
@@ -6595,6 +6603,7 @@ fn run_effect(
                                 events,
                                 Action::ComposerSubmissionFailed {
                                     task_id: Some(task_id.clone()),
+                                    new_chat_draft_generation: None,
                                     prompt,
                                     message: format!("failed to start turn: {error}"),
                                 },
@@ -6625,11 +6634,11 @@ fn run_effect(
                 }
                 Err(error) => emit(
                     events,
-                    Action::ComposerSubmissionFailed {
-                        task_id: None,
+                    create_task_failure_action(
                         prompt,
-                        message: format!("failed to create task: {error}"),
-                    },
+                        new_chat_draft_generation,
+                        format!("failed to create task: {error}"),
+                    ),
                 ),
             }
         }
@@ -7413,6 +7422,7 @@ fn run_effect(
                     events,
                     Action::ComposerSubmissionFailed {
                         task_id: Some(task_id),
+                        new_chat_draft_generation: None,
                         prompt,
                         message: "Could not run the shell command.".to_owned(),
                     },
@@ -7503,6 +7513,7 @@ fn run_effect(
                             events,
                             Action::ComposerSubmissionFailed {
                                 task_id: Some(goal_task_id),
+                                new_chat_draft_generation: None,
                                 prompt,
                                 message: format!("failed to start turn: {error}"),
                             },
@@ -7538,6 +7549,7 @@ fn run_effect(
                     events,
                     Action::ComposerSubmissionFailed {
                         task_id: Some(task_id),
+                        new_chat_draft_generation: None,
                         prompt: message,
                         message: format!("failed to steer turn: {error}"),
                     },
@@ -7602,47 +7614,54 @@ fn run_effect(
                 computer_accessibility,
                 computer_url_policy,
                 computer_overlay,
+                None,
             );
         }
-        Effect::RespondUserInput {
-            request_id,
-            answers,
-        } => {
-            respond_to_user_input(app_server, request_id, answers, events, pending_approvals);
+        Effect::RespondStandardApproval { request, decision } => {
+            respond_to_approval(
+                app_server,
+                request.request_id.clone(),
+                decision,
+                events,
+                pending_approvals,
+                computer_permissions,
+                computer_allowed_app_ids,
+                computer_accessibility,
+                computer_url_policy,
+                computer_overlay,
+                Some(request),
+            );
+        }
+        Effect::RespondUserInput { request, answers } => {
+            respond_to_user_input(app_server, request, answers, events, pending_approvals);
         }
         Effect::RespondMcpElicitation {
-            request_id,
+            request,
             decision,
             content,
         } => {
             respond_to_mcp_elicitation(
                 app_server,
-                request_id,
+                request,
                 decision,
                 content,
                 events,
                 pending_approvals,
             );
         }
-        Effect::RespondBrowserOriginElicitation {
-            request_id,
-            decision,
-        } => {
+        Effect::RespondBrowserOriginElicitation { request, decision } => {
             respond_to_browser_origin_elicitation(
                 app_server,
-                request_id,
+                request,
                 decision,
                 events,
                 pending_approvals,
             );
         }
-        Effect::RespondBrowserResourceElicitation {
-            request_id,
-            decision,
-        } => {
+        Effect::RespondBrowserResourceElicitation { request, decision } => {
             respond_to_browser_resource_elicitation(
                 app_server,
-                request_id,
+                request,
                 decision,
                 events,
                 pending_approvals,
@@ -8422,16 +8441,17 @@ fn run_effect(
                 ),
             }
         }
-        Effect::AuthenticateMcpServer { name } => {
+        Effect::AuthenticateMcpServer { name, thread_id } => {
             match app_server.login_mcp_server(McpServerOauthLoginParams {
                 name: name.clone(),
-                thread_id: None,
+                thread_id: thread_id.clone(),
                 scopes: None,
                 timeout_secs: None,
             }) {
                 Ok(response) => emit(
                     events,
                     Action::McpServerAuthenticationStarted {
+                        thread_id,
                         name,
                         authorization_url: response.authorization_url,
                     },
@@ -8439,6 +8459,7 @@ fn run_effect(
                 Err(error) => emit(
                     events,
                     Action::McpServerAuthenticationCompleted {
+                        thread_id,
                         name,
                         success: false,
                         error: Some(format!(
@@ -10075,7 +10096,7 @@ fn run_browser_download_command(
     }
 }
 
-fn drain_browser(browser: &mut Option<BrowserRuntime>, events: &dyn ActionEmitter) -> bool {
+fn drain_browser(browser: &mut Option<BrowserRuntime>, events: &UiEventSender) -> bool {
     let Some(runtime) = browser.as_mut() else {
         return false;
     };
@@ -10126,16 +10147,20 @@ fn drain_browser(browser: &mut Option<BrowserRuntime>, events: &dyn ActionEmitte
                 jpeg,
                 width,
                 height,
-            })) => emit(
-                events,
-                Action::BrowserFrameReady {
-                    task_id: context_id,
-                    tab_id,
-                    jpeg: Arc::from(jpeg),
-                    width,
-                    height,
-                },
-            ),
+            })) => {
+                let frame_bytes = jpeg.len();
+                let _ = events.emit_budgeted(
+                    Action::BrowserFrameReady {
+                        task_id: context_id,
+                        tab_id,
+                        jpeg: Arc::from(jpeg),
+                        width,
+                        height,
+                    },
+                    frame_bytes,
+                    false,
+                );
+            }
             Ok(Some(BrowserEvent::VisibilityRequested {
                 context_id,
                 visible,
@@ -11318,6 +11343,7 @@ fn complete_computer_tool_call(
         &params.arguments,
         &params.thread_id,
         &window.id,
+        &window.application_id,
         events,
         computer_accessibility,
     ) {
@@ -11519,6 +11545,7 @@ fn run_computer_tool(
     arguments: &Value,
     task_id: &str,
     window_id: &str,
+    expected_application_id: &str,
     events: &dyn ActionEmitter,
     computer_accessibility: &mut ComputerUseAccessibilityClient,
 ) -> Result<Vec<DynamicToolCallOutputContentItem>, String> {
@@ -11579,7 +11606,11 @@ fn run_computer_tool(
             Ok(content)
         }
         "click" => {
-            activate_computer_input_target(window_id, computer_accessibility)?;
+            activate_computer_input_target(
+                window_id,
+                expected_application_id,
+                computer_accessibility,
+            )?;
             let button = match optional_string_argument(arguments, "mouse_button")?.as_deref() {
                 None | Some("left" | "l") => ComputerButton::Left,
                 Some("right" | "r") => ComputerButton::Right,
@@ -11595,7 +11626,13 @@ fn run_computer_tool(
                 .ok_or_else(|| "click_count must be 1, 2, or 3".to_owned())?;
             if let Some(element_index) = optional_usize_argument(arguments, "element_index")? {
                 computer_accessibility
-                    .click_element(window_id, element_index, button, clicks)
+                    .click_element(
+                        window_id,
+                        expected_application_id,
+                        element_index,
+                        button,
+                        clicks,
+                    )
                     .map_err(|error| error.to_string())?;
                 return Ok(vec![text_content(format!(
                     "Clicked accessibility element [{element_index}]."
@@ -11603,72 +11640,105 @@ fn run_computer_tool(
             }
             let (x, y) = computer_coordinates(arguments)?;
             let (x, y) = screenshot_point(arguments, window_id, x, y, computer_accessibility)?;
-            click_computer_window(window_id, x, y, button, clicks)
+            click_computer_window(window_id, expected_application_id, x, y, button, clicks)
                 .map_err(|error| error.to_string())?;
             Ok(vec![text_content(format!("Clicked ({x}, {y})."))])
         }
         "drag" => {
-            activate_computer_input_target(window_id, computer_accessibility)?;
+            activate_computer_input_target(
+                window_id,
+                expected_application_id,
+                computer_accessibility,
+            )?;
             let (from_x, from_y, to_x, to_y) = drag_coordinates(arguments)?;
             let (from_x, from_y) =
                 screenshot_point(arguments, window_id, from_x, from_y, computer_accessibility)?;
             let (to_x, to_y) =
                 screenshot_point(arguments, window_id, to_x, to_y, computer_accessibility)?;
-            drag_computer_window(window_id, from_x, from_y, to_x, to_y)
-                .map_err(|error| error.to_string())?;
+            drag_computer_window(
+                window_id,
+                expected_application_id,
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+            )
+            .map_err(|error| error.to_string())?;
             Ok(vec![text_content(format!(
                 "Dragged from ({from_x}, {from_y}) to ({to_x}, {to_y})."
             ))])
         }
         "scroll" => {
-            activate_computer_input_target(window_id, computer_accessibility)?;
+            activate_computer_input_target(
+                window_id,
+                expected_application_id,
+                computer_accessibility,
+            )?;
             let (x, y) = computer_coordinates(arguments)?;
             let (x, y) = screenshot_point(arguments, window_id, x, y, computer_accessibility)?;
             let delta_x = rounded_i32_argument(arguments, "scrollX")?;
             let delta_y = rounded_i32_argument(arguments, "scrollY")?;
-            scroll_computer_window(window_id, x, y, delta_x, delta_y)
+            scroll_computer_window(window_id, expected_application_id, x, y, delta_x, delta_y)
                 .map_err(|error| error.to_string())?;
             Ok(vec![text_content(format!(
                 "Scrolled at ({x}, {y}) by ({delta_x}, {delta_y})."
             ))])
         }
         "set_value" => {
-            activate_computer_input_target(window_id, computer_accessibility)?;
+            activate_computer_input_target(
+                window_id,
+                expected_application_id,
+                computer_accessibility,
+            )?;
             let element_index = usize_argument(arguments, "element_index")?;
             let value = string_argument(arguments, "value")?;
             computer_accessibility
-                .set_value(window_id, element_index, value)
+                .set_value(window_id, expected_application_id, element_index, value)
                 .map_err(|error| error.to_string())?;
             Ok(vec![text_content(format!(
                 "Set accessibility element [{element_index}]."
             ))])
         }
         "perform_secondary_action" => {
-            activate_computer_input_target(window_id, computer_accessibility)?;
+            activate_computer_input_target(
+                window_id,
+                expected_application_id,
+                computer_accessibility,
+            )?;
             let element_index = usize_argument(arguments, "element_index")?;
             let action = string_argument(arguments, "action")?;
             computer_accessibility
-                .perform_secondary_action(window_id, element_index, action)
+                .perform_secondary_action(window_id, expected_application_id, element_index, action)
                 .map_err(|error| error.to_string())?;
             Ok(vec![text_content(format!(
                 "Performed {action} on accessibility element [{element_index}]."
             ))])
         }
         "type_text" => {
-            activate_computer_input_target(window_id, computer_accessibility)?;
+            activate_computer_input_target(
+                window_id,
+                expected_application_id,
+                computer_accessibility,
+            )?;
             let text = string_argument(arguments, "text")?;
-            type_into_computer_window(window_id, text).map_err(|error| error.to_string())?;
+            type_into_computer_window(window_id, expected_application_id, text)
+                .map_err(|error| error.to_string())?;
             Ok(vec![text_content(format!("Typed {} bytes.", text.len()))])
         }
         "press_key" => {
-            activate_computer_input_target(window_id, computer_accessibility)?;
+            activate_computer_input_target(
+                window_id,
+                expected_application_id,
+                computer_accessibility,
+            )?;
             let (key, modifiers) = parse_computer_key_chord(string_argument(arguments, "key")?)?;
-            press_computer_key(window_id, key, &modifiers).map_err(|error| error.to_string())?;
+            press_computer_key(window_id, expected_application_id, key, &modifiers)
+                .map_err(|error| error.to_string())?;
             Ok(vec![text_content("Key pressed.".to_owned())])
         }
         "activate_window" => {
             computer_accessibility
-                .activate_window(window_id)
+                .activate_window(window_id, expected_application_id)
                 .map_err(|error| error.to_string())?;
             Ok(vec![text_content("Window activated.".to_owned())])
         }
@@ -11678,18 +11748,19 @@ fn run_computer_tool(
 
 fn activate_computer_input_target(
     window_id: &str,
+    expected_application_id: &str,
     computer_accessibility: &mut ComputerUseAccessibilityClient,
 ) -> Result<(), String> {
     #[cfg(windows)]
     {
         computer_accessibility
-            .activate_window(window_id)
+            .activate_window(window_id, expected_application_id)
             .map_err(|error| error.to_string())
     }
 
     #[cfg(not(windows))]
     {
-        let _ = (window_id, computer_accessibility);
+        let _ = (window_id, expected_application_id, computer_accessibility);
         Ok(())
     }
 }
@@ -12886,6 +12957,7 @@ fn handle_notification(method: &str, params: Value, events: &dyn ActionEmitter) 
                 emit(
                     events,
                     Action::McpServerAuthenticationCompleted {
+                        thread_id: notification.thread_id,
                         name: notification.name,
                         success: notification.success,
                         error: notification
@@ -13019,12 +13091,14 @@ fn respond_to_approval(
     computer_accessibility: &mut ComputerUseAccessibilityClient,
     computer_url_policy: &mut ComputerUseUrlPolicy,
     mut computer_overlay: Option<&mut ComputerUseSystemOverlay>,
+    retry_request: Option<ApprovalRequest>,
 ) {
     #[cfg(not(windows))]
     let _ = computer_allowed_app_ids;
     let Some(pending) = pending_approvals.remove(&request_id) else {
         return;
     };
+    let retry_pending = pending.clone();
     match pending {
         PendingApproval::Command {
             id,
@@ -13085,9 +13159,13 @@ fn respond_to_approval(
                 },
             );
             if let Err(error) = response {
-                emit(
+                restore_standard_approval_after_response_failure(
                     events,
-                    Action::SetStatus(format!("failed to answer approval: {error}")),
+                    pending_approvals,
+                    request_id,
+                    retry_pending,
+                    retry_request,
+                    format!("failed to answer approval: {error}"),
                 );
             }
         }
@@ -13115,9 +13193,13 @@ fn respond_to_approval(
                 },
             );
             if let Err(error) = response {
-                emit(
+                restore_standard_approval_after_response_failure(
                     events,
-                    Action::SetStatus(format!("failed to answer approval: {error}")),
+                    pending_approvals,
+                    request_id,
+                    retry_pending,
+                    retry_request,
+                    format!("failed to answer approval: {error}"),
                 );
             }
         }
@@ -13137,9 +13219,13 @@ fn respond_to_approval(
                         "approval decision did not match the permission request",
                     );
                     if let Err(error) = response {
-                        emit(
+                        restore_standard_approval_after_response_failure(
                             events,
-                            Action::SetStatus(format!("failed to answer approval: {error}")),
+                            pending_approvals,
+                            request_id,
+                            retry_pending,
+                            retry_request,
+                            format!("failed to answer approval: {error}"),
                         );
                     }
                     return;
@@ -13153,9 +13239,13 @@ fn respond_to_approval(
                     strict_auto_review: None,
                 },
             ) {
-                emit(
+                restore_standard_approval_after_response_failure(
                     events,
-                    Action::SetStatus(format!("failed to answer approval: {error}")),
+                    pending_approvals,
+                    request_id,
+                    retry_pending,
+                    retry_request,
+                    format!("failed to answer approval: {error}"),
                 );
             }
         }
@@ -13363,13 +13453,42 @@ fn respond_to_approval(
     }
 }
 
+fn create_task_failure_action(
+    prompt: RetryableUserMessage,
+    new_chat_draft_generation: u64,
+    message: String,
+) -> Action {
+    Action::ComposerSubmissionFailed {
+        task_id: None,
+        new_chat_draft_generation: Some(new_chat_draft_generation),
+        prompt,
+        message,
+    }
+}
+
+fn restore_standard_approval_after_response_failure(
+    events: &dyn ActionEmitter,
+    pending_approvals: &mut HashMap<String, PendingApproval>,
+    request_id: String,
+    pending: PendingApproval,
+    request: Option<ApprovalRequest>,
+    message: String,
+) {
+    pending_approvals.insert(request_id, pending);
+    if let Some(request) = request {
+        emit(events, Action::ApprovalRequested(request));
+    }
+    emit(events, Action::SetStatus(message));
+}
+
 fn respond_to_user_input(
     app_server: &AppServerConnection,
-    request_id: String,
+    request: UserInputRequest,
     answers: UserInputAnswers,
     events: &dyn ActionEmitter,
     pending_approvals: &mut HashMap<String, PendingApproval>,
 ) {
+    let request_id = request.request_id.clone();
     let response = match user_input_response(answers) {
         Ok(response) => response,
         Err(error) => {
@@ -13391,13 +13510,29 @@ fn respond_to_user_input(
         return;
     };
     if let Err(error) = app_server.respond_success(&id, &response) {
-        emit(
+        restore_user_input_after_response_failure(
             events,
-            Action::SetStatus(format!(
-                "failed to answer structured input request: {error}"
-            )),
+            pending_approvals,
+            request,
+            id,
+            format!("failed to answer structured input request: {error}"),
         );
     }
+}
+
+fn restore_user_input_after_response_failure(
+    events: &dyn ActionEmitter,
+    pending_approvals: &mut HashMap<String, PendingApproval>,
+    request: UserInputRequest,
+    id: Value,
+    message: String,
+) {
+    pending_approvals.insert(
+        request.request_id.clone(),
+        PendingApproval::UserInput { id },
+    );
+    emit(events, Action::UserInputRequested(request));
+    emit(events, Action::SetStatus(message));
 }
 
 fn user_input_response(answers: UserInputAnswers) -> Result<ToolRequestUserInputResponse, String> {
@@ -13429,12 +13564,13 @@ fn user_input_response(answers: UserInputAnswers) -> Result<ToolRequestUserInput
 
 fn respond_to_mcp_elicitation(
     app_server: &AppServerConnection,
-    request_id: String,
+    request: McpElicitation,
     decision: McpElicitationDecision,
     content: Option<McpElicitationContent>,
     events: &dyn ActionEmitter,
     pending_approvals: &mut HashMap<String, PendingApproval>,
 ) {
+    let request_id = request.request_id().to_owned();
     let content = if decision == McpElicitationDecision::Accept {
         match content
             .as_ref()
@@ -13476,20 +13612,24 @@ fn respond_to_mcp_elicitation(
             metadata: None,
         },
     ) {
-        emit(
+        restore_mcp_elicitation_after_response_failure(
             events,
-            Action::SetStatus(format!("failed to answer MCP action request: {error}")),
+            pending_approvals,
+            request,
+            id,
+            format!("failed to answer MCP action request: {error}"),
         );
     }
 }
 
 fn respond_to_browser_origin_elicitation(
     app_server: &AppServerConnection,
-    request_id: String,
+    request: McpElicitation,
     decision: BrowserOriginElicitationDecision,
     events: &dyn ActionEmitter,
     pending_approvals: &mut HashMap<String, PendingApproval>,
 ) {
+    let request_id = request.request_id().to_owned();
     let Some(pending) = pending_approvals.remove(&request_id) else {
         return;
     };
@@ -13503,7 +13643,17 @@ fn respond_to_browser_origin_elicitation(
         );
         return;
     };
-    send_browser_origin_elicitation_response(app_server, &id, decision, events);
+    if let Err(error) =
+        app_server.respond_success(&id, &browser_origin_elicitation_response(decision))
+    {
+        restore_mcp_elicitation_after_response_failure(
+            events,
+            pending_approvals,
+            request,
+            id,
+            format!("failed to answer Browser website request: {error}"),
+        );
+    }
 }
 
 fn send_browser_origin_elicitation_response(
@@ -13541,11 +13691,12 @@ fn browser_origin_elicitation_response(
 
 fn respond_to_browser_resource_elicitation(
     app_server: &AppServerConnection,
-    request_id: String,
+    request: McpElicitation,
     decision: BrowserResourceElicitationDecision,
     events: &dyn ActionEmitter,
     pending_approvals: &mut HashMap<String, PendingApproval>,
 ) {
+    let request_id = request.request_id().to_owned();
     let Some(pending) = pending_approvals.remove(&request_id) else {
         return;
     };
@@ -13559,7 +13710,32 @@ fn respond_to_browser_resource_elicitation(
         );
         return;
     };
-    send_browser_resource_elicitation_response(app_server, &id, decision, events);
+    if let Err(error) =
+        app_server.respond_success(&id, &browser_resource_elicitation_response(decision))
+    {
+        restore_mcp_elicitation_after_response_failure(
+            events,
+            pending_approvals,
+            request,
+            id,
+            format!("failed to answer Browser permission request: {error}"),
+        );
+    }
+}
+
+fn restore_mcp_elicitation_after_response_failure(
+    events: &dyn ActionEmitter,
+    pending_approvals: &mut HashMap<String, PendingApproval>,
+    request: McpElicitation,
+    id: Value,
+    message: String,
+) {
+    pending_approvals.insert(
+        request.request_id().to_owned(),
+        PendingApproval::McpElicitation { id },
+    );
+    emit(events, Action::McpElicitationRequested(request));
+    emit(events, Action::SetStatus(message));
 }
 
 fn send_browser_resource_elicitation_response(
@@ -16754,12 +16930,12 @@ mod tests {
 
     use codex_core::{
         AccountDailyUsageBucket, Action, AgentConfigScopeKind, AppearancePalette,
-        AppearancePreferences, AppearanceTheme, AppearanceVariant, ApprovalContext,
-        BrowserApprovalMode, BrowserDownloadPreferences, BrowserDownloadState,
+        AppearancePreferences, AppearanceTheme, AppearanceVariant, ApprovalContext, ApprovalKind,
+        ApprovalRequest, BrowserApprovalMode, BrowserDownloadPreferences, BrowserDownloadState,
         BrowserDownloadStatus, BrowserOriginElicitationDecision, BrowserPermissionResource,
         BrowserPermissionValue, BrowserPermissionsState, BrowserResourceElicitationDecision,
-        BrowserSitePermission, ComposerAttachment, ComposerAttachmentKind, DiffMarkerStyle, Effect,
-        FuzzyFileMatchType, GitPreferences, GitReviewMode, ImportItemType,
+        BrowserSitePermission, CommandApprovalContext, ComposerAttachment, ComposerAttachmentKind,
+        DiffMarkerStyle, Effect, FuzzyFileMatchType, GitPreferences, GitReviewMode, ImportItemType,
         KeyboardShortcutPreferences, MAX_ACCOUNT_DAILY_USAGE_BUCKETS, MAX_MARKETPLACE_SOURCES,
         MAX_MCP_SERVER_FIELD_BYTES, McpBrowserOriginElicitation, McpBrowserResourceElicitation,
         McpElicitation, McpElicitationContent, McpElicitationValue, McpFormElicitation,
@@ -16808,11 +16984,12 @@ mod tests {
         computer_tool_requires_interruption_monitor, computer_tool_target_block_message,
         computer_use_allowed_app_ids, computer_use_allowed_app_ids_value,
         computer_use_app_authorized, computer_use_dynamic_tools, computer_window_argument,
-        computer_window_schema, device_code_account_login_started_action, drag_coordinates,
-        encode_appearance_preferences, encode_browser_download_preferences,
-        encode_browser_permissions, encode_git_preferences, encode_keyboard_shortcut_preferences,
-        encode_primary_window_placement, forbidden_computer_target_message, handle_notification,
-        hook_state_config_value, index_app_logos, initialize_capabilities, is_hidden_timeline_item,
+        computer_window_schema, create_task_failure_action,
+        device_code_account_login_started_action, drag_coordinates, encode_appearance_preferences,
+        encode_browser_download_preferences, encode_browser_permissions, encode_git_preferences,
+        encode_keyboard_shortcut_preferences, encode_primary_window_placement,
+        forbidden_computer_target_message, handle_notification, hook_state_config_value,
+        index_app_logos, initialize_capabilities, is_hidden_timeline_item,
         linux_computer_use_dynamic_tools, load_mcp_server_status_pages, map_account_profile,
         map_account_token_activity, map_app_detail, map_app_server_approval, map_apps,
         map_fuzzy_file_search_results, map_mcp_elicitation, map_mcp_resource_contents,
@@ -16828,8 +17005,11 @@ mod tests {
         plugin_directory_marketplace_kinds, plugin_installability,
         plugin_requires_install_confirmation, pull_request_generation_prompt,
         pull_request_output_schema, record_retryable_steer, remote_pairing_status_params,
-        restored_browser_download, retryable_submission_inputs, run_computer_tool,
-        safety_retry_fork_point, stored_browser_download, user_input_response,
+        restore_mcp_elicitation_after_response_failure,
+        restore_standard_approval_after_response_failure,
+        restore_user_input_after_response_failure, restored_browser_download,
+        retryable_submission_inputs, run_computer_tool, safety_retry_fork_point,
+        stored_browser_download, user_input_response,
     };
 
     #[cfg(any(windows, target_os = "linux"))]
@@ -16868,7 +17048,17 @@ mod tests {
             UiEventDelivery::Delivered
         );
         assert_eq!(
-            events.emit_budgeted(Action::SetStatus("second".to_owned()), 1, false),
+            events.emit_budgeted(
+                Action::BrowserFrameReady {
+                    task_id: "task".to_owned(),
+                    tab_id: "tab".to_owned(),
+                    jpeg: Arc::from([1_u8]),
+                    width: 1,
+                    height: 1,
+                },
+                1,
+                false,
+            ),
             UiEventDelivery::Dropped
         );
 
@@ -17303,6 +17493,7 @@ mod tests {
                 }),
                 "thread-1",
                 "7",
+                "fixture.exe",
                 &events,
                 &mut computer_accessibility,
             ),
@@ -18271,6 +18462,205 @@ mod tests {
             panic!("empty structured input response did not serialize");
         };
         assert_eq!(skipped, json!({"answers": {}}));
+    }
+
+    #[test]
+    fn response_write_failure_restores_standard_approval_and_structured_input() {
+        let (events, received) = bounded(4);
+        let approval = ApprovalRequest {
+            request_id: "approval-command-1".to_owned(),
+            task_id: "thread-1".to_owned(),
+            turn_id: Some("turn-1".to_owned()),
+            kind: ApprovalKind::Command,
+            title: "Allow command?".to_owned(),
+            detail: "cargo test".to_owned(),
+            context: ApprovalContext::Command(CommandApprovalContext {
+                item_id: "item-1".to_owned(),
+                command: "cargo test".to_owned(),
+                reason: None,
+                network_approval_context: None,
+                proposed_execpolicy_amendment: None,
+                proposed_network_policy_amendment: None,
+            }),
+        };
+        let mut pending = HashMap::from([(
+            approval.request_id.clone(),
+            PendingApproval::FileChange { id: json!(1) },
+        )]);
+        let Some(pending_approval) = pending.remove(&approval.request_id) else {
+            panic!("pending approval disappeared");
+        };
+
+        restore_standard_approval_after_response_failure(
+            &events,
+            &mut pending,
+            approval.request_id.clone(),
+            pending_approval,
+            Some(approval.clone()),
+            "failed to answer approval: write error".to_owned(),
+        );
+
+        assert!(pending.contains_key(&approval.request_id));
+        let Ok(approval_action) = received.recv() else {
+            panic!("approval restoration action was not emitted");
+        };
+        match approval_action {
+            Action::ApprovalRequested(restored) => assert_eq!(restored, approval),
+            _ => panic!("expected approval restoration action"),
+        }
+        let Ok(approval_status) = received.recv() else {
+            panic!("approval failure status was not emitted");
+        };
+        assert!(matches!(
+            approval_status,
+            Action::SetStatus(message) if message.contains("write error")
+        ));
+
+        let Ok(input) = map_user_input_request(
+            "request-input-1".to_owned(),
+            json!({
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "item-1",
+                "questions": [{
+                    "id": "scope",
+                    "header": "Scope",
+                    "question": "How broad?",
+                    "options": [],
+                    "isOther": false,
+                    "isSecret": false
+                }]
+            }),
+        ) else {
+            panic!("valid structured input request was rejected");
+        };
+
+        restore_user_input_after_response_failure(
+            &events,
+            &mut pending,
+            input.clone(),
+            json!(2),
+            "failed to answer structured input request: write error".to_owned(),
+        );
+
+        assert!(pending.contains_key(&input.request_id));
+        let Ok(input_action) = received.recv() else {
+            panic!("input restoration action was not emitted");
+        };
+        match input_action {
+            Action::UserInputRequested(restored) => assert_eq!(restored, input),
+            _ => panic!("expected structured input restoration action"),
+        }
+        let Ok(input_status) = received.recv() else {
+            panic!("input failure status was not emitted");
+        };
+        assert!(matches!(
+            input_status,
+            Action::SetStatus(message) if message.contains("write error")
+        ));
+    }
+
+    #[test]
+    fn create_task_failure_forwards_the_new_chat_draft_generation() {
+        let prompt = RetryableUserMessage {
+            text: "start a new chat".to_owned(),
+            attachments: Vec::new(),
+        };
+
+        match create_task_failure_action(prompt.clone(), 17, "write failed".to_owned()) {
+            Action::ComposerSubmissionFailed {
+                task_id,
+                new_chat_draft_generation,
+                prompt: restored,
+                message,
+            } => {
+                assert_eq!(task_id, None);
+                assert_eq!(new_chat_draft_generation, Some(17));
+                assert_eq!(restored, prompt);
+                assert_eq!(message, "write failed");
+            }
+            _ => panic!("expected new-chat creation failure action"),
+        }
+    }
+
+    #[test]
+    fn mcp_response_write_failure_restores_exact_form_and_browser_request() {
+        let (events, received) = bounded(4);
+        let form = McpElicitation::Form(McpFormElicitation {
+            request_id: "mcp-form-1".to_owned(),
+            task_id: "thread-1".to_owned(),
+            turn_id: Some("turn-1".to_owned()),
+            server_name: "calendar".to_owned(),
+            message: "Choose a calendar.".to_owned(),
+            openai: false,
+            unsupported_openai: false,
+            fields: Vec::new(),
+        });
+        let mut pending = HashMap::new();
+
+        restore_mcp_elicitation_after_response_failure(
+            &events,
+            &mut pending,
+            form.clone(),
+            json!(3),
+            "failed to answer MCP action request: write error".to_owned(),
+        );
+
+        assert!(matches!(
+            pending.get("mcp-form-1"),
+            Some(PendingApproval::McpElicitation { id }) if id == &json!(3)
+        ));
+        let Ok(form_action) = received.recv() else {
+            panic!("MCP form restoration action was not emitted");
+        };
+        match form_action {
+            Action::McpElicitationRequested(restored) => assert_eq!(restored, form),
+            _ => panic!("expected MCP form restoration action"),
+        }
+        let Ok(form_status) = received.recv() else {
+            panic!("MCP form failure status was not emitted");
+        };
+        assert!(matches!(
+            form_status,
+            Action::SetStatus(message) if message.contains("write error")
+        ));
+
+        let browser = McpElicitation::BrowserOrigin(McpBrowserOriginElicitation {
+            request_id: "browser-origin-1".to_owned(),
+            task_id: "thread-1".to_owned(),
+            turn_id: Some("turn-1".to_owned()),
+            server_name: "node_repl".to_owned(),
+            source_name: "Browser".to_owned(),
+            origin: "https://example.com".to_owned(),
+            reason: Some("Open the requested page.".to_owned()),
+            message: "Allow Browser to access this site?".to_owned(),
+        });
+        restore_mcp_elicitation_after_response_failure(
+            &events,
+            &mut pending,
+            browser.clone(),
+            json!(4),
+            "failed to answer Browser website request: write error".to_owned(),
+        );
+
+        assert!(matches!(
+            pending.get("browser-origin-1"),
+            Some(PendingApproval::McpElicitation { id }) if id == &json!(4)
+        ));
+        let Ok(browser_action) = received.recv() else {
+            panic!("Browser request restoration action was not emitted");
+        };
+        match browser_action {
+            Action::McpElicitationRequested(restored) => assert_eq!(restored, browser),
+            _ => panic!("expected Browser request restoration action"),
+        }
+        let Ok(browser_status) = received.recv() else {
+            panic!("Browser request failure status was not emitted");
+        };
+        assert!(matches!(
+            browser_status,
+            Action::SetStatus(message) if message.contains("write error")
+        ));
     }
 
     #[test]
@@ -20472,6 +20862,7 @@ mod tests {
                 &json!({"include_text": true, "include_screenshot": true}),
                 "thread-1",
                 "7",
+                "fixture.exe",
                 &events,
                 &mut computer_accessibility,
             ),
@@ -20483,6 +20874,7 @@ mod tests {
                 &json!({"include_screenshot": false}),
                 "thread-1",
                 "7",
+                "fixture.exe",
                 &events,
                 &mut computer_accessibility,
             ),
@@ -20515,7 +20907,7 @@ mod tests {
             "mcpServer/oauthLogin/completed",
             json!({
                 "name": "calendar",
-                "threadId": null,
+                "threadId": "thread-1",
                 "success": false,
                 "error": "provider token=secret"
             }),
@@ -20527,10 +20919,12 @@ mod tests {
         assert!(matches!(
             action,
             Action::McpServerAuthenticationCompleted {
+                thread_id: Some(thread_id),
                 name,
                 success: false,
                 error: Some(error),
-            } if name == "calendar"
+            } if thread_id == "thread-1"
+                && name == "calendar"
                 && error == "MCP server authentication failed. Try again."
         ));
     }

@@ -135,7 +135,7 @@ codex --version
 Скачивайте только со страницы [GitHub Releases](https://github.com/Kiwunaka/codexRS/releases).
 Каждый предварительный релиз содержит `codexrs-<tag>-windows-x86_64.zip` и
 `codexrs-<tag>-linux-x86_64.tar.gz`, а также `SHA256SUMS.txt`; подставьте полный
-тег релиза, например `v0.1.0-rc.6`, вместо `<tag>`. Проверьте checksum до
+тег выбранного релиза вместо `<tag>`. Проверьте checksum до
 распаковки: в Linux выполните
 `grep ' \./codexrs-<tag>-linux-x86_64.tar.gz$' SHA256SUMS.txt | sha256sum -c -`,
 а в Windows сравните
