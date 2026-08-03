@@ -6810,6 +6810,7 @@ fn run_effect(
         Effect::ResumeTask {
             task_id,
             generation,
+            settings_generation,
         } => {
             match app_server.resume_thread(ThreadResumeParams {
                 thread_id: task_id.clone(),
@@ -6826,6 +6827,7 @@ fn run_effect(
                         events,
                         Action::TaskSettingsLoaded {
                             task_id: task_id.clone(),
+                            settings_generation,
                             model: response.model.clone(),
                             effort: response.reasoning_effort.clone(),
                             service_tier: response.service_tier.clone(),
@@ -7079,6 +7081,7 @@ fn run_effect(
         }
         Effect::UpdateThreadSettings {
             task_id,
+            settings_generation,
             model,
             effort,
             service_tier,
@@ -7099,6 +7102,7 @@ fn run_effect(
                     events,
                     Action::ThreadSettingsUpdateFailed {
                         task_id,
+                        settings_generation,
                         message: format!("failed to update chat settings: {error}"),
                     },
                 );
@@ -8076,6 +8080,7 @@ fn run_effect(
         }
         Effect::ReadPlugin {
             plugin_id,
+            generation,
             plugin_name,
             marketplace,
         } => {
@@ -8093,6 +8098,7 @@ fn run_effect(
                     events,
                     Action::PluginDetailLoaded {
                         plugin_id: plugin_id.clone(),
+                        generation,
                         detail: map_plugin_detail(plugin_id, response.plugin),
                     },
                 ),
@@ -8100,60 +8106,73 @@ fn run_effect(
                     events,
                     Action::PluginDetailFailed {
                         plugin_id,
+                        generation,
                         message: format!("failed to load plugin details: {error}"),
                     },
                 ),
             }
         }
-        Effect::RefreshSkills { cwds, force_reload } => {
-            match app_server.list_skills(SkillsListParams { cwds, force_reload }) {
-                Ok(response) => {
-                    let mut skills = Vec::new();
-                    let mut errors = Vec::new();
-                    for entry in response.data {
-                        for error in entry.errors {
-                            errors.push(format!(
-                                "{}: {}",
-                                error.path.display(),
-                                bounded(error.message, MAX_STATUS_BYTES)
-                            ));
-                        }
-                        for skill in entry.skills {
-                            let display_name = skill
-                                .presentation
-                                .as_ref()
-                                .and_then(|presentation| presentation.display_name.clone())
-                                .unwrap_or_else(|| skill.name.clone());
-                            let description = skill
-                                .presentation
-                                .as_ref()
-                                .and_then(|presentation| presentation.short_description.clone())
-                                .or(skill.short_description)
-                                .unwrap_or(skill.description);
-                            skills.push(SkillCard {
-                                name: skill.name,
-                                display_name,
-                                description,
-                                path: skill.path,
-                                scope: map_skill_scope(skill.scope),
-                                enabled: skill.enabled,
-                            });
-                        }
+        Effect::RefreshSkills {
+            generation,
+            cwds,
+            force_reload,
+        } => match app_server.list_skills(SkillsListParams { cwds, force_reload }) {
+            Ok(response) => {
+                let mut skills = Vec::new();
+                let mut errors = Vec::new();
+                for entry in response.data {
+                    for error in entry.errors {
+                        errors.push(format!(
+                            "{}: {}",
+                            error.path.display(),
+                            bounded(error.message, MAX_STATUS_BYTES)
+                        ));
                     }
-                    skills.sort_by(|left, right| {
-                        left.display_name
-                            .to_lowercase()
-                            .cmp(&right.display_name.to_lowercase())
-                            .then_with(|| left.path.cmp(&right.path))
-                    });
-                    emit(events, Action::SkillsLoaded { skills, errors });
+                    for skill in entry.skills {
+                        let display_name = skill
+                            .presentation
+                            .as_ref()
+                            .and_then(|presentation| presentation.display_name.clone())
+                            .unwrap_or_else(|| skill.name.clone());
+                        let description = skill
+                            .presentation
+                            .as_ref()
+                            .and_then(|presentation| presentation.short_description.clone())
+                            .or(skill.short_description)
+                            .unwrap_or(skill.description);
+                        skills.push(SkillCard {
+                            name: skill.name,
+                            display_name,
+                            description,
+                            path: skill.path,
+                            scope: map_skill_scope(skill.scope),
+                            enabled: skill.enabled,
+                        });
+                    }
                 }
-                Err(error) => emit(
+                skills.sort_by(|left, right| {
+                    left.display_name
+                        .to_lowercase()
+                        .cmp(&right.display_name.to_lowercase())
+                        .then_with(|| left.path.cmp(&right.path))
+                });
+                emit(
                     events,
-                    Action::SkillsFailed(format!("failed to load skills: {error}")),
-                ),
+                    Action::SkillsLoaded {
+                        generation,
+                        skills,
+                        errors,
+                    },
+                );
             }
-        }
+            Err(error) => emit(
+                events,
+                Action::SkillsFailed {
+                    generation,
+                    message: format!("failed to load skills: {error}"),
+                },
+            ),
+        },
         Effect::RefreshHooks { cwds } => match app_server.list_hooks(HooksListParams { cwds }) {
             Ok(response) => {
                 let mut entries = Vec::new();
@@ -8856,6 +8875,7 @@ fn retry_safety_buffered_turn(
         events,
         Action::TaskSettingsLoaded {
             task_id: retry_task_id.clone(),
+            settings_generation: 0,
             model: submission.model.clone(),
             effort: submission.effort.clone(),
             service_tier: submission.service_tier.clone(),
