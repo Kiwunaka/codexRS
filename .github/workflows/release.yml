@@ -173,6 +173,32 @@ jobs:
           tar -xzf "dist/${name}.tar.gz" -C "$smoke_root"
           bash scripts/linux_desktop_smoke.sh "$smoke_root/${name}/codexrs"
 
+      - name: Windows archive desktop startup smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $name = "codexrs-$env:PACKAGE_LABEL-windows-x86_64"
+          $smokeRoot = Join-Path $env:RUNNER_TEMP "codexrs-archive-smoke-$([guid]::NewGuid().ToString('N'))"
+          try {
+            Expand-Archive -LiteralPath "dist/$name.zip" -DestinationPath $smokeRoot
+            $archiveRoot = Join-Path $smokeRoot $name
+            $binary = Join-Path $archiveRoot 'codexrs.exe'
+            $overlay = Join-Path $archiveRoot 'codex-computer-use-overlay.exe'
+            if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
+              throw "Windows archive is missing codexrs.exe"
+            }
+            if (-not (Test-Path -LiteralPath $overlay -PathType Leaf)) {
+              throw "Windows archive is missing codex-computer-use-overlay.exe"
+            }
+            & scripts/windows_desktop_smoke.ps1 -Binary $binary
+          }
+          finally {
+            if (Test-Path -LiteralPath $smokeRoot) {
+              Remove-Item -LiteralPath $smokeRoot -Recurse -Force
+            }
+          }
+
       - uses: actions/upload-artifact@v7
         with:
           name: codexrs-${{ matrix.label }}
