@@ -2548,6 +2548,7 @@ pub struct MarketplaceState {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GitState {
     pub refresh_generation: u64,
+    pub mutation_generation: u64,
     pub repository_root: Option<PathBuf>,
     pub branch: Option<String>,
     pub default_branch: Option<String>,
@@ -5518,16 +5519,23 @@ pub enum Action {
         include_unstaged: bool,
         next_step: GitCommitNextStep,
     },
-    GitCommitMessageGenerated,
-    GitPushStarted,
+    GitCommitMessageGenerated {
+        generation: u64,
+    },
+    GitPushStarted {
+        generation: u64,
+    },
     GitCommitCompleted {
+        generation: u64,
         branch: Option<String>,
         pushed: bool,
     },
     GitCommitFailed {
+        generation: u64,
         message: String,
     },
     ClearGitPullRequestError,
+    SetGitPullRequestError(String),
     GitPullRequestStatusLoaded {
         branch: String,
         provider: GitPullRequestProvider,
@@ -5540,14 +5548,22 @@ pub enum Action {
         is_draft: bool,
         open_in_browser: bool,
     },
-    GitPullRequestCommitStarted,
-    GitPullRequestPushStarted,
-    GitPullRequestCreateStarted,
+    GitPullRequestCommitStarted {
+        generation: u64,
+    },
+    GitPullRequestPushStarted {
+        generation: u64,
+    },
+    GitPullRequestCreateStarted {
+        generation: u64,
+    },
     GitPullRequestCompleted {
+        generation: u64,
         pull_request: GitPullRequestState,
         open_in_browser: bool,
     },
     GitPullRequestFailed {
+        generation: u64,
         message: String,
     },
     SwitchGitBranch(String),
@@ -6250,6 +6266,7 @@ pub enum Effect {
         root: PathBuf,
     },
     CommitGit {
+        generation: u64,
         root: PathBuf,
         branch: Option<String>,
         message: String,
@@ -6263,6 +6280,7 @@ pub enum Effect {
         branch: String,
     },
     CreateGitPullRequest {
+        generation: u64,
         root: PathBuf,
         branch: String,
         base_branch: String,
@@ -6763,8 +6781,12 @@ fn next_git_refresh_generation(state: &mut AppState) -> u64 {
 
 fn clear_git_for_context_change(state: &mut AppState) {
     let refresh_generation = next_git_refresh_generation(state);
+    let diff_generation = state.git.diff_generation.saturating_add(1);
+    let mutation_generation = state.git.mutation_generation.saturating_add(1);
     state.git = GitState {
         refresh_generation,
+        diff_generation,
+        mutation_generation,
         ..GitState::default()
     };
 }
@@ -16666,10 +16688,14 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             let previous_commit_sha = state.git.selected_commit_sha.clone();
             let previous_review_base = state.git.selected_review_base.clone();
             let previous_diff_generation = state.git.diff_generation;
+            let previous_mutation_generation = state.git.mutation_generation;
+            let pending_commit = state.git.pending_commit;
+            let pending_pull_request = state.git.pending_pull_request;
             let pending_branch_operation = state.git.pending_branch_operation.clone();
             let branch_mutation_error = state.git.branch_mutation_error.clone();
             let branch_conflict = state.git.branch_conflict.clone();
             let next_diff_generation = previous_diff_generation.saturating_add(1);
+            let same_repository = previous_repository_root == git.repository_root;
             let pull_request_lookup =
                 git.repository_root
                     .clone()
@@ -16680,6 +16706,16 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     });
             git.refresh_generation = generation;
             state.git = *git;
+            state.git.diff_generation = next_diff_generation;
+            state.git.mutation_generation = if same_repository {
+                previous_mutation_generation
+            } else {
+                previous_mutation_generation.saturating_add(1)
+            };
+            if same_repository {
+                state.git.pending_commit = pending_commit;
+                state.git.pending_pull_request = pending_pull_request;
+            }
             state.git.pending_branch_operation = pending_branch_operation;
             state.git.branch_mutation_error = branch_mutation_error;
             state.git.branch_conflict = branch_conflict;
@@ -17106,8 +17142,11 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 } else {
                     GitCommitPhase::Committing
                 });
+                state.git.mutation_generation = state.git.mutation_generation.saturating_add(1);
+                let generation = state.git.mutation_generation;
                 state.git.commit_error = None;
                 vec![Effect::CommitGit {
+                    generation,
                     root,
                     branch: state.git.branch.clone(),
                     message,
@@ -17118,19 +17157,28 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 }]
             }
         }
-        Action::GitCommitMessageGenerated => {
-            if state.git.pending_commit == Some(GitCommitPhase::GeneratingMessage) {
+        Action::GitCommitMessageGenerated { generation } => {
+            if generation == state.git.mutation_generation
+                && state.git.pending_commit == Some(GitCommitPhase::GeneratingMessage)
+            {
                 state.git.pending_commit = Some(GitCommitPhase::Committing);
             }
             Vec::new()
         }
-        Action::GitPushStarted => {
-            if state.git.pending_commit.is_some() {
+        Action::GitPushStarted { generation } => {
+            if generation == state.git.mutation_generation && state.git.pending_commit.is_some() {
                 state.git.pending_commit = Some(GitCommitPhase::Pushing);
             }
             Vec::new()
         }
-        Action::GitCommitCompleted { branch, pushed } => {
+        Action::GitCommitCompleted {
+            generation,
+            branch,
+            pushed,
+        } => {
+            if generation != state.git.mutation_generation || state.git.pending_commit.is_none() {
+                return Vec::new();
+            }
             state.git.pending_commit = None;
             state.git.commit_error = None;
             state.status_message = Some(branch.filter(|branch| !branch.is_empty()).map_or_else(
@@ -17151,7 +17199,13 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             ));
             Vec::new()
         }
-        Action::GitCommitFailed { message } => {
+        Action::GitCommitFailed {
+            generation,
+            message,
+        } => {
+            if generation != state.git.mutation_generation || state.git.pending_commit.is_none() {
+                return Vec::new();
+            }
             state.git.pending_commit = None;
             state.git.commit_error = Some(message.clone());
             state.status_message = Some(message);
@@ -17159,6 +17213,11 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::ClearGitPullRequestError => {
             state.git.pull_request_error = None;
+            Vec::new()
+        }
+        Action::SetGitPullRequestError(message) => {
+            state.git.pull_request_error = Some(message.clone());
+            state.status_message = Some(message);
             Vec::new()
         }
         Action::GitPullRequestStatusLoaded {
@@ -17257,8 +17316,11 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             } else {
                 GitPullRequestPhase::Creating
             });
+            state.git.mutation_generation = state.git.mutation_generation.saturating_add(1);
+            let generation = state.git.mutation_generation;
             state.git.pull_request_error = None;
             vec![Effect::CreateGitPullRequest {
+                generation,
                 root,
                 branch,
                 base_branch,
@@ -17273,28 +17335,40 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 pull_request_instructions: state.git_preferences.pull_request_instructions.clone(),
             }]
         }
-        Action::GitPullRequestCommitStarted => {
-            if state.git.pending_pull_request.is_some() {
+        Action::GitPullRequestCommitStarted { generation } => {
+            if generation == state.git.mutation_generation
+                && state.git.pending_pull_request.is_some()
+            {
                 state.git.pending_pull_request = Some(GitPullRequestPhase::Committing);
             }
             Vec::new()
         }
-        Action::GitPullRequestPushStarted => {
-            if state.git.pending_pull_request.is_some() {
+        Action::GitPullRequestPushStarted { generation } => {
+            if generation == state.git.mutation_generation
+                && state.git.pending_pull_request.is_some()
+            {
                 state.git.pending_pull_request = Some(GitPullRequestPhase::Pushing);
             }
             Vec::new()
         }
-        Action::GitPullRequestCreateStarted => {
-            if state.git.pending_pull_request.is_some() {
+        Action::GitPullRequestCreateStarted { generation } => {
+            if generation == state.git.mutation_generation
+                && state.git.pending_pull_request.is_some()
+            {
                 state.git.pending_pull_request = Some(GitPullRequestPhase::Creating);
             }
             Vec::new()
         }
         Action::GitPullRequestCompleted {
+            generation,
             pull_request,
             open_in_browser,
         } => {
+            if generation != state.git.mutation_generation
+                || state.git.pending_pull_request.is_none()
+            {
+                return Vec::new();
+            }
             let branch = pull_request.head_branch.clone();
             state.git.pending_pull_request = None;
             state.git.pull_request_error = None;
@@ -17311,7 +17385,15 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             });
             Vec::new()
         }
-        Action::GitPullRequestFailed { message } => {
+        Action::GitPullRequestFailed {
+            generation,
+            message,
+        } => {
+            if generation != state.git.mutation_generation
+                || state.git.pending_pull_request.is_none()
+            {
+                return Vec::new();
+            }
             state.git.pending_pull_request = None;
             state.git.pull_request_error = Some(message.clone());
             state.status_message = Some(message);
@@ -18659,8 +18741,9 @@ mod tests {
         TaskSearchResult, TaskSummary, TerminalDockLocation, ThreadGoal, ThreadGoalState,
         ThreadGoalStatus, TimelineItem, TimelineKind, UsageLimitWindow, UserInputAnswer,
         UserInputAnswers, UserInputOption, UserInputQuestion, UserInputRequest,
-        appearance_code_theme_supports_variant, computer_app_id_matches, permission_mode_options,
-        reduce, stable_reference, validate_mcp_form_content,
+        appearance_code_theme_supports_variant, clear_git_for_context_change,
+        computer_app_id_matches, permission_mode_options, reduce, stable_reference,
+        validate_mcp_form_content,
     };
 
     fn task(id: &str) -> TaskSummary {
@@ -25182,6 +25265,97 @@ mod tests {
     }
 
     #[test]
+    fn late_git_diff_from_a_previous_workspace_is_ignored() {
+        let first_root = PathBuf::from("C:\\repo-a");
+        let second_root = PathBuf::from("C:\\repo-b");
+        let first_path = PathBuf::from("src\\first.rs");
+        let second_path = PathBuf::from("src\\second.rs");
+        let mut first = task_in_repository("first");
+        first.cwd = first_root.clone();
+        let mut second = task_in_repository("second");
+        second.cwd = second_root.clone();
+        let mut state = AppState {
+            tasks: vec![first, second],
+            selected_task_id: Some("first".to_owned()),
+            git: GitState {
+                repository_root: Some(first_root.clone()),
+                ..GitState::default()
+            },
+            ..AppState::default()
+        };
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SelectDiffPath {
+                    path: first_path,
+                    scope: GitDiffScope::Unstaged,
+                },
+            ),
+            [Effect::LoadDiff {
+                generation: 1,
+                root: first_root,
+                path: PathBuf::from("src\\first.rs"),
+                staged: false,
+            }]
+        );
+
+        reduce(&mut state, Action::SelectTask("second".to_owned()));
+        let refresh_generation = state.git.refresh_generation;
+        reduce(
+            &mut state,
+            Action::GitSnapshotLoaded {
+                generation: refresh_generation,
+                git: Box::new(GitState {
+                    repository_root: Some(second_root.clone()),
+                    files: vec![super::GitFileState {
+                        path: second_path.clone(),
+                        old_path: None,
+                        kind: super::GitFileKind::Modified,
+                        staged: false,
+                        unstaged: true,
+                        staged_additions: 0,
+                        staged_deletions: 0,
+                        unstaged_additions: 1,
+                        unstaged_deletions: 0,
+                    }],
+                    ..GitState::default()
+                }),
+                error: None,
+            },
+        );
+
+        assert_eq!(state.git.diff_generation, 3);
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::SelectDiffPath {
+                    path: second_path,
+                    scope: GitDiffScope::Unstaged,
+                },
+            ),
+            [Effect::LoadDiff {
+                generation: 4,
+                root: second_root,
+                path: PathBuf::from("src\\second.rs"),
+                staged: false,
+            }]
+        );
+
+        reduce(
+            &mut state,
+            Action::DiffLoaded {
+                generation: 1,
+                text: "stale workspace diff".to_owned(),
+                truncated: false,
+            },
+        );
+
+        assert_eq!(state.git.diff_status, Some(LoadStatus::Loading));
+        assert!(state.git.unified_diff.is_empty());
+    }
+
+    #[test]
     fn git_refresh_preserves_a_selected_file_in_the_same_scope() {
         let root = PathBuf::from("C:\\repo");
         let path = PathBuf::from("src\\lib.rs");
@@ -26008,6 +26182,7 @@ mod tests {
                 },
             ),
             [Effect::CommitGit {
+                generation: 1,
                 root: PathBuf::from("C:\\repo"),
                 branch: Some("feature/native-ui".to_owned()),
                 message: String::new(),
@@ -26022,13 +26197,17 @@ mod tests {
             Some(GitCommitPhase::GeneratingMessage)
         );
 
-        reduce(&mut state, Action::GitCommitMessageGenerated);
+        reduce(
+            &mut state,
+            Action::GitCommitMessageGenerated { generation: 1 },
+        );
         assert_eq!(state.git.pending_commit, Some(GitCommitPhase::Committing));
-        reduce(&mut state, Action::GitPushStarted);
+        reduce(&mut state, Action::GitPushStarted { generation: 1 });
         assert_eq!(state.git.pending_commit, Some(GitCommitPhase::Pushing));
         reduce(
             &mut state,
             Action::GitCommitCompleted {
+                generation: 1,
                 branch: Some("feature/native-ui".to_owned()),
                 pushed: true,
             },
@@ -26071,6 +26250,7 @@ mod tests {
                 },
             ),
             [Effect::CommitGit {
+                generation: 2,
                 root: PathBuf::from("C:\\repo"),
                 branch: Some("feature/native-ui".to_owned()),
                 message: String::new(),
@@ -26136,6 +26316,7 @@ mod tests {
                 },
             ),
             [Effect::CreateGitPullRequest {
+                generation: 2,
                 root: PathBuf::from("C:\\repo"),
                 branch: "feature/native-pr".to_owned(),
                 base_branch: "main".to_owned(),
@@ -26154,17 +26335,26 @@ mod tests {
             state.git.pending_pull_request,
             Some(GitPullRequestPhase::GeneratingMessages)
         );
-        reduce(&mut state, Action::GitPullRequestCommitStarted);
+        reduce(
+            &mut state,
+            Action::GitPullRequestCommitStarted { generation: 2 },
+        );
         assert_eq!(
             state.git.pending_pull_request,
             Some(GitPullRequestPhase::Committing)
         );
-        reduce(&mut state, Action::GitPullRequestPushStarted);
+        reduce(
+            &mut state,
+            Action::GitPullRequestPushStarted { generation: 2 },
+        );
         assert_eq!(
             state.git.pending_pull_request,
             Some(GitPullRequestPhase::Pushing)
         );
-        reduce(&mut state, Action::GitPullRequestCreateStarted);
+        reduce(
+            &mut state,
+            Action::GitPullRequestCreateStarted { generation: 2 },
+        );
         assert_eq!(
             state.git.pending_pull_request,
             Some(GitPullRequestPhase::Creating)
@@ -26172,6 +26362,7 @@ mod tests {
         reduce(
             &mut state,
             Action::GitPullRequestCompleted {
+                generation: 2,
                 pull_request: GitPullRequestState {
                     number: Some(42),
                     title: "Add native PR flow".to_owned(),
@@ -26219,6 +26410,7 @@ mod tests {
                 },
             ),
             [Effect::CreateGitPullRequest {
+                generation: 1,
                 root: PathBuf::from("C:\\repo"),
                 branch: "feature/manual-pr".to_owned(),
                 base_branch: "main".to_owned(),
@@ -26237,6 +26429,141 @@ mod tests {
             state.git.pending_pull_request,
             Some(GitPullRequestPhase::Creating)
         );
+    }
+
+    #[test]
+    fn late_git_mutation_events_do_not_cross_workspaces() {
+        let mut commit_state = AppState::default();
+        commit_state.git.repository_root = Some(PathBuf::from("C:\\repo-a"));
+        commit_state.git.branch = Some("feature/a".to_owned());
+        commit_state.git.changed_files = 1;
+        reduce(
+            &mut commit_state,
+            Action::CommitGit {
+                message: "Commit A".to_owned(),
+                include_unstaged: true,
+                next_step: GitCommitNextStep::Commit,
+            },
+        );
+        assert_eq!(commit_state.git.mutation_generation, 1);
+
+        clear_git_for_context_change(&mut commit_state);
+        commit_state.git.repository_root = Some(PathBuf::from("C:\\repo-b"));
+        commit_state.git.branch = Some("feature/b".to_owned());
+        commit_state.git.changed_files = 1;
+        reduce(
+            &mut commit_state,
+            Action::CommitGit {
+                message: "Commit B".to_owned(),
+                include_unstaged: true,
+                next_step: GitCommitNextStep::Commit,
+            },
+        );
+        assert_eq!(commit_state.git.mutation_generation, 3);
+        assert_eq!(
+            commit_state.git.pending_commit,
+            Some(GitCommitPhase::Committing)
+        );
+
+        reduce(&mut commit_state, Action::GitPushStarted { generation: 1 });
+        reduce(
+            &mut commit_state,
+            Action::GitCommitCompleted {
+                generation: 1,
+                branch: Some("feature/a".to_owned()),
+                pushed: false,
+            },
+        );
+        reduce(
+            &mut commit_state,
+            Action::GitCommitFailed {
+                generation: 1,
+                message: "late A failure".to_owned(),
+            },
+        );
+        assert_eq!(
+            commit_state.git.pending_commit,
+            Some(GitCommitPhase::Committing)
+        );
+        assert!(commit_state.git.commit_error.is_none());
+        assert!(commit_state.status_message.is_none());
+
+        let mut pull_request_state = AppState {
+            connection: ConnectionStatus::Online,
+            ..AppState::default()
+        };
+        pull_request_state.git.repository_root = Some(PathBuf::from("C:\\repo-a"));
+        pull_request_state.git.branch = Some("feature/a".to_owned());
+        pull_request_state.git.default_branch = Some("main".to_owned());
+        pull_request_state.git.upstream_ref = Some("origin/feature/a".to_owned());
+        pull_request_state.git.pull_request_provider = GitPullRequestProvider::Available;
+        reduce(
+            &mut pull_request_state,
+            Action::CreateGitPullRequest {
+                title: "PR A".to_owned(),
+                body: "A".to_owned(),
+                include_local_changes: false,
+                is_draft: false,
+                open_in_browser: false,
+            },
+        );
+        assert_eq!(pull_request_state.git.mutation_generation, 1);
+
+        clear_git_for_context_change(&mut pull_request_state);
+        pull_request_state.git.repository_root = Some(PathBuf::from("C:\\repo-b"));
+        pull_request_state.git.branch = Some("feature/b".to_owned());
+        pull_request_state.git.default_branch = Some("main".to_owned());
+        pull_request_state.git.upstream_ref = Some("origin/feature/b".to_owned());
+        pull_request_state.git.pull_request_provider = GitPullRequestProvider::Available;
+        reduce(
+            &mut pull_request_state,
+            Action::CreateGitPullRequest {
+                title: "PR B".to_owned(),
+                body: "B".to_owned(),
+                include_local_changes: false,
+                is_draft: false,
+                open_in_browser: false,
+            },
+        );
+        assert_eq!(pull_request_state.git.mutation_generation, 3);
+        assert_eq!(
+            pull_request_state.git.pending_pull_request,
+            Some(GitPullRequestPhase::Creating)
+        );
+
+        reduce(
+            &mut pull_request_state,
+            Action::GitPullRequestCreateStarted { generation: 1 },
+        );
+        reduce(
+            &mut pull_request_state,
+            Action::GitPullRequestCompleted {
+                generation: 1,
+                pull_request: GitPullRequestState {
+                    number: Some(1),
+                    title: "PR A".to_owned(),
+                    url: "https://example.com/a".to_owned(),
+                    base_branch: "main".to_owned(),
+                    head_branch: "feature/a".to_owned(),
+                    is_draft: false,
+                },
+                open_in_browser: false,
+            },
+        );
+        reduce(
+            &mut pull_request_state,
+            Action::GitPullRequestFailed {
+                generation: 1,
+                message: "late A failure".to_owned(),
+            },
+        );
+        assert_eq!(
+            pull_request_state.git.pending_pull_request,
+            Some(GitPullRequestPhase::Creating)
+        );
+        assert!(pull_request_state.git.pull_request.is_none());
+        assert!(pull_request_state.git.pull_request_error.is_none());
+        assert!(pull_request_state.status_message.is_none());
     }
 
     #[test]

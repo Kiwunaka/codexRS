@@ -7097,12 +7097,22 @@ impl WorkspaceView {
             let branch_mutation_completed =
                 matches!(&action, Action::GitBranchMutationCompleted { .. });
             let branch_switch_blocked = matches!(&action, Action::GitBranchSwitchBlocked { .. });
-            let git_commit_completed = matches!(&action, Action::GitCommitCompleted { .. });
+            let git_commit_completed = matches!(
+                &action,
+                Action::GitCommitCompleted { generation, .. }
+                    if *generation == self.state.git.mutation_generation
+                        && self.state.git.pending_commit.is_some()
+            );
             let pull_request_browser_url = match &action {
                 Action::GitPullRequestCompleted {
+                    generation,
                     pull_request,
                     open_in_browser: true,
-                } => Some(pull_request.url.clone()),
+                } if *generation == self.state.git.mutation_generation
+                    && self.state.git.pending_pull_request.is_some() =>
+                {
+                    Some(pull_request.url.clone())
+                }
                 _ => None,
             };
             let mcp_authentication = match &action {
@@ -7275,10 +7285,9 @@ impl WorkspaceView {
                     cx.open_url(&url);
                 } else {
                     self.dispatch(
-                        Action::GitPullRequestFailed {
-                            message: "GitHub CLI returned an unsupported pull request URL."
-                                .to_owned(),
-                        },
+                        Action::SetGitPullRequestError(
+                            "GitHub CLI returned an unsupported pull request URL.".to_owned(),
+                        ),
                         cx,
                     );
                 }
