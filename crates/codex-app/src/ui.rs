@@ -6931,6 +6931,7 @@ impl WorkspaceView {
             Action::ShowInspector(_)
             | Action::OpenOutput(_)
             | Action::OpenFuzzyFileResult(_)
+            | Action::OpenAssistantFileCitation { .. }
             | Action::CloseOutput => {
                 self.responsive_inspector_restore = None;
             }
@@ -17128,6 +17129,7 @@ impl WorkspaceView {
                 bounded_render_text(item.text.trim(), 64 * 1024)
             };
             let findings = extract_code_comment_findings(&text);
+            let file_citations = extract_assistant_file_citations(&text);
             let code_action_prefix = format!("agent-code-{task_id}-{}", item.id);
             let body = if let Some(markdown) = sanitize_assistant_markdown(&text) {
                 let source_highlights = thread_find_query
@@ -17197,6 +17199,11 @@ impl WorkspaceView {
                         .line_height(px(20.0))
                         .child(body),
                 )
+                .children(file_citations.into_iter().enumerate().map(
+                    |(citation_index, citation)| {
+                        self.render_assistant_file_citation(index, citation_index, citation, cx)
+                    },
+                ))
                 .children(
                     findings
                         .into_iter()
@@ -17590,6 +17597,37 @@ impl WorkspaceView {
                     .child(Icon::new(IconName::ExternalLink).xsmall()),
             )
             .into_any_element()
+    }
+
+    fn render_assistant_file_citation(
+        &mut self,
+        item_index: usize,
+        citation_index: usize,
+        citation: AssistantFileCitation,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let path = citation.path.clone();
+        let line_start = citation.line_start;
+        let line_end = citation.line_end;
+        Button::new(SharedString::from(format!(
+            "assistant-file-citation-{item_index}-{citation_index}"
+        )))
+        .label(citation.label())
+        .icon(IconName::File)
+        .tooltip(citation.path.display().to_string())
+        .xsmall()
+        .ghost()
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.dispatch(
+                Action::OpenAssistantFileCitation {
+                    path: path.clone(),
+                    line_start,
+                    line_end,
+                },
+                cx,
+            );
+        }))
+        .into_any_element()
     }
 
     fn render_assistant_finding(
@@ -23776,11 +23814,21 @@ impl WorkspaceView {
                     )
                 })
         });
-        let metadata = format!(
+        let mut metadata = format!(
             "{} · {}",
             preview.extension.to_ascii_uppercase(),
             format_file_size(preview.size_bytes)
         );
+        if workspace_file
+            && let Some((line_start, line_end)) = self.state.artifacts.selected_line_range
+        {
+            let line_label = if line_end > line_start {
+                format!("lines {line_start}-{line_end}")
+            } else {
+                format!("line {line_start}")
+            };
+            metadata.push_str(&format!(" · {line_label}"));
+        }
         let body = match preview.kind {
             ArtifactPreviewKind::Text => v_flex()
                 .flex_1()
@@ -43197,6 +43245,28 @@ struct AssistantFinding {
     priority: Option<u8>,
 }
 
+const MAX_ASSISTANT_FILE_CITATIONS: usize = 64;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AssistantFileCitation {
+    path: PathBuf,
+    line_start: u32,
+    line_end: u32,
+}
+
+impl AssistantFileCitation {
+    fn label(&self) -> String {
+        file_citation_label(&self.path.to_string_lossy(), self.line_start, self.line_end)
+    }
+}
+
+#[derive(Debug)]
+struct AssistantFileCitationMatch {
+    start: usize,
+    end: usize,
+    citation: Option<AssistantFileCitation>,
+}
+
 fn sanitize_assistant_markdown(value: &str) -> Option<String> {
     let tree = markdown::to_mdast(value, &ParseOptions::gfm()).ok()?;
     let mut link_definitions = HashMap::new();
@@ -43373,15 +43443,32 @@ fn collect_file_citation_replacements(
     base_offset: usize,
     replacements: &mut Vec<MarkdownReplacement>,
 ) {
-    collect_legacy_file_citations(text, base_offset, replacements);
-    collect_directive_file_citations(text, base_offset, replacements);
+    replacements.extend(
+        assistant_file_citation_matches(text)
+            .into_iter()
+            .map(|citation| MarkdownReplacement {
+                start: base_offset + citation.start,
+                end: base_offset + citation.end,
+                text: citation.citation.map_or_else(String::new, |citation| {
+                    file_citation_markdown(
+                        &citation.path.to_string_lossy(),
+                        citation.line_start,
+                        citation.line_end,
+                    )
+                }),
+            }),
+    );
 }
 
-fn collect_legacy_file_citations(
-    text: &str,
-    base_offset: usize,
-    replacements: &mut Vec<MarkdownReplacement>,
-) {
+fn assistant_file_citation_matches(text: &str) -> Vec<AssistantFileCitationMatch> {
+    let mut citations = legacy_file_citation_matches(text);
+    citations.extend(directive_file_citation_matches(text));
+    citations.sort_unstable_by_key(|citation| citation.start);
+    citations
+}
+
+fn legacy_file_citation_matches(text: &str) -> Vec<AssistantFileCitationMatch> {
+    let mut citations = Vec::new();
     let mut cursor = 0;
     while let Some(relative_start) = text[cursor..].find('【') {
         let start = cursor + relative_start;
@@ -43390,20 +43477,21 @@ fn collect_legacy_file_citations(
             break;
         };
         let end = content_start + relative_end + '】'.len_utf8();
-        if let Some((path, line_start, line_end)) =
+        if let Some(citation) =
             parse_legacy_file_citation(&text[content_start..content_start + relative_end])
         {
-            replacements.push(MarkdownReplacement {
-                start: base_offset + start,
-                end: base_offset + end,
-                text: file_citation_markdown(path, line_start, line_end),
+            citations.push(AssistantFileCitationMatch {
+                start,
+                end,
+                citation: Some(citation),
             });
         }
         cursor = end;
     }
+    citations
 }
 
-fn parse_legacy_file_citation(value: &str) -> Option<(&str, u32, u32)> {
+fn parse_legacy_file_citation(value: &str) -> Option<AssistantFileCitation> {
     if value.contains(['\n', '\r']) {
         return None;
     }
@@ -43417,15 +43505,16 @@ fn parse_legacy_file_citation(value: &str) -> Option<(&str, u32, u32)> {
         let line = lines.parse::<u32>().ok()?;
         (line, line)
     };
-    (line_start > 0 && line_end >= line_start).then_some((path, line_start, line_end))
+    (line_start > 0 && line_end >= line_start).then(|| AssistantFileCitation {
+        path: PathBuf::from(path),
+        line_start,
+        line_end,
+    })
 }
 
-fn collect_directive_file_citations(
-    text: &str,
-    base_offset: usize,
-    replacements: &mut Vec<MarkdownReplacement>,
-) {
+fn directive_file_citation_matches(text: &str) -> Vec<AssistantFileCitationMatch> {
     const PREFIX: &str = "::codex-file-citation{";
+    let mut citations = Vec::new();
     let mut cursor = 0;
     while let Some(relative_start) = text[cursor..].find(PREFIX) {
         let start = cursor + relative_start;
@@ -43446,24 +43535,29 @@ fn collect_directive_file_citations(
         if purpose.as_deref() == Some("output")
             && path.as_deref().is_some_and(|path| !path.trim().is_empty())
         {
-            replacements.push(MarkdownReplacement {
-                start: base_offset + start,
-                end: base_offset + end,
-                text: String::new(),
+            citations.push(AssistantFileCitationMatch {
+                start,
+                end,
+                citation: None,
             });
         } else if let (Some(path), Some(line_start), Some(line_end)) = (path, line_start, line_end)
             && !path.trim().is_empty()
             && line_start > 0
             && line_end >= line_start
         {
-            replacements.push(MarkdownReplacement {
-                start: base_offset + start,
-                end: base_offset + end,
-                text: file_citation_markdown(&path, line_start, line_end),
+            citations.push(AssistantFileCitationMatch {
+                start,
+                end,
+                citation: Some(AssistantFileCitation {
+                    path: PathBuf::from(path),
+                    line_start,
+                    line_end,
+                }),
             });
         }
         cursor = end;
     }
+    citations
 }
 
 fn find_directive_attributes_end(value: &str) -> Option<usize> {
@@ -43571,6 +43665,47 @@ fn parse_directive_attribute_value(value: &str, start: usize) -> Option<(String,
     }
 }
 
+fn extract_assistant_file_citations(value: &str) -> Vec<AssistantFileCitation> {
+    let Ok(tree) = markdown::to_mdast(value, &ParseOptions::gfm()) else {
+        return Vec::new();
+    };
+    let mut citations = Vec::new();
+    collect_assistant_file_citations(value, &tree, &mut citations);
+    citations
+}
+
+fn collect_assistant_file_citations(
+    source: &str,
+    node: &Node,
+    citations: &mut Vec<AssistantFileCitation>,
+) {
+    if citations.len() >= MAX_ASSISTANT_FILE_CITATIONS {
+        return;
+    }
+    if matches!(node, Node::Text(_))
+        && let Some(position) = node.position()
+        && position.start.offset <= position.end.offset
+        && position.end.offset <= source.len()
+        && source.is_char_boundary(position.start.offset)
+        && source.is_char_boundary(position.end.offset)
+    {
+        citations.extend(
+            assistant_file_citation_matches(&source[position.start.offset..position.end.offset])
+                .into_iter()
+                .filter_map(|citation| citation.citation)
+                .take(MAX_ASSISTANT_FILE_CITATIONS - citations.len()),
+        );
+    }
+    if let Some(children) = node.children() {
+        for child in children {
+            collect_assistant_file_citations(source, child, citations);
+            if citations.len() >= MAX_ASSISTANT_FILE_CITATIONS {
+                break;
+            }
+        }
+    }
+}
+
 fn extract_code_comment_findings(value: &str) -> Vec<AssistantFinding> {
     let Ok(tree) = markdown::to_mdast(value, &ParseOptions::gfm()) else {
         return Vec::new();
@@ -43662,6 +43797,10 @@ fn code_comment_directives(text: &str) -> Vec<(usize, usize, AssistantFinding)> 
 }
 
 fn file_citation_markdown(path: &str, line_start: u32, line_end: u32) -> String {
+    format!("`{}`", file_citation_label(path, line_start, line_end))
+}
+
+fn file_citation_label(path: &str, line_start: u32, line_end: u32) -> String {
     let file_name = path
         .rsplit(['/', '\\'])
         .find(|part| !part.is_empty())
@@ -43676,7 +43815,7 @@ fn file_citation_markdown(path: &str, line_start: u32, line_end: u32) -> String 
     } else {
         format!("line {line_start}")
     };
-    format!("`{file_name} ({line_label})`")
+    format!("{file_name} ({line_label})")
 }
 
 fn timeline_style(kind: TimelineKind, cx: &App) -> (&'static str, gpui::Hsla, gpui::Hsla) {
@@ -45671,20 +45810,20 @@ mod tests {
         composer_service_tier_commands, composer_skill_command_for_query, composer_skill_commands,
         composer_slash_command_for_prefix, connection_send_failure, decode_mcp_form_image_data_url,
         default_branch_name, diff_file_review_rows, diff_file_sections,
-        extract_code_comment_findings, fetch_plugin_logo_blocking,
-        find_keyboard_shortcut_available, find_timeline_matches, first_run_account_load_error,
-        first_run_sign_in_visible, format_decimal_grouped, format_token_activity_days,
-        format_token_activity_duration, initial_app_state, input_position_for_offset,
-        installed_app_indices, integrated_terminal_shell_label, is_navigation_back_key,
-        is_navigation_forward_key, is_next_chat_bracket_key, is_previous_chat_bracket_key,
-        is_settings_shortcut_key, is_stable_composer_photo, is_supported_external_url,
-        is_supported_plugin_logo_url, is_terminal_shortcut_key, keyboard_shortcut_search_matches,
-        keyboard_shortcut_settings_matches, keyboard_shortcut_stable_order,
-        linked_pull_request_merge_command_enabled, mcp_auth_status_label,
-        mcp_authentication_start_is_accepted, modal_surface_max_height, modal_surface_width,
-        model_availability_nux_candidate, model_upgrade_learn_more_visible, normalized_accelerator,
-        output_artifact_type_label, parse_appearance_theme_share_string, parse_mcp_list,
-        parse_mcp_record, parse_unified_diff, plugin_logo_format,
+        extract_assistant_file_citations, extract_code_comment_findings,
+        fetch_plugin_logo_blocking, find_keyboard_shortcut_available, find_timeline_matches,
+        first_run_account_load_error, first_run_sign_in_visible, format_decimal_grouped,
+        format_token_activity_days, format_token_activity_duration, initial_app_state,
+        input_position_for_offset, installed_app_indices, integrated_terminal_shell_label,
+        is_navigation_back_key, is_navigation_forward_key, is_next_chat_bracket_key,
+        is_previous_chat_bracket_key, is_settings_shortcut_key, is_stable_composer_photo,
+        is_supported_external_url, is_supported_plugin_logo_url, is_terminal_shortcut_key,
+        keyboard_shortcut_search_matches, keyboard_shortcut_settings_matches,
+        keyboard_shortcut_stable_order, linked_pull_request_merge_command_enabled,
+        mcp_auth_status_label, mcp_authentication_start_is_accepted, modal_surface_max_height,
+        modal_surface_width, model_availability_nux_candidate, model_upgrade_learn_more_visible,
+        normalized_accelerator, output_artifact_type_label, parse_appearance_theme_share_string,
+        parse_mcp_list, parse_mcp_record, parse_unified_diff, plugin_logo_format,
         process_manager_auto_refresh_allowed, project_trigger_matches, project_workspace_options,
         pull_request_merge_submission_enabled, reasoning_effort_target, reduced_motion_enabled,
         remote_control_status_label, render_conversation_markdown, replace_composer_file_query,
@@ -48646,6 +48785,21 @@ mod tests {
         assert!(sanitized.contains("`ui.rs (lines 40-44)`"));
         assert!(sanitized.contains("`parity matrix.md (line 7)`"));
         assert!(sanitized.contains("```text\n【keep.rs†L1-L2】\n```"));
+    }
+
+    #[test]
+    fn assistant_file_citations_keep_workspace_paths_and_line_ranges_for_native_opening() {
+        let markdown = "【crates/codex-app/src/ui.rs†L40-L44】 ::codex-file-citation{path=\"docs/parity matrix.md\" line_range_start=\"7\"}.\n\n```text\n【ignored.rs†L1】\n```";
+        let citations = extract_assistant_file_citations(markdown);
+
+        assert_eq!(citations.len(), 2);
+        assert_eq!(
+            citations[0].path,
+            PathBuf::from("crates/codex-app/src/ui.rs")
+        );
+        assert_eq!((citations[0].line_start, citations[0].line_end), (40, 44));
+        assert_eq!(citations[1].path, PathBuf::from("docs/parity matrix.md"));
+        assert_eq!((citations[1].line_start, citations[1].line_end), (7, 7));
     }
 
     #[test]

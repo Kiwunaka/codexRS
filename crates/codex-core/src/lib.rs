@@ -3700,6 +3700,7 @@ pub struct ArtifactPreview {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArtifactState {
     pub selected_path: Option<PathBuf>,
+    pub selected_line_range: Option<(u32, u32)>,
     pub status: LoadStatus,
     pub preview: Option<ArtifactPreview>,
     pub error: Option<String>,
@@ -3709,6 +3710,7 @@ impl Default for ArtifactState {
     fn default() -> Self {
         Self {
             selected_path: None,
+            selected_line_range: None,
             status: LoadStatus::Idle,
             preview: None,
             error: None,
@@ -4375,6 +4377,11 @@ pub enum Action {
     ShowInspector(InspectorPane),
     OpenOutput(PathBuf),
     OpenFuzzyFileResult(PathBuf),
+    OpenAssistantFileCitation {
+        path: PathBuf,
+        line_start: u32,
+        line_end: u32,
+    },
     CloseOutput,
     OutputPreviewLoaded {
         task_id: String,
@@ -8354,6 +8361,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.terminal_dock_open = false;
             }
             state.artifacts.selected_path = Some(path.clone());
+            state.artifacts.selected_line_range = None;
             state.artifacts.status = LoadStatus::Loading;
             state.artifacts.preview = None;
             state.artifacts.error = None;
@@ -8404,6 +8412,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.terminal_dock_open = false;
             }
             state.artifacts.selected_path = Some(result.path.clone());
+            state.artifacts.selected_line_range = None;
             state.artifacts.status = LoadStatus::Loading;
             state.artifacts.preview = None;
             state.artifacts.error = None;
@@ -8416,6 +8425,43 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     root,
                     path: result.path,
                 },
+            ]
+        }
+        Action::OpenAssistantFileCitation {
+            path,
+            line_start,
+            line_end,
+        } => {
+            let Some(root) = state
+                .selected_task_id
+                .as_deref()
+                .and_then(|task_id| state.tasks.iter().find(|task| task.id == task_id))
+                .map(|task| task.cwd.clone())
+            else {
+                state.status_message = Some("The selected chat has no workspace.".to_owned());
+                return Vec::new();
+            };
+            if line_start == 0 || line_end < line_start {
+                state.status_message =
+                    Some("This file citation has an invalid line range.".to_owned());
+                return Vec::new();
+            }
+            state.inspector = InspectorPane::Files;
+            state.last_side_panel = InspectorPane::Files;
+            if state.terminal.location == TerminalDockLocation::Right {
+                state.terminal_dock_open = false;
+            }
+            state.artifacts.selected_path = Some(path.clone());
+            state.artifacts.selected_line_range = Some((line_start, line_end));
+            state.artifacts.status = LoadStatus::Loading;
+            state.artifacts.preview = None;
+            state.artifacts.error = None;
+            vec![
+                Effect::PersistUiState {
+                    route: state.route,
+                    inspector: state.inspector,
+                },
+                Effect::LoadWorkspaceFilePreview { root, path },
             ]
         }
         Action::CloseOutput => {
@@ -20488,6 +20534,40 @@ mod tests {
                 path: directory,
             }]
         );
+    }
+
+    #[test]
+    fn assistant_file_citation_opens_a_bounded_workspace_preview_at_its_line_range() {
+        let root = repository_path();
+        let path = PathBuf::from("crates/codex-core/src/lib.rs");
+        let mut state = AppState::default();
+        state.tasks.push(task_in_repository("t1"));
+        state.selected_task_id = Some("t1".to_owned());
+
+        assert_eq!(
+            reduce(
+                &mut state,
+                Action::OpenAssistantFileCitation {
+                    path: path.clone(),
+                    line_start: 40,
+                    line_end: 44,
+                },
+            ),
+            [
+                Effect::PersistUiState {
+                    route: MainRoute::Tasks,
+                    inspector: InspectorPane::Files,
+                },
+                Effect::LoadWorkspaceFilePreview {
+                    root,
+                    path: path.clone(),
+                },
+            ]
+        );
+        assert_eq!(state.inspector, InspectorPane::Files);
+        assert_eq!(state.artifacts.selected_path, Some(path));
+        assert_eq!(state.artifacts.selected_line_range, Some((40, 44)));
+        assert_eq!(state.artifacts.status, LoadStatus::Loading);
     }
 
     #[test]
