@@ -1006,7 +1006,7 @@ dependencies = [
 
 [[package]]
 name = "codex-app"
-version = "0.1.0-rc.6"
+version = "0.1.0-rc.7"
 dependencies = [
  "base64 0.23.0",
  "chrono",
@@ -1029,11 +1029,11 @@ dependencies = [
 
 [[package]]
 name = "codex-core"
-version = "0.1.0-rc.6"
+version = "0.1.0-rc.7"
 
 [[package]]
 name = "codex-platform"
-version = "0.1.0-rc.6"
+version = "0.1.0-rc.7"
 dependencies = [
  "base64 0.23.0",
  "codex-core",
@@ -1061,7 +1061,7 @@ dependencies = [
 
 [[package]]
 name = "codex-protocol"
-version = "0.1.0-rc.6"
+version = "0.1.0-rc.7"
 dependencies = [
  "serde",
  "serde_json",
@@ -1069,7 +1069,7 @@ dependencies = [
 
 [[package]]
 name = "codex-storage"
-version = "0.1.0-rc.6"
+version = "0.1.0-rc.7"
 dependencies = [
  "rusqlite",
 ]
