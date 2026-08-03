@@ -9213,6 +9213,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             state.timelines.remove(&task_id);
             state.goals.remove(&task_id);
             state.computer_use.remove(&task_id);
+            state.browser.remove(&task_id);
             if state.process_manager.task_id.as_deref() == Some(task_id.as_str()) {
                 state.process_manager = ProcessManagerState::default();
             }
@@ -28130,6 +28131,7 @@ mod tests {
         let mut state = AppState::default();
         reduce(&mut state, Action::TaskCreated(task("t1")));
         state.background_completion_task_id = Some("t1".to_owned());
+        state.browser.entry("t1".to_owned()).or_default();
 
         assert_eq!(
             reduce(&mut state, Action::ArchiveTask("t1".to_owned())),
@@ -28143,6 +28145,7 @@ mod tests {
 
         assert!(state.tasks.is_empty());
         assert!(state.timelines.is_empty());
+        assert!(state.browser.is_empty());
         assert_eq!(state.selected_task_id, None);
         assert_eq!(state.background_completion_task_id, None);
     }

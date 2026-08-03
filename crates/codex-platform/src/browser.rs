@@ -358,6 +358,7 @@ pub(crate) enum BrowserCommand {
         context_id: String,
         tab_id: String,
     },
+    CloseContext(String),
     Resize {
         width: u32,
         height: u32,
@@ -587,6 +588,11 @@ impl BrowserSession {
             &self.commands,
             BrowserCommand::CloseTab { context_id, tab_id },
         )
+    }
+
+    pub fn close_context(&self, context_id: &str) -> Result<(), BrowserCommandError> {
+        let context_id = checked_context_id(context_id)?;
+        send_command(&self.commands, BrowserCommand::CloseContext(context_id))
     }
 
     pub fn resize(&self, width: u32, height: u32) -> Result<(), BrowserCommandError> {
@@ -2158,6 +2164,7 @@ impl BrowserRuntime {
             BrowserCommand::CloseTab { context_id, tab_id } => {
                 self.close_tab(&context_id, &tab_id)?;
             }
+            BrowserCommand::CloseContext(context_id) => self.close_context(&context_id)?,
             BrowserCommand::Resize { width, height } => self.resize(width, height)?,
             BrowserCommand::SyncSurfaceState {
                 context_id,
@@ -3942,6 +3949,64 @@ impl BrowserRuntime {
                 .insert(context_id.to_owned(), self.tabs[index].public.id.clone());
         }
         self.emit_tabs(context_id);
+        Ok(())
+    }
+
+    fn close_context(&mut self, context_id: &str) -> Result<(), String> {
+        let was_active = self.active_context_id == context_id
+            && self
+                .tabs
+                .get(self.active_index)
+                .is_some_and(|tab| tab.context_id == context_id);
+        if was_active {
+            self.stop_screencast(self.active_index)?;
+        }
+
+        let indices = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, tab)| (tab.context_id == context_id).then_some(index))
+            .collect::<Vec<_>>();
+        for index in indices.into_iter().rev() {
+            let tab_id = self.tabs[index].public.id.clone();
+            let agent_tab_id = self.tabs[index].agent_id;
+            self.revoke_download_grant_for_tab(agent_tab_id)?;
+            self.emit_agent_notification(context_id, "onCDPDetach", json!({"tabId": agent_tab_id}));
+            self.cdp
+                .request("Target.closeTarget", json!({"targetId": tab_id}), None)?;
+            self.tabs.remove(index);
+            self.agent_child_sessions
+                .retain(|_, child| child.agent_tab_id != agent_tab_id);
+            if index < self.active_index {
+                self.active_index = self.active_index.saturating_sub(1);
+            }
+        }
+
+        self.active_tab_ids.remove(context_id);
+        self.cached_agent_expressions
+            .retain(|(cached_context_id, _, _), _| cached_context_id != context_id);
+        self.cached_agent_expression_order
+            .retain(|(cached_context_id, _, _)| cached_context_id != context_id);
+        self.pending_visibility_context_ids.remove(context_id);
+        self.viewport_overrides.remove(context_id);
+        if self.surface_context_id.as_deref() == Some(context_id) {
+            self.surface_context_id = None;
+            self.surface_visible = false;
+        }
+
+        self.active_index = self.active_index.min(self.tabs.len().saturating_sub(1));
+
+        if was_active {
+            self.active_context_id.clear();
+            if let Some(next_context_id) = self
+                .tabs
+                .get(self.active_index)
+                .map(|tab| tab.context_id.clone())
+            {
+                self.activate_context(&next_context_id)?;
+            }
+        }
         Ok(())
     }
 

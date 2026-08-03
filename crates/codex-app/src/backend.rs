@@ -6738,6 +6738,7 @@ fn run_effect(
                 Ok(_) => {
                     computer_capable_threads.remove(&task_id);
                     computer_permissions.remove(&task_id);
+                    close_browser_context(browser, &task_id);
                     emit(events, Action::TaskArchived(task_id));
                 }
                 Err(error) => emit(
@@ -10134,6 +10135,15 @@ fn ensure_browser_context(
         executable: None,
     });
     Ok(())
+}
+
+fn close_browser_context(browser: &mut Option<BrowserRuntime>, task_id: &str) {
+    let Some(runtime) = browser.as_mut() else {
+        return;
+    };
+    if runtime.contexts.contains(task_id) && runtime.session.close_context(task_id).is_ok() {
+        runtime.contexts.remove(task_id);
+    }
 }
 
 fn run_browser_command(
