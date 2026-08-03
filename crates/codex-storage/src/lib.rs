@@ -199,10 +199,31 @@ impl Store {
     pub fn preference(&self, key: &str) -> Result<Option<String>, StoreError> {
         self.ensure_owner()?;
         validate_preference(key, "")?;
+        let value_bytes = self
+            .connection
+            .query_row(
+                "SELECT length(CAST(value AS BLOB)) FROM ui_preferences WHERE key = ?1",
+                [key],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        let Some(value_bytes) = value_bytes else {
+            return Ok(None);
+        };
+        if usize::try_from(value_bytes)
+            .ok()
+            .is_none_or(|value_bytes| value_bytes > MAX_PREFERENCE_VALUE_BYTES)
+        {
+            return Err(StoreError::PreferenceValueTooLarge);
+        }
         self.connection
             .query_row(
-                "SELECT value FROM ui_preferences WHERE key = ?1",
-                [key],
+                "SELECT value FROM ui_preferences
+                 WHERE key = ?1 AND length(CAST(value AS BLOB)) <= ?2",
+                params![
+                    key,
+                    i64::try_from(MAX_PREFERENCE_VALUE_BYTES).unwrap_or(i64::MAX)
+                ],
                 |row| row.get(0),
             )
             .optional()
@@ -657,12 +678,13 @@ mod tests {
     use std::error::Error;
     use std::path::Path;
 
-    use rusqlite::Connection;
+    use rusqlite::{Connection, params};
 
     use super::{
         BrowserDownloadRecordStatus, DEFAULT_HISTORY_PAGE_SIZE, MAX_BROWSER_DOWNLOAD_RECORDS,
-        MAX_HISTORY_PAGE_SIZE, MAX_INLINE_EVENT_BYTES, MAX_LOCAL_PROJECTS, Store, StoreError,
-        StoredBrowserDownload, bounded_history_page_size, validate_inline_event_size,
+        MAX_HISTORY_PAGE_SIZE, MAX_INLINE_EVENT_BYTES, MAX_LOCAL_PROJECTS,
+        MAX_PREFERENCE_VALUE_BYTES, Store, StoreError, StoredBrowserDownload,
+        bounded_history_page_size, validate_inline_event_size,
     };
 
     #[test]
@@ -703,6 +725,26 @@ mod tests {
         assert_eq!(page.items[0].name, None);
         assert!(!page.items[0].pinned);
         assert_eq!(page.next_offset, None);
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_oversized_raw_preference() -> Result<(), Box<dyn Error>> {
+        let store = Store::open_in_memory()?;
+        store.connection.execute(
+            "INSERT INTO ui_preferences(key, value, updated_at) VALUES (?1, ?2, ?3)",
+            params![
+                "oversized",
+                "x".repeat(MAX_PREFERENCE_VALUE_BYTES + 1),
+                0_i64
+            ],
+        )?;
+
+        let error = match store.preference("oversized") {
+            Err(error) => error,
+            Ok(_) => panic!("oversized raw preference was accepted"),
+        };
+        assert!(matches!(error, StoreError::PreferenceValueTooLarge));
         Ok(())
     }
 

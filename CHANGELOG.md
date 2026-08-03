@@ -5,6 +5,25 @@ All notable changes to codexRS are documented here. The project follows
 
 ## [Unreleased]
 
+## [0.1.0-rc.10] - 2026-08-03
+
+### Fixed
+
+- Failed submissions cannot restore an older prompt over a newer draft in the
+  same chat.
+- Marketplace catalogs and plugin details refresh when the selected workspace
+  changes; MCP runtime status stays scoped to the selected task on every page.
+- Timeline and archived-chat pagination stop on repeated cursors, visible-item
+  limits, or bounded page budgets.
+- Browser Agent tab focus and cached expressions cannot cross task contexts.
+- Successful Unix parent exits terminate supervised descendants before output
+  readers join.
+
+### Security
+
+- Oversized persisted preferences are rejected before SQLite materializes the
+  value in memory.
+
 ## [0.1.0-rc.9] - 2026-08-03
 
 ### Fixed

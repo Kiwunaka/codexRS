@@ -12,6 +12,8 @@ pub const MAX_FUZZY_FILE_PATH_BYTES: usize = 8 * 1024;
 pub const MAX_VISIBLE_THREADS: usize = 500;
 pub const MAX_LOADED_THREADS: usize = 20;
 pub const MAX_TIMELINE_ITEMS: usize = 2_000;
+const MAX_TIMELINE_PAGINATION_PAGES: usize = 32;
+const MAX_ARCHIVED_TASK_PAGINATION_PAGES: usize = 32;
 pub const MAX_TURN_DIFF_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_RETRYABLE_TURN_MESSAGES: usize = 64;
 pub const MAX_PENDING_APPROVALS: usize = 64;
@@ -958,6 +960,8 @@ pub struct ArchivedTasksState {
     pub generation: u64,
     pub tasks: Vec<TaskSummary>,
     pub next_cursor: Option<String>,
+    pagination_cursors: Vec<String>,
+    pagination_pages: usize,
 }
 
 impl Default for ArchivedTasksState {
@@ -967,6 +971,8 @@ impl Default for ArchivedTasksState {
             generation: 0,
             tasks: Vec::new(),
             next_cursor: None,
+            pagination_cursors: Vec::new(),
+            pagination_pages: 0,
         }
     }
 }
@@ -1145,6 +1151,8 @@ pub struct TimelineState {
     items: Vec<TimelineItem>,
     item_indices: HashMap<String, usize>,
     pub next_cursor: Option<String>,
+    pagination_cursors: Vec<String>,
+    pagination_pages: usize,
     pub active_turn_id: Option<String>,
     pub active_review_turn_id: Option<String>,
     pub interrupt_pending: bool,
@@ -1167,6 +1175,8 @@ impl Default for TimelineState {
             items: Vec::new(),
             item_indices: HashMap::new(),
             next_cursor: None,
+            pagination_cursors: Vec::new(),
+            pagination_pages: 0,
             active_turn_id: None,
             active_review_turn_id: None,
             interrupt_pending: false,
@@ -4195,6 +4205,7 @@ pub struct AppState {
     pub selected_task_id: Option<String>,
     pub new_chat_cwd: Option<PathBuf>,
     pub new_chat_draft_generation: u64,
+    pub composer_draft_generation: u64,
     pub timelines: HashMap<String, TimelineState>,
     pub goals: HashMap<String, ThreadGoalState>,
     pub composer: String,
@@ -4262,6 +4273,7 @@ impl Default for AppState {
             selected_task_id: None,
             new_chat_cwd: None,
             new_chat_draft_generation: 0,
+            composer_draft_generation: 0,
             timelines: HashMap::new(),
             goals: HashMap::new(),
             composer: String::new(),
@@ -4633,6 +4645,7 @@ pub enum Action {
     },
     GoalAttachmentStartFailed {
         task_id: String,
+        composer_draft_generation: u64,
         prompt: RetryableUserMessage,
         message: String,
     },
@@ -4803,6 +4816,7 @@ pub enum Action {
     ComposerSubmissionFailed {
         task_id: Option<String>,
         new_chat_draft_generation: Option<u64>,
+        composer_draft_generation: Option<u64>,
         prompt: RetryableUserMessage,
         message: String,
     },
@@ -5265,12 +5279,14 @@ pub enum Action {
     RefreshMcpServers,
     McpServersLoaded {
         generation: u64,
+        thread_id: Option<String>,
         servers: Vec<McpServerCard>,
         plugin_servers: Vec<McpServerCard>,
         warnings: Vec<String>,
     },
     McpServersFailed {
         generation: u64,
+        thread_id: Option<String>,
         message: String,
     },
     ReadMcpResource {
@@ -5714,6 +5730,7 @@ pub enum Effect {
     },
     CreateTask {
         cwd: Option<PathBuf>,
+        composer_draft_generation: u64,
         model: Option<String>,
         effort: Option<String>,
         service_tier: Option<String>,
@@ -5823,6 +5840,7 @@ pub enum Effect {
     },
     RunThreadShellCommand {
         task_id: String,
+        composer_draft_generation: u64,
         command: String,
     },
     ResumeTask {
@@ -5867,6 +5885,7 @@ pub enum Effect {
     },
     StartTurn {
         task_id: String,
+        composer_draft_generation: u64,
         text: String,
         model: Option<String>,
         effort: Option<String>,
@@ -5880,6 +5899,7 @@ pub enum Effect {
     },
     SteerTurn {
         task_id: String,
+        composer_draft_generation: u64,
         expected_turn_id: String,
         text: String,
         attachments: Vec<ComposerAttachment>,
@@ -5990,6 +6010,7 @@ pub enum Effect {
     RefreshMcpServers {
         generation: u64,
         cwd: Option<PathBuf>,
+        thread_id: Option<String>,
     },
     ReadMcpResource {
         server: String,
@@ -6016,6 +6037,7 @@ pub enum Effect {
     ReloadMcpServers {
         generation: u64,
         cwd: Option<PathBuf>,
+        thread_id: Option<String>,
     },
     InstallPlugin {
         plugin_id: String,
@@ -6944,6 +6966,11 @@ fn prepare_new_chat(state: &mut AppState, cwd: Option<PathBuf>) -> Vec<Effect> {
     let mut effects = clear_fuzzy_file_search(state);
     state.route = MainRoute::Tasks;
     state.selected_task_id = None;
+    if departing_task_id.is_some() {
+        state.marketplace.mcp_generation = state.marketplace.mcp_generation.saturating_add(1);
+        state.marketplace.mcp_status = None;
+        state.marketplace.mcp_errors.clear();
+    }
     state.new_chat_cwd = cwd;
     state.process_manager = ProcessManagerState::default();
     state.artifacts = ArtifactState::default();
@@ -6977,14 +7004,25 @@ fn prepare_new_chat(state: &mut AppState, cwd: Option<PathBuf>) -> Vec<Effect> {
 
 fn advance_new_chat_draft_generation(state: &mut AppState) {
     if state.selected_task_id.is_none() {
+        advance_composer_draft_generation(state);
+    }
+}
+
+fn advance_composer_draft_generation(state: &mut AppState) {
+    state.composer_draft_generation = state.composer_draft_generation.wrapping_add(1);
+    if state.selected_task_id.is_none() {
         state.new_chat_draft_generation = state.new_chat_draft_generation.wrapping_add(1);
     }
 }
 
 fn clear_active_composer_draft(state: &mut AppState) {
+    let changed = !state.composer.is_empty() || !state.composer_attachments.is_empty();
     state.composer.clear();
     state.composer_attachments.clear();
     state.composer_error = None;
+    if changed {
+        advance_composer_draft_generation(state);
+    }
 }
 
 fn fork_task(state: &mut AppState, task_id: &str, new_worktree: bool) -> Vec<Effect> {
@@ -7769,6 +7807,7 @@ fn refresh_mcp_servers_effect(state: &mut AppState, cwd: Option<PathBuf>) -> Eff
     Effect::RefreshMcpServers {
         generation: state.marketplace.mcp_generation,
         cwd,
+        thread_id: state.selected_task_id.clone(),
     }
 }
 
@@ -7777,6 +7816,7 @@ fn reload_mcp_servers_effect(state: &mut AppState, cwd: Option<PathBuf>) -> Effe
     Effect::ReloadMcpServers {
         generation: state.marketplace.mcp_generation,
         cwd,
+        thread_id: state.selected_task_id.clone(),
     }
 }
 
@@ -9248,21 +9288,38 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         Action::RefreshArchivedTasks => {
             state.archived_tasks.generation = state.archived_tasks.generation.saturating_add(1);
             state.archived_tasks.status = LoadStatus::Loading;
+            state.archived_tasks.next_cursor = None;
+            state.archived_tasks.pagination_cursors.clear();
+            state.archived_tasks.pagination_pages = 0;
             vec![Effect::LoadArchivedTasks {
                 generation: state.archived_tasks.generation,
                 cursor: None,
             }]
         }
         Action::LoadMoreArchivedTasks => {
-            if state.archived_tasks.status == LoadStatus::Loading
-                || state.archived_tasks.next_cursor.is_none()
+            let archived = &mut state.archived_tasks;
+            let Some(cursor) = archived.next_cursor.clone() else {
+                return Vec::new();
+            };
+            if archived.status == LoadStatus::Loading {
+                Vec::new()
+            } else if archived.tasks.len() >= MAX_VISIBLE_THREADS
+                || archived.pagination_pages >= MAX_ARCHIVED_TASK_PAGINATION_PAGES
+                || archived
+                    .pagination_cursors
+                    .iter()
+                    .any(|seen| seen == &cursor)
             {
+                archived.next_cursor = None;
+                archived.status = LoadStatus::Ready;
                 Vec::new()
             } else {
-                state.archived_tasks.status = LoadStatus::Loading;
+                archived.pagination_cursors.push(cursor.clone());
+                archived.pagination_pages += 1;
+                archived.status = LoadStatus::Loading;
                 vec![Effect::LoadArchivedTasks {
-                    generation: state.archived_tasks.generation,
-                    cursor: state.archived_tasks.next_cursor.clone(),
+                    generation: archived.generation,
+                    cursor: Some(cursor),
                 }]
             }
         }
@@ -9279,9 +9336,19 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.archived_tasks.tasks.append(&mut tasks);
             } else {
                 state.archived_tasks.tasks = tasks;
+                state.archived_tasks.pagination_cursors.clear();
+                state.archived_tasks.pagination_pages = 0;
             }
             state.archived_tasks.tasks.truncate(MAX_VISIBLE_THREADS);
-            state.archived_tasks.next_cursor = next_cursor;
+            state.archived_tasks.next_cursor = next_cursor.filter(|cursor| {
+                state.archived_tasks.tasks.len() < MAX_VISIBLE_THREADS
+                    && state.archived_tasks.pagination_pages < MAX_ARCHIVED_TASK_PAGINATION_PAGES
+                    && !state
+                        .archived_tasks
+                        .pagination_cursors
+                        .iter()
+                        .any(|seen| seen == cursor)
+            });
             state.archived_tasks.status = LoadStatus::Ready;
             Vec::new()
         }
@@ -9291,6 +9358,10 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         } => {
             if generation == state.archived_tasks.generation {
                 state.archived_tasks.status = LoadStatus::Failed;
+                if state.archived_tasks.pagination_cursors.pop().is_some() {
+                    state.archived_tasks.pagination_pages =
+                        state.archived_tasks.pagination_pages.saturating_sub(1);
+                }
                 state.status_message = Some(message);
             }
             Vec::new()
@@ -9617,6 +9688,22 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     force_reload: false,
                 });
                 effects.push(refresh_composer_plugins_effect(state, selected_cwds, false));
+                state.marketplace.selected_plugin_id = None;
+                state.marketplace.plugin_detail_status = None;
+                state.marketplace.plugin_detail = None;
+                state.marketplace.plugin_detail_error = None;
+                state.marketplace.pending_plugin_skill_name = None;
+                state.marketplace.status = Some(LoadStatus::Loading);
+                let marketplace_cwds = selected_task_cwds(state);
+                let directory_tab = state.marketplace.selected_directory_tab;
+                let include_all_marketplaces = state.marketplace.manage_mode;
+                effects.push(refresh_marketplace_effect(
+                    state,
+                    marketplace_cwds,
+                    directory_tab,
+                    false,
+                    include_all_marketplaces,
+                ));
             }
             if task_changed {
                 state.marketplace.apps_status = Some(LoadStatus::Loading);
@@ -9760,14 +9847,29 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 return Vec::new();
             };
             let timeline = state.timelines.entry(task_id.clone()).or_default();
-            if timeline.status == LoadStatus::Loading || timeline.next_cursor.is_none() {
+            let Some(cursor) = timeline.next_cursor.clone() else {
+                return Vec::new();
+            };
+            if timeline.status == LoadStatus::Loading {
                 return Vec::new();
             }
+            if timeline.pagination_pages >= MAX_TIMELINE_PAGINATION_PAGES
+                || timeline
+                    .pagination_cursors
+                    .iter()
+                    .any(|seen| seen == &cursor)
+            {
+                timeline.next_cursor = None;
+                timeline.status = LoadStatus::Ready;
+                return Vec::new();
+            }
+            timeline.pagination_cursors.push(cursor.clone());
+            timeline.pagination_pages += 1;
             timeline.status = LoadStatus::Loading;
             vec![Effect::LoadTimeline {
                 task_id,
                 generation: timeline.generation,
-                cursor: timeline.next_cursor.clone(),
+                cursor: Some(cursor),
             }]
         }
         Action::TimelineLoaded {
@@ -9785,11 +9887,19 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 timeline.items.append(&mut items);
             } else {
                 timeline.items = items;
+                timeline.pagination_cursors.clear();
+                timeline.pagination_pages = 0;
             }
             if !timeline.trim_items(MAX_TIMELINE_ITEMS) {
                 timeline.rebuild_item_indices();
             }
-            timeline.next_cursor = next_cursor;
+            timeline.next_cursor = next_cursor.filter(|cursor| {
+                timeline.pagination_pages < MAX_TIMELINE_PAGINATION_PAGES
+                    && !timeline
+                        .pagination_cursors
+                        .iter()
+                        .any(|seen| seen == cursor)
+            });
             timeline.status = LoadStatus::Ready;
             Vec::new()
         }
@@ -9800,6 +9910,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             let timeline = state.timelines.entry(task_id).or_default();
             if generation == timeline.generation {
                 timeline.status = LoadStatus::Failed;
+                if timeline.pagination_cursors.pop().is_some() {
+                    timeline.pagination_pages = timeline.pagination_pages.saturating_sub(1);
+                }
             }
             Vec::new()
         }
@@ -10215,6 +10328,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::GoalAttachmentStartFailed {
             task_id,
+            composer_draft_generation,
             mut prompt,
             message,
         } => {
@@ -10225,7 +10339,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 .or_default()
                 .goal_continuation_pending = false;
             state.status_message = Some(bounded_string(message, MAX_COMPOSER_BYTES));
-            if state.selected_task_id.as_deref() == Some(task_id.as_str()) {
+            if state.selected_task_id.as_deref() == Some(task_id.as_str())
+                && composer_draft_generation == state.composer_draft_generation
+            {
                 normalize_retryable_user_message(&mut prompt);
                 restore_retry_prompt(state, &prompt);
                 state.composer_controls.goal_mode = true;
@@ -11391,7 +11507,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.composer = text;
                 state.composer_error = None;
                 if changed {
-                    advance_new_chat_draft_generation(state);
+                    advance_composer_draft_generation(state);
                 }
             } else {
                 state.composer_error = Some("Message exceeds the 256 KiB limit.".to_owned());
@@ -11456,7 +11572,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 }
             }
             if state.composer_attachments.len() != attachment_count {
-                advance_new_chat_draft_generation(state);
+                advance_composer_draft_generation(state);
             }
             Vec::new()
         }
@@ -11484,7 +11600,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     kind: ComposerAttachmentKind::Skill,
                 });
                 state.composer_error = None;
-                advance_new_chat_draft_generation(state);
+                advance_composer_draft_generation(state);
             }
             Vec::new()
         }
@@ -11514,7 +11630,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     kind: ComposerAttachmentKind::App,
                 });
                 state.composer_error = None;
-                advance_new_chat_draft_generation(state);
+                advance_composer_draft_generation(state);
             }
             Vec::new()
         }
@@ -11552,7 +11668,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     kind: ComposerAttachmentKind::Plugin,
                 });
                 state.composer_error = None;
-                advance_new_chat_draft_generation(state);
+                advance_composer_draft_generation(state);
             }
             if plugin.installed {
                 Vec::new()
@@ -11613,7 +11729,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     kind: ComposerAttachmentKind::Plugin,
                 });
                 state.composer_error = None;
-                advance_new_chat_draft_generation(state);
+                advance_composer_draft_generation(state);
             }
             if plugin.installed {
                 Vec::new()
@@ -11632,7 +11748,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             if index < state.composer_attachments.len() {
                 state.composer_attachments.remove(index);
                 state.composer_error = None;
-                advance_new_chat_draft_generation(state);
+                advance_composer_draft_generation(state);
             }
             Vec::new()
         }
@@ -11715,6 +11831,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.composer_error = None;
                 return vec![Effect::RunThreadShellCommand {
                     task_id,
+                    composer_draft_generation: state.composer_draft_generation,
                     command: command.to_owned(),
                 }];
             }
@@ -11795,6 +11912,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                             .goal_continuation_pending = false;
                         return vec![Effect::StartTurn {
                             task_id,
+                            composer_draft_generation: state.composer_draft_generation,
                             text: format!("/goal {text}"),
                             model: state.composer_controls.selected_model.clone(),
                             effort: state.composer_controls.selected_effort.clone(),
@@ -11832,6 +11950,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 state.composer_controls.goal_mode = false;
                 return vec![Effect::CreateTask {
                     cwd: state.new_chat_cwd.clone(),
+                    composer_draft_generation: state.composer_draft_generation,
                     model: state.composer_controls.selected_model.clone(),
                     effort: state.composer_controls.selected_effort.clone(),
                     service_tier: state.composer_controls.selected_service_tier.clone(),
@@ -11886,6 +12005,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 {
                     vec![Effect::SteerTurn {
                         task_id,
+                        composer_draft_generation: state.composer_draft_generation,
                         expected_turn_id,
                         text,
                         attachments,
@@ -11893,6 +12013,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 } else {
                     vec![Effect::StartTurn {
                         task_id,
+                        composer_draft_generation: state.composer_draft_generation,
                         text,
                         model: state.composer_controls.selected_model.clone(),
                         effort: state.composer_controls.selected_effort.clone(),
@@ -11914,6 +12035,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             } else {
                 vec![Effect::CreateTask {
                     cwd: state.new_chat_cwd.clone(),
+                    composer_draft_generation: state.composer_draft_generation,
                     model: state.composer_controls.selected_model.clone(),
                     effort: state.composer_controls.selected_effort.clone(),
                     service_tier: state.composer_controls.selected_service_tier.clone(),
@@ -11938,13 +12060,15 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         Action::ComposerSubmissionFailed {
             task_id,
             new_chat_draft_generation,
+            composer_draft_generation,
             mut prompt,
             message,
         } => {
             state.status_message = Some(bounded_string(message, 16 * 1024));
             let owns_task = task_id
                 .as_deref()
-                .is_some_and(|task_id| state.selected_task_id.as_deref() == Some(task_id));
+                .is_some_and(|task_id| state.selected_task_id.as_deref() == Some(task_id))
+                && composer_draft_generation == Some(state.composer_draft_generation);
             let owns_new_chat_draft = task_id.is_none()
                 && state.selected_task_id.is_none()
                 && new_chat_draft_generation == Some(state.new_chat_draft_generation);
@@ -15433,11 +15557,13 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::McpServersLoaded {
             generation,
+            thread_id,
             mut servers,
             mut plugin_servers,
             mut warnings,
         } => {
-            if generation != state.marketplace.mcp_generation {
+            if generation != state.marketplace.mcp_generation || thread_id != state.selected_task_id
+            {
                 return Vec::new();
             }
             let authorization_urls = state
@@ -15467,9 +15593,11 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
         }
         Action::McpServersFailed {
             generation,
+            thread_id,
             message,
         } => {
-            if generation != state.marketplace.mcp_generation {
+            if generation != state.marketplace.mcp_generation || thread_id != state.selected_task_id
+            {
                 return Vec::new();
             }
             state.marketplace.mcp_status = Some(LoadStatus::Failed);
@@ -20294,6 +20422,7 @@ mod tests {
             reduce(&mut state, Action::SubmitComposer),
             [Effect::StartTurn {
                 task_id: "t1".to_owned(),
+                composer_draft_generation: state.composer_draft_generation,
                 text: "inspect the diff".to_owned(),
                 model: Some("gpt-fast".to_owned()),
                 effort: Some("xhigh".to_owned()),
@@ -20657,6 +20786,7 @@ mod tests {
             reduce(&mut state, Action::SubmitComposer),
             [Effect::SteerTurn {
                 task_id: "t1".to_owned(),
+                composer_draft_generation: state.composer_draft_generation,
                 expected_turn_id: "turn-1".to_owned(),
                 text: "focus on the failing test".to_owned(),
                 attachments: Vec::new(),
@@ -20987,6 +21117,7 @@ mod tests {
             reduce(&mut state, Action::SubmitComposer),
             [Effect::CreateTask {
                 cwd: Some(repository),
+                composer_draft_generation: state.composer_draft_generation,
                 model: Some("gpt-fast".to_owned()),
                 effort: Some("high".to_owned()),
                 service_tier: None,
@@ -21517,6 +21648,7 @@ mod tests {
             reduce(&mut state, Action::SubmitComposer),
             [Effect::CreateTask {
                 cwd: None,
+                composer_draft_generation: state.composer_draft_generation,
                 model: Some("gpt-fast".to_owned()),
                 effort: None,
                 service_tier: None,
@@ -21598,6 +21730,7 @@ mod tests {
             reduce(&mut state, Action::SubmitComposer),
             [Effect::StartTurn {
                 task_id: "t1".to_owned(),
+                composer_draft_generation: state.composer_draft_generation,
                 text: "/goal Ship the release notes".to_owned(),
                 model: Some("gpt-fast".to_owned()),
                 effort: None,
@@ -21764,8 +21897,15 @@ mod tests {
                 },
                 Effect::RefreshComposerPlugins {
                     generation: 1,
-                    cwds: vec![repository],
+                    cwds: vec![repository.clone()],
                     force_refetch: false,
+                },
+                Effect::RefreshMarketplace {
+                    generation: 1,
+                    cwds: vec![repository],
+                    directory_tab: PluginDirectoryTab::CuratedByOpenAi,
+                    force_refetch: false,
+                    include_all_marketplaces: false,
                 },
                 Effect::RefreshApps {
                     force_refetch: false,
@@ -21800,6 +21940,78 @@ mod tests {
                 cursor: Some("next-page".to_owned()),
             }]
         );
+    }
+
+    #[test]
+    fn timeline_pagination_stops_before_reusing_a_cursor() {
+        let mut state = AppState::default();
+        state.tasks.push(task_in_repository("t1"));
+        reduce(&mut state, Action::SelectTask("t1".to_owned()));
+
+        reduce(
+            &mut state,
+            Action::TimelineLoaded {
+                task_id: "t1".to_owned(),
+                generation: 1,
+                items: Vec::new(),
+                next_cursor: Some("a".to_owned()),
+                append: false,
+            },
+        );
+        assert!(matches!(
+            reduce(&mut state, Action::LoadMoreTimeline).as_slice(),
+            [Effect::LoadTimeline { cursor: Some(cursor), .. }] if cursor == "a"
+        ));
+        reduce(
+            &mut state,
+            Action::TimelineLoaded {
+                task_id: "t1".to_owned(),
+                generation: 1,
+                items: Vec::new(),
+                next_cursor: Some("b".to_owned()),
+                append: true,
+            },
+        );
+        assert!(matches!(
+            reduce(&mut state, Action::LoadMoreTimeline).as_slice(),
+            [Effect::LoadTimeline { cursor: Some(cursor), .. }] if cursor == "b"
+        ));
+        reduce(
+            &mut state,
+            Action::TimelineLoaded {
+                task_id: "t1".to_owned(),
+                generation: 1,
+                items: Vec::new(),
+                next_cursor: Some("a".to_owned()),
+                append: true,
+            },
+        );
+
+        assert!(state.timelines["t1"].next_cursor.is_none());
+        assert!(reduce(&mut state, Action::LoadMoreTimeline).is_empty());
+    }
+
+    #[test]
+    fn archived_pagination_stops_at_the_visible_task_cap() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::RefreshArchivedTasks);
+        let tasks = (0..MAX_VISIBLE_THREADS)
+            .map(|index| task(&format!("archived-{index}")))
+            .collect();
+
+        reduce(
+            &mut state,
+            Action::ArchivedTasksLoaded {
+                generation: 1,
+                tasks,
+                next_cursor: Some("more".to_owned()),
+                append: false,
+            },
+        );
+
+        assert_eq!(state.archived_tasks.tasks.len(), MAX_VISIBLE_THREADS);
+        assert!(state.archived_tasks.next_cursor.is_none());
+        assert!(reduce(&mut state, Action::LoadMoreArchivedTasks).is_empty());
     }
 
     #[test]
@@ -21867,6 +22079,7 @@ mod tests {
             [Effect::RefreshMcpServers {
                 generation: 1,
                 cwd: Some(first_root),
+                thread_id: Some("first".to_owned()),
             }]
         );
 
@@ -21874,6 +22087,7 @@ mod tests {
         assert!(effects.contains(&Effect::RefreshMcpServers {
             generation: 2,
             cwd: Some(second_root),
+            thread_id: Some("second".to_owned()),
         }));
 
         assert!(
@@ -21881,6 +22095,7 @@ mod tests {
                 &mut state,
                 Action::McpServersLoaded {
                     generation: 1,
+                    thread_id: Some("first".to_owned()),
                     servers: Vec::new(),
                     plugin_servers: Vec::new(),
                     warnings: vec!["stale".to_owned()],
@@ -21895,6 +22110,7 @@ mod tests {
             &mut state,
             Action::McpServersLoaded {
                 generation: 2,
+                thread_id: Some("second".to_owned()),
                 servers: Vec::new(),
                 plugin_servers: Vec::new(),
                 warnings: vec!["current".to_owned()],
@@ -21902,6 +22118,43 @@ mod tests {
         );
         assert_eq!(state.marketplace.mcp_status, Some(LoadStatus::Ready));
         assert_eq!(state.marketplace.mcp_errors, ["current"]);
+    }
+
+    #[test]
+    fn stale_mcp_catalog_is_ignored_after_new_chat() {
+        let mut state = AppState::default();
+        state.tasks.push(task_in_repository("task-a"));
+        reduce(&mut state, Action::SelectTask("task-a".to_owned()));
+        let generation = match reduce(&mut state, Action::RefreshMcpServers).as_slice() {
+            [
+                Effect::RefreshMcpServers {
+                    generation,
+                    thread_id: Some(thread_id),
+                    ..
+                },
+            ] if thread_id == "task-a" => *generation,
+            _ => panic!("MCP refresh should retain the selected task"),
+        };
+
+        reduce(&mut state, Action::BeginNewChat);
+        assert_eq!(state.selected_task_id, None);
+        assert_eq!(state.marketplace.mcp_status, None);
+
+        assert!(
+            reduce(
+                &mut state,
+                Action::McpServersLoaded {
+                    generation,
+                    thread_id: Some("task-a".to_owned()),
+                    servers: Vec::new(),
+                    plugin_servers: Vec::new(),
+                    warnings: vec!["stale".to_owned()],
+                },
+            )
+            .is_empty()
+        );
+        assert_eq!(state.marketplace.mcp_status, None);
+        assert!(state.marketplace.mcp_errors.is_empty());
     }
 
     #[test]
@@ -21974,6 +22227,126 @@ mod tests {
             ["second-only"]
         );
         assert!(state.composer_attachments.is_empty());
+    }
+
+    #[test]
+    fn workspace_change_refreshes_marketplace_and_clears_plugin_detail() {
+        fn plugin(id: &str) -> PluginCard {
+            PluginCard {
+                id: id.to_owned(),
+                install_name: id.to_owned(),
+                marketplace: "workspace".to_owned(),
+                name: id.to_owned(),
+                description: String::new(),
+                category: None,
+                developer: None,
+                logo_url: None,
+                logo_url_dark: None,
+                default_prompt: None,
+                version: None,
+                keywords: Vec::new(),
+                installed: false,
+                enabled: false,
+                installable: true,
+                disabled_by_admin: false,
+                requires_install_confirmation: false,
+                featured: false,
+                featured_rank: None,
+            }
+        }
+
+        let mut state = AppState::default();
+        let first_root = repository_path();
+        let second_root = first_root.with_file_name("repo-second");
+        let mut first = task_in_repository("first");
+        first.cwd = first_root.clone();
+        let mut second = task_in_repository("second");
+        second.cwd = second_root.clone();
+        state.tasks = vec![first, second];
+        state.marketplace.selected_directory_tab = PluginDirectoryTab::Workspace;
+        state.marketplace.manage_mode = true;
+
+        reduce(&mut state, Action::SelectTask("first".to_owned()));
+        let first_generation = state.marketplace.marketplace_generation;
+        reduce(
+            &mut state,
+            Action::MarketplaceLoaded {
+                generation: first_generation,
+                plugins: vec![plugin("shared@workspace")],
+                sources: Vec::new(),
+                marketplace_load_error_count: 0,
+            },
+        );
+        reduce(
+            &mut state,
+            Action::OpenPluginDetails {
+                plugin_id: "shared@workspace".to_owned(),
+            },
+        );
+        state.marketplace.pending_plugin_skill_name = Some("workspace-skill".to_owned());
+
+        let effects = reduce(&mut state, Action::SelectTask("second".to_owned()));
+        let second_generation = state.marketplace.marketplace_generation;
+        assert!(effects.contains(&Effect::RefreshMarketplace {
+            generation: second_generation,
+            cwds: vec![second_root],
+            directory_tab: PluginDirectoryTab::Workspace,
+            force_refetch: false,
+            include_all_marketplaces: true,
+        }));
+        assert_eq!(state.marketplace.status, Some(LoadStatus::Loading));
+        assert!(state.marketplace.selected_plugin_id.is_none());
+        assert!(state.marketplace.plugin_detail_status.is_none());
+        assert!(state.marketplace.plugin_detail.is_none());
+        assert!(state.marketplace.plugin_detail_error.is_none());
+        assert!(state.marketplace.pending_plugin_skill_name.is_none());
+
+        reduce(
+            &mut state,
+            Action::MarketplaceLoaded {
+                generation: first_generation,
+                plugins: vec![plugin("late-a@workspace")],
+                sources: Vec::new(),
+                marketplace_load_error_count: 0,
+            },
+        );
+        assert_eq!(state.marketplace.status, Some(LoadStatus::Loading));
+        assert_eq!(state.marketplace.plugins[0].id, "shared@workspace");
+
+        reduce(
+            &mut state,
+            Action::PluginDetailLoaded {
+                plugin_id: "shared@workspace".to_owned(),
+                detail: PluginDetailView {
+                    plugin_id: "shared@workspace".to_owned(),
+                    description: "late workspace A detail".to_owned(),
+                    capabilities: Vec::new(),
+                    website_url: None,
+                    privacy_policy_url: None,
+                    terms_of_service_url: None,
+                    share_url: None,
+                    skills: Vec::new(),
+                    apps: Vec::new(),
+                    app_templates: Vec::new(),
+                    hooks: Vec::new(),
+                    mcp_servers: Vec::new(),
+                    scheduled_tasks: Vec::new(),
+                },
+            },
+        );
+        assert!(state.marketplace.plugin_detail.is_none());
+
+        reduce(
+            &mut state,
+            Action::MarketplaceLoaded {
+                generation: second_generation,
+                plugins: vec![plugin("second-only@workspace")],
+                sources: Vec::new(),
+                marketplace_load_error_count: 0,
+            },
+        );
+        assert_eq!(state.marketplace.status, Some(LoadStatus::Ready));
+        assert_eq!(state.marketplace.plugins[0].id, "second-only@workspace");
     }
 
     #[test]
@@ -22423,6 +22796,7 @@ mod tests {
             reduce(&mut state, Action::SubmitComposer),
             [Effect::RunThreadShellCommand {
                 task_id: "t1".to_owned(),
+                composer_draft_generation: state.composer_draft_generation,
                 command: "git status --short | rg src".to_owned(),
             }]
         );
@@ -22432,11 +22806,13 @@ mod tests {
             text: "/shell git status --short | rg src".to_owned(),
             attachments: Vec::new(),
         };
+        let composer_draft_generation = state.composer_draft_generation;
         reduce(
             &mut state,
             Action::ComposerSubmissionFailed {
                 task_id: Some("t1".to_owned()),
                 new_chat_draft_generation: None,
+                composer_draft_generation: Some(composer_draft_generation),
                 prompt: prompt.clone(),
                 message: "Could not run the shell command.".to_owned(),
             },
@@ -22445,11 +22821,13 @@ mod tests {
 
         reduce(&mut state, Action::SelectTask("t2".to_owned()));
         state.composer = "keep this other draft".to_owned();
+        let composer_draft_generation = state.composer_draft_generation;
         reduce(
             &mut state,
             Action::ComposerSubmissionFailed {
                 task_id: Some("t1".to_owned()),
                 new_chat_draft_generation: None,
+                composer_draft_generation: Some(composer_draft_generation),
                 prompt,
                 message: "late failure".to_owned(),
             },
@@ -22542,11 +22920,13 @@ mod tests {
         assert!(state.composer.is_empty());
         assert!(state.composer_attachments.is_empty());
 
+        let composer_draft_generation = state.composer_draft_generation;
         reduce(
             &mut state,
             Action::ComposerSubmissionFailed {
                 task_id: Some("t1".to_owned()),
                 new_chat_draft_generation: None,
+                composer_draft_generation: Some(composer_draft_generation),
                 prompt: prompt.clone(),
                 message: "failed to start turn".to_owned(),
             },
@@ -22561,11 +22941,13 @@ mod tests {
         state.composer.clear();
         state.composer_attachments.clear();
         reduce(&mut state, Action::SelectTask("t2".to_owned()));
+        let composer_draft_generation = state.composer_draft_generation;
         reduce(
             &mut state,
             Action::ComposerSubmissionFailed {
                 task_id: Some("t1".to_owned()),
                 new_chat_draft_generation: None,
+                composer_draft_generation: Some(composer_draft_generation),
                 prompt,
                 message: "late failure".to_owned(),
             },
@@ -22573,6 +22955,118 @@ mod tests {
         assert!(state.composer.is_empty());
         assert!(state.composer_attachments.is_empty());
         assert_eq!(state.status_message.as_deref(), Some("late failure"));
+    }
+
+    #[test]
+    fn stale_same_chat_submission_failure_preserves_the_newer_draft() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(&mut state, Action::SelectTask("t1".to_owned()));
+        reduce(
+            &mut state,
+            Action::TaskRuntimeLoaded {
+                task_id: "t1".to_owned(),
+                generation: 1,
+                active_turn_id: None,
+                active_turn_is_review: false,
+                run_status: Some(TaskRunStatus::Idle),
+            },
+        );
+        reduce(&mut state, Action::ComposerChanged("request A".to_owned()));
+        let submission_generation = match reduce(&mut state, Action::SubmitComposer).as_slice() {
+            [
+                Effect::StartTurn {
+                    task_id,
+                    composer_draft_generation,
+                    ..
+                },
+            ] if task_id == "t1" => *composer_draft_generation,
+            _ => panic!("selected chat submission should start a turn"),
+        };
+
+        let attachment = ComposerAttachment {
+            path: repository_path().join("draft-b.md"),
+            name: "draft-b.md".to_owned(),
+            kind: ComposerAttachmentKind::Mention,
+        };
+        reduce(&mut state, Action::ComposerChanged("draft B".to_owned()));
+        reduce(
+            &mut state,
+            Action::AddComposerAttachments(vec![attachment.path.clone()]),
+        );
+
+        reduce(
+            &mut state,
+            Action::ComposerSubmissionFailed {
+                task_id: Some("t1".to_owned()),
+                new_chat_draft_generation: None,
+                composer_draft_generation: Some(submission_generation),
+                prompt: RetryableUserMessage {
+                    text: "request A".to_owned(),
+                    attachments: Vec::new(),
+                },
+                message: "failed to start turn".to_owned(),
+            },
+        );
+
+        assert_eq!(state.composer, "draft B");
+        assert_eq!(state.composer_attachments, [attachment]);
+    }
+
+    #[test]
+    fn selected_task_model_change_does_not_stale_a_submission_failure() {
+        let mut state = AppState::default();
+        reduce(&mut state, Action::TaskCreated(task("t1")));
+        reduce(&mut state, Action::SelectTask("t1".to_owned()));
+        reduce(
+            &mut state,
+            Action::ModelsLoaded(vec![
+                model("gpt-default", true, "medium"),
+                model("gpt-fast", false, "high"),
+            ]),
+        );
+        reduce(
+            &mut state,
+            Action::TaskRuntimeLoaded {
+                task_id: "t1".to_owned(),
+                generation: 1,
+                active_turn_id: None,
+                active_turn_is_review: false,
+                run_status: Some(TaskRunStatus::Idle),
+            },
+        );
+        reduce(&mut state, Action::ComposerChanged("request A".to_owned()));
+        let submission_generation = match reduce(&mut state, Action::SubmitComposer).as_slice() {
+            [
+                Effect::StartTurn {
+                    composer_draft_generation,
+                    ..
+                },
+            ] => *composer_draft_generation,
+            _ => panic!("selected chat submission should start a turn"),
+        };
+
+        assert!(matches!(
+            reduce(&mut state, Action::SelectModel("gpt-fast".to_owned())).as_slice(),
+            [Effect::UpdateThreadSettings { task_id, .. }] if task_id == "t1"
+        ));
+        assert_eq!(state.composer_draft_generation, submission_generation);
+
+        reduce(
+            &mut state,
+            Action::ComposerSubmissionFailed {
+                task_id: Some("t1".to_owned()),
+                new_chat_draft_generation: None,
+                composer_draft_generation: Some(submission_generation),
+                prompt: RetryableUserMessage {
+                    text: "request A".to_owned(),
+                    attachments: Vec::new(),
+                },
+                message: "failed to start turn".to_owned(),
+            },
+        );
+
+        assert_eq!(state.composer, "request A");
     }
 
     #[test]
@@ -22626,6 +23120,7 @@ mod tests {
             Action::ComposerSubmissionFailed {
                 task_id: None,
                 new_chat_draft_generation: Some(submission_generation),
+                composer_draft_generation: None,
                 prompt: RetryableUserMessage {
                     text: "request A".to_owned(),
                     attachments: vec![attachment_a],
@@ -22666,6 +23161,7 @@ mod tests {
             Action::ComposerSubmissionFailed {
                 task_id: None,
                 new_chat_draft_generation: Some(matching_generation),
+                composer_draft_generation: None,
                 prompt: RetryableUserMessage {
                     text: "retry A".to_owned(),
                     attachments: vec![attachment.clone()],
@@ -22870,10 +23366,12 @@ mod tests {
         assert!(!state.composer_controls.goal_mode);
         assert_eq!(state.goals["t1"].status, LoadStatus::Loading);
 
+        let composer_draft_generation = state.composer_draft_generation;
         reduce(
             &mut state,
             Action::GoalAttachmentStartFailed {
                 task_id: "t1".to_owned(),
+                composer_draft_generation,
                 prompt: prompt.clone(),
                 message: "x".repeat(MAX_COMPOSER_BYTES + 1),
             },
@@ -22894,10 +23392,12 @@ mod tests {
         state.composer = "keep this other draft".to_owned();
         state.composer_attachments = vec![attachment.clone()];
         state.composer_controls.goal_mode = false;
+        let composer_draft_generation = state.composer_draft_generation;
         reduce(
             &mut state,
             Action::GoalAttachmentStartFailed {
                 task_id: "t1".to_owned(),
+                composer_draft_generation,
                 prompt,
                 message: "late failure".to_owned(),
             },
@@ -28380,6 +28880,7 @@ mod tests {
                 Effect::RefreshMcpServers {
                     generation: 1,
                     cwd: None,
+                    thread_id: None,
                 },
                 Effect::RefreshSkills {
                     cwds: Vec::new(),
@@ -28826,6 +29327,7 @@ mod tests {
                 &mut state,
                 Action::McpServersLoaded {
                     generation: 0,
+                    thread_id: Some("task-a".to_owned()),
                     servers: vec![McpServerCard {
                         key: "calendar".to_owned(),
                         name: "Calendar".to_owned(),
@@ -28964,6 +29466,7 @@ mod tests {
             [Effect::RefreshMcpServers {
                 generation: 1,
                 cwd: None,
+                thread_id: Some("task-a".to_owned()),
             }]
         );
         assert!(!state.marketplace.mcp_servers[0].enabled);
@@ -29019,6 +29522,7 @@ mod tests {
             [Effect::ReloadMcpServers {
                 generation: 2,
                 cwd: None,
+                thread_id: Some("task-a".to_owned()),
             }]
         );
         assert!(state.marketplace.mcp_servers[0].authorization_url.is_none());
@@ -29434,6 +29938,7 @@ mod tests {
             [Effect::ReloadMcpServers {
                 generation: 1,
                 cwd: None,
+                thread_id: Some("task-b".to_owned()),
             }]
         );
 
@@ -29468,6 +29973,7 @@ mod tests {
                 &mut state,
                 Action::McpServersLoaded {
                     generation: 1,
+                    thread_id: Some("task-b".to_owned()),
                     servers: vec![server.clone()],
                     plugin_servers: Vec::new(),
                     warnings: Vec::new(),

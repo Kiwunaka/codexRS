@@ -1825,6 +1825,18 @@ struct BrowserTabRuntime {
     session_id: String,
 }
 
+fn browser_agent_tab_matches(tab: &BrowserTabRuntime, context_id: &str, agent_tab_id: u64) -> bool {
+    tab.context_id == context_id && tab.agent_id == agent_tab_id
+}
+
+fn cached_agent_expression_key(
+    context_id: String,
+    agent_tab_id: u64,
+    cache_key: String,
+) -> (String, u64, String) {
+    (context_id, agent_tab_id, cache_key)
+}
+
 struct BrowserAgentChildSession {
     agent_tab_id: u64,
     target_id: String,
@@ -1951,8 +1963,8 @@ struct BrowserRuntime {
     tabs: Vec<BrowserTabRuntime>,
     active_tab_ids: HashMap<String, String>,
     agent_child_sessions: HashMap<String, BrowserAgentChildSession>,
-    cached_agent_expressions: HashMap<String, String>,
-    cached_agent_expression_order: VecDeque<String>,
+    cached_agent_expressions: HashMap<(String, u64, String), String>,
+    cached_agent_expression_order: VecDeque<(String, u64, String)>,
     active_context_id: String,
     active_index: usize,
     next_agent_tab_id: u64,
@@ -2492,13 +2504,11 @@ impl BrowserRuntime {
     }
 
     fn agent_focus_tab(&mut self, params: &Value) -> Result<Value, BrowserAgentRpcError> {
+        let context_id = self.agent_context_id(params)?;
         let agent_tab_id = agent_tab_id(params)?;
         let index = self
-            .tabs
-            .iter()
-            .position(|tab| tab.agent_id == agent_tab_id)
+            .agent_tab_index(&context_id, agent_tab_id)
             .ok_or_else(|| BrowserAgentRpcError::request(format!("Unknown tab: {agent_tab_id}")))?;
-        let context_id = self.tabs[index].context_id.clone();
         let target_id = self.tabs[index].public.id.clone();
         self.select_tab(&context_id, &target_id)
             .map_err(BrowserAgentRpcError::request)?;
@@ -2677,6 +2687,19 @@ impl BrowserRuntime {
         &mut self,
         params: &Value,
     ) -> Result<Value, BrowserAgentRpcError> {
+        let context_id = self.agent_context_id(params)?;
+        let agent_tab_id = params
+            .get("target")
+            .and_then(Value::as_object)
+            .and_then(|target| target.get("tabId"))
+            .and_then(Value::as_u64)
+            .filter(|tab_id| *tab_id > 0)
+            .ok_or_else(|| BrowserAgentRpcError::request("executeCdp requires a numeric tabId"))?;
+        if self.agent_tab_index(&context_id, agent_tab_id).is_none() {
+            return Err(BrowserAgentRpcError::request(format!(
+                "Unknown tab: {agent_tab_id}"
+            )));
+        }
         let cache_key = params
             .get("expressionCacheKey")
             .and_then(Value::as_str)
@@ -2692,6 +2715,7 @@ impl BrowserRuntime {
                 )
             })?
             .to_owned();
+        let cache_key = cached_agent_expression_key(context_id, agent_tab_id, cache_key);
         let supplied_expression = params
             .get("commandParams")
             .and_then(Value::as_object)
@@ -2947,7 +2971,7 @@ impl BrowserRuntime {
     fn agent_tab_index(&self, context_id: &str, agent_tab_id: u64) -> Option<usize> {
         self.tabs
             .iter()
-            .position(|tab| tab.context_id == context_id && tab.agent_id == agent_tab_id)
+            .position(|tab| browser_agent_tab_matches(tab, context_id, agent_tab_id))
     }
 
     fn serialize_agent_tab(&self, tab: &BrowserTabRuntime) -> Value {
@@ -3001,7 +3025,7 @@ impl BrowserRuntime {
         Ok(tab.session_id.clone())
     }
 
-    fn store_agent_expression(&mut self, key: String, expression: String) {
+    fn store_agent_expression(&mut self, key: (String, u64, String), expression: String) {
         if self.cached_agent_expressions.contains_key(&key) {
             self.cached_agent_expression_order
                 .retain(|cached| cached != &key);
@@ -5066,11 +5090,12 @@ mod tests {
     use super::{
         BROWSER_COMMAND_CAPACITY, BrowserAgentChildSession, BrowserCommand, BrowserCommandError,
         BrowserConfig, BrowserDownloadControl, BrowserDownloadRuntime, BrowserEvent, BrowserFamily,
-        CDP_SHUTDOWN_REQUESTED, CdpClient, DevToolsEndpoint, LatestBrowserFrame,
-        MAX_AGENT_CHILD_SESSIONS, MAX_BROWSER_URL_BYTES, MAX_CDP_PENDING_EVENT_BYTES,
-        PendingCdpEvents, agent_tab_id_for_cdp_session, allowed_agent_cdp_method, browser_command,
-        browser_origin_pattern_matches, browser_permission_for_url, cdp_key_name,
-        checked_agent_browser_id, checked_agent_viewport, checked_download_url,
+        BrowserTab, BrowserTabOrigin, BrowserTabRuntime, CDP_SHUTDOWN_REQUESTED, CdpClient,
+        DevToolsEndpoint, LatestBrowserFrame, MAX_AGENT_CHILD_SESSIONS, MAX_BROWSER_URL_BYTES,
+        MAX_CDP_PENDING_EVENT_BYTES, PendingCdpEvents, agent_tab_id_for_cdp_session,
+        allowed_agent_cdp_method, browser_agent_tab_matches, browser_command,
+        browser_origin_pattern_matches, browser_permission_for_url, cached_agent_expression_key,
+        cdp_key_name, checked_agent_browser_id, checked_agent_viewport, checked_download_url,
         checked_navigation_url, control_download_transfer, create_browser_job,
         graceful_browser_exit, move_download_to_destination, next_browser_command,
         normalize_browser_origin, parse_devtools_marker, record_agent_child_session,
@@ -5457,6 +5482,54 @@ mod tests {
             receiver.try_recv(),
             Ok(BrowserCommand::SetPromptForUserDownloads(true))
         ));
+    }
+
+    #[test]
+    fn agent_focus_tab_rejects_a_tab_from_another_context() {
+        let task_a_tab = BrowserTabRuntime {
+            agent_id: 1,
+            context_id: "task-a".to_owned(),
+            origin: BrowserTabOrigin::Agent,
+            mark: None,
+            public: BrowserTab {
+                id: "tab-a".to_owned(),
+                url: String::new(),
+                title: String::new(),
+                loading: false,
+                can_go_back: false,
+                can_go_forward: false,
+            },
+            session_id: "session-a".to_owned(),
+        };
+        let task_b_tab = BrowserTabRuntime {
+            agent_id: 2,
+            context_id: "task-b".to_owned(),
+            origin: BrowserTabOrigin::Agent,
+            mark: None,
+            public: BrowserTab {
+                id: "tab-b".to_owned(),
+                url: String::new(),
+                title: String::new(),
+                loading: false,
+                can_go_back: false,
+                can_go_forward: false,
+            },
+            session_id: "session-b".to_owned(),
+        };
+
+        assert!(browser_agent_tab_matches(&task_a_tab, "task-a", 1));
+        assert!(!browser_agent_tab_matches(&task_b_tab, "task-a", 2));
+    }
+
+    #[test]
+    fn cached_agent_expressions_are_scoped_to_context_and_tab() {
+        let task_a_key =
+            cached_agent_expression_key("task-a".to_owned(), 1, "shared-expression-key".to_owned());
+        let task_b_key =
+            cached_agent_expression_key("task-b".to_owned(), 2, "shared-expression-key".to_owned());
+        let expressions = HashMap::from([(task_a_key, "document.title".to_owned())]);
+
+        assert!(!expressions.contains_key(&task_b_key));
     }
 
     #[test]

@@ -298,6 +298,8 @@ fn run_bounded_inner(
 
     #[cfg(windows)]
     drop(job);
+    #[cfg(unix)]
+    terminate_process_tree(&mut child);
     let (stdout, stdout_truncated) = stdout_reader
         .join()
         .map_err(|_| ProcessError::ReaderPanicked)??;
@@ -378,9 +380,9 @@ mod tests {
     #[cfg(unix)]
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[cfg(unix)]
-    use super::spawn_detached_bounded_for;
     use super::{ProcessError, read_bounded, run_bounded_cancelable};
+    #[cfg(unix)]
+    use super::{run_bounded, spawn_detached_bounded_for};
 
     #[test]
     fn bounded_reader_drains_but_keeps_only_the_budget() -> Result<(), super::ProcessError> {
@@ -441,6 +443,40 @@ mod tests {
         assert!(
             !marker_created,
             "timed out detached process should not leave its child running"
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn successful_process_exit_terminates_its_process_group_before_reader_join()
+    -> Result<(), ProcessError> {
+        let marker = env::temp_dir().join(format!(
+            "codex-platform-successful-process-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::remove_file(&marker);
+
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "(sleep 0.2; : > \"$CODEX_RS_SUCCESSFUL_PROCESS_MARKER\") & exit",
+            ])
+            .env("CODEX_RS_SUCCESSFUL_PROCESS_MARKER", &marker);
+        let result = run_bounded(&mut command, 1_024, 1_024, Duration::from_secs(1));
+
+        thread::sleep(Duration::from_millis(400));
+        let marker_created = marker.exists();
+        let _ = fs::remove_file(&marker);
+        result?;
+        assert!(
+            !marker_created,
+            "a successful process must not leave a descendant holding its output pipes"
         );
         Ok(())
     }

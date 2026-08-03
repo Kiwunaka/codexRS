@@ -700,19 +700,21 @@ fn load_composer_plugins(
 fn load_mcp_servers(
     app_server: &AppServerConnection,
     cwd: Option<PathBuf>,
+    thread_id: Option<String>,
 ) -> Result<McpServerCatalog, codex_platform::AppServerError> {
     let config = app_server.read_config(ConfigReadParams {
         include_layers: false,
         cwd: cwd.map(|path| path.to_string_lossy().into_owned()),
     })?;
-    let (statuses, warnings) =
-        match load_mcp_server_status_pages(|params| app_server.list_mcp_server_status(params)) {
-            Ok(statuses) => (statuses, Vec::new()),
-            Err(error) => (
-                Vec::new(),
-                vec![format!("failed to load MCP runtime status: {error}")],
-            ),
-        };
+    let (statuses, warnings) = match load_mcp_server_status_pages(thread_id, |params| {
+        app_server.list_mcp_server_status(params)
+    }) {
+        Ok(statuses) => (statuses, Vec::new()),
+        Err(error) => (
+            Vec::new(),
+            vec![format!("failed to load MCP runtime status: {error}")],
+        ),
+    };
     let mut runtime_by_name = statuses
         .into_iter()
         .map(|status| (status.name.clone(), status))
@@ -836,6 +838,7 @@ fn load_mcp_servers(
 }
 
 fn load_mcp_server_status_pages(
+    thread_id: Option<String>,
     mut fetch: impl FnMut(
         ListMcpServerStatusParams,
     ) -> Result<ListMcpServerStatusResponse, codex_platform::AppServerError>,
@@ -847,7 +850,7 @@ fn load_mcp_server_status_pages(
             cursor: cursor.clone(),
             limit: MCP_STATUS_PAGE_LIMIT,
             detail: Some(McpServerStatusDetail::Full),
-            thread_id: None,
+            thread_id: thread_id.clone(),
         })?;
         let remaining = codex_core::MAX_MCP_SERVER_ITEMS.saturating_sub(statuses.len());
         statuses.extend(response.data.into_iter().take(remaining));
@@ -6546,6 +6549,7 @@ fn run_effect(
         }
         Effect::CreateTask {
             cwd,
+            composer_draft_generation,
             model,
             effort,
             service_tier,
@@ -6643,6 +6647,7 @@ fn run_effect(
                                 Action::ComposerSubmissionFailed {
                                     task_id: Some(task_id.clone()),
                                     new_chat_draft_generation: None,
+                                    composer_draft_generation: Some(composer_draft_generation),
                                     prompt,
                                     message: format!("failed to start turn: {error}"),
                                 },
@@ -7445,7 +7450,11 @@ fn run_effect(
                 ),
             }
         }
-        Effect::RunThreadShellCommand { task_id, command } => {
+        Effect::RunThreadShellCommand {
+            task_id,
+            composer_draft_generation,
+            command,
+        } => {
             let prompt = RetryableUserMessage {
                 text: format!("/shell {command}"),
                 attachments: Vec::new(),
@@ -7462,6 +7471,7 @@ fn run_effect(
                     Action::ComposerSubmissionFailed {
                         task_id: Some(task_id),
                         new_chat_draft_generation: None,
+                        composer_draft_generation: Some(composer_draft_generation),
                         prompt,
                         message: "Could not run the shell command.".to_owned(),
                     },
@@ -7470,6 +7480,7 @@ fn run_effect(
         }
         Effect::StartTurn {
             task_id,
+            composer_draft_generation,
             text,
             model,
             effort,
@@ -7540,6 +7551,7 @@ fn run_effect(
                             events,
                             Action::GoalAttachmentStartFailed {
                                 task_id: goal_task_id,
+                                composer_draft_generation,
                                 prompt: RetryableUserMessage {
                                     text: objective,
                                     attachments: prompt.attachments,
@@ -7553,6 +7565,7 @@ fn run_effect(
                             Action::ComposerSubmissionFailed {
                                 task_id: Some(goal_task_id),
                                 new_chat_draft_generation: None,
+                                composer_draft_generation: Some(composer_draft_generation),
                                 prompt,
                                 message: format!("failed to start turn: {error}"),
                             },
@@ -7563,6 +7576,7 @@ fn run_effect(
         }
         Effect::SteerTurn {
             task_id,
+            composer_draft_generation,
             expected_turn_id,
             text,
             attachments,
@@ -7589,6 +7603,7 @@ fn run_effect(
                     Action::ComposerSubmissionFailed {
                         task_id: Some(task_id),
                         new_chat_draft_generation: None,
+                        composer_draft_generation: Some(composer_draft_generation),
                         prompt: message,
                         message: format!("failed to steer turn: {error}"),
                     },
@@ -8005,11 +8020,16 @@ fn run_effect(
                 ),
             }
         }
-        Effect::RefreshMcpServers { generation, cwd } => match load_mcp_servers(app_server, cwd) {
+        Effect::RefreshMcpServers {
+            generation,
+            cwd,
+            thread_id,
+        } => match load_mcp_servers(app_server, cwd, thread_id.clone()) {
             Ok(catalog) => emit(
                 events,
                 Action::McpServersLoaded {
                     generation,
+                    thread_id,
                     servers: catalog.servers,
                     plugin_servers: catalog.plugin_servers,
                     warnings: catalog.warnings,
@@ -8019,6 +8039,7 @@ fn run_effect(
                 events,
                 Action::McpServersFailed {
                     generation,
+                    thread_id,
                     message: format!("failed to load MCP servers: {error}"),
                 },
             ),
@@ -8508,12 +8529,17 @@ fn run_effect(
                 ),
             }
         }
-        Effect::ReloadMcpServers { generation, cwd } => match app_server.reload_mcp_servers() {
-            Ok(()) => match load_mcp_servers(app_server, cwd) {
+        Effect::ReloadMcpServers {
+            generation,
+            cwd,
+            thread_id,
+        } => match app_server.reload_mcp_servers() {
+            Ok(()) => match load_mcp_servers(app_server, cwd, thread_id.clone()) {
                 Ok(catalog) => emit(
                     events,
                     Action::McpServersLoaded {
                         generation,
+                        thread_id,
                         servers: catalog.servers,
                         plugin_servers: catalog.plugin_servers,
                         warnings: catalog.warnings,
@@ -8523,6 +8549,7 @@ fn run_effect(
                     events,
                     Action::McpServersFailed {
                         generation,
+                        thread_id,
                         message: format!("failed to reload MCP servers: {error}"),
                     },
                 ),
@@ -8531,6 +8558,7 @@ fn run_effect(
                 events,
                 Action::McpServersFailed {
                     generation,
+                    thread_id,
                     message: format!("failed to restart MCP servers: {error}"),
                 },
             ),
@@ -13511,6 +13539,7 @@ fn create_task_failure_action(
     Action::ComposerSubmissionFailed {
         task_id: None,
         new_chat_draft_generation: Some(new_chat_draft_generation),
+        composer_draft_generation: None,
         prompt,
         message,
     }
@@ -15014,6 +15043,7 @@ fn load_active_turn_review_mode(
     turn_id: &str,
 ) -> bool {
     let mut cursor = None;
+    let mut seen_cursors = HashSet::new();
     for _ in 0..MAX_REVIEW_MODE_PAGES {
         let Ok(page) = app_server.list_thread_items(ThreadItemsListParams {
             thread_id: thread_id.to_owned(),
@@ -15032,9 +15062,12 @@ fn load_active_turn_review_mode(
         let Some(next_cursor) = page.next_cursor else {
             return false;
         };
+        if !seen_cursors.insert(next_cursor.clone()) {
+            return false;
+        }
         cursor = Some(next_cursor);
     }
-    true
+    false
 }
 
 fn map_account_profile(account: ProtocolAccount) -> AccountProfile {
@@ -18405,10 +18438,12 @@ mod tests {
     #[test]
     fn mcp_runtime_status_pages_follow_cursors_and_stop_at_the_catalog_bound() {
         let mut requested_cursors = Vec::new();
+        let mut requested_thread_ids = Vec::new();
         let mut page_number = 0;
 
-        let result = load_mcp_server_status_pages(|params| {
+        let result = load_mcp_server_status_pages(Some("thread-1".to_owned()), |params| {
             requested_cursors.push(params.cursor);
+            requested_thread_ids.push(params.thread_id);
             page_number += 1;
             let status = serde_json::from_value::<ProtocolMcpServerStatus>(json!({
                 "name": format!("server-{page_number}"),
@@ -18442,6 +18477,7 @@ mod tests {
                 Some("cursor-4".to_owned()),
             ]
         );
+        assert_eq!(requested_thread_ids, vec![Some("thread-1".to_owned()); 5]);
     }
 
     #[test]
@@ -18644,11 +18680,13 @@ mod tests {
             Action::ComposerSubmissionFailed {
                 task_id,
                 new_chat_draft_generation,
+                composer_draft_generation,
                 prompt: restored,
                 message,
             } => {
                 assert_eq!(task_id, None);
                 assert_eq!(new_chat_draft_generation, Some(17));
+                assert_eq!(composer_draft_generation, None);
                 assert_eq!(restored, prompt);
                 assert_eq!(message, "write failed");
             }
