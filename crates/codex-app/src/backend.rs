@@ -6518,6 +6518,7 @@ fn run_effect(
             plan_mode,
             goal_objective,
             memory_preferences,
+            new_chat_draft_generation,
         } => {
             let runtime_workspace_roots = cwd.clone().map(|path| vec![path]);
             let dynamic_tools = computer_use_dynamic_tools_for_platform();
@@ -6596,6 +6597,7 @@ fn run_effect(
                                 events,
                                 Action::ComposerSubmissionFailed {
                                     task_id: Some(task_id.clone()),
+                                    new_chat_draft_generation: None,
                                     prompt,
                                     message: format!("failed to start turn: {error}"),
                                 },
@@ -6626,11 +6628,11 @@ fn run_effect(
                 }
                 Err(error) => emit(
                     events,
-                    Action::ComposerSubmissionFailed {
-                        task_id: None,
+                    create_task_failure_action(
                         prompt,
-                        message: format!("failed to create task: {error}"),
-                    },
+                        new_chat_draft_generation,
+                        format!("failed to create task: {error}"),
+                    ),
                 ),
             }
         }
@@ -7414,6 +7416,7 @@ fn run_effect(
                     events,
                     Action::ComposerSubmissionFailed {
                         task_id: Some(task_id),
+                        new_chat_draft_generation: None,
                         prompt,
                         message: "Could not run the shell command.".to_owned(),
                     },
@@ -7504,6 +7507,7 @@ fn run_effect(
                             events,
                             Action::ComposerSubmissionFailed {
                                 task_id: Some(goal_task_id),
+                                new_chat_draft_generation: None,
                                 prompt,
                                 message: format!("failed to start turn: {error}"),
                             },
@@ -7539,6 +7543,7 @@ fn run_effect(
                     events,
                     Action::ComposerSubmissionFailed {
                         task_id: Some(task_id),
+                        new_chat_draft_generation: None,
                         prompt: message,
                         message: format!("failed to steer turn: {error}"),
                     },
@@ -13439,6 +13444,19 @@ fn respond_to_approval(
     }
 }
 
+fn create_task_failure_action(
+    prompt: RetryableUserMessage,
+    new_chat_draft_generation: u64,
+    message: String,
+) -> Action {
+    Action::ComposerSubmissionFailed {
+        task_id: None,
+        new_chat_draft_generation: Some(new_chat_draft_generation),
+        prompt,
+        message,
+    }
+}
+
 fn restore_standard_approval_after_response_failure(
     events: &dyn ActionEmitter,
     pending_approvals: &mut HashMap<String, PendingApproval>,
@@ -16957,11 +16975,12 @@ mod tests {
         computer_tool_requires_interruption_monitor, computer_tool_target_block_message,
         computer_use_allowed_app_ids, computer_use_allowed_app_ids_value,
         computer_use_app_authorized, computer_use_dynamic_tools, computer_window_argument,
-        computer_window_schema, device_code_account_login_started_action, drag_coordinates,
-        encode_appearance_preferences, encode_browser_download_preferences,
-        encode_browser_permissions, encode_git_preferences, encode_keyboard_shortcut_preferences,
-        encode_primary_window_placement, forbidden_computer_target_message, handle_notification,
-        hook_state_config_value, index_app_logos, initialize_capabilities, is_hidden_timeline_item,
+        computer_window_schema, create_task_failure_action,
+        device_code_account_login_started_action, drag_coordinates, encode_appearance_preferences,
+        encode_browser_download_preferences, encode_browser_permissions, encode_git_preferences,
+        encode_keyboard_shortcut_preferences, encode_primary_window_placement,
+        forbidden_computer_target_message, handle_notification, hook_state_config_value,
+        index_app_logos, initialize_capabilities, is_hidden_timeline_item,
         linux_computer_use_dynamic_tools, load_mcp_server_status_pages, map_account_profile,
         map_account_token_activity, map_app_detail, map_app_server_approval, map_apps,
         map_fuzzy_file_search_results, map_mcp_elicitation, map_mcp_resource_contents,
@@ -18530,6 +18549,29 @@ mod tests {
             input_status,
             Action::SetStatus(message) if message.contains("write error")
         ));
+    }
+
+    #[test]
+    fn create_task_failure_forwards_the_new_chat_draft_generation() {
+        let prompt = RetryableUserMessage {
+            text: "start a new chat".to_owned(),
+            attachments: Vec::new(),
+        };
+
+        match create_task_failure_action(prompt.clone(), 17, "write failed".to_owned()) {
+            Action::ComposerSubmissionFailed {
+                task_id,
+                new_chat_draft_generation,
+                prompt: restored,
+                message,
+            } => {
+                assert_eq!(task_id, None);
+                assert_eq!(new_chat_draft_generation, Some(17));
+                assert_eq!(restored, prompt);
+                assert_eq!(message, "write failed");
+            }
+            _ => panic!("expected new-chat creation failure action"),
+        }
     }
 
     #[test]

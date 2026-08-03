@@ -4183,6 +4183,7 @@ pub struct AppState {
     pub local_projects: Vec<LocalProjectSummary>,
     pub selected_task_id: Option<String>,
     pub new_chat_cwd: Option<PathBuf>,
+    pub new_chat_draft_generation: u64,
     pub timelines: HashMap<String, TimelineState>,
     pub goals: HashMap<String, ThreadGoalState>,
     pub composer: String,
@@ -4249,6 +4250,7 @@ impl Default for AppState {
             local_projects: Vec::new(),
             selected_task_id: None,
             new_chat_cwd: None,
+            new_chat_draft_generation: 0,
             timelines: HashMap::new(),
             goals: HashMap::new(),
             composer: String::new(),
@@ -4784,6 +4786,7 @@ pub enum Action {
     SubmitComposer,
     ComposerSubmissionFailed {
         task_id: Option<String>,
+        new_chat_draft_generation: Option<u64>,
         prompt: RetryableUserMessage,
         message: String,
     },
@@ -5689,6 +5692,7 @@ pub enum Effect {
         plan_mode: bool,
         goal_objective: Option<String>,
         memory_preferences: Option<ChatMemoryPreferences>,
+        new_chat_draft_generation: u64,
     },
     ForkTask {
         task_id: String,
@@ -6870,6 +6874,7 @@ fn prepare_new_chat(state: &mut AppState, cwd: Option<PathBuf>) -> Vec<Effect> {
     state.chat_memory.new_chat_preferences = None;
     state.composer_controls.plan_mode = false;
     state.composer_controls.goal_mode = false;
+    advance_new_chat_draft_generation(state);
     state.marketplace.skills_status = Some(LoadStatus::Loading);
     effects.push(Effect::RefreshSkills {
         cwds: composer_workspace_roots(state),
@@ -6887,6 +6892,12 @@ fn prepare_new_chat(state: &mut AppState, cwd: Option<PathBuf>) -> Vec<Effect> {
         inspector: state.inspector,
     });
     effects
+}
+
+fn advance_new_chat_draft_generation(state: &mut AppState) {
+    if state.selected_task_id.is_none() {
+        state.new_chat_draft_generation = state.new_chat_draft_generation.wrapping_add(1);
+    }
 }
 
 fn clear_active_composer_draft(state: &mut AppState) {
@@ -8654,13 +8665,17 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     Some("The selected project folder is unavailable.".to_owned());
                 Vec::new()
             } else {
-                if state.new_chat_cwd.as_ref() != Some(&path) {
+                let workspace_changed = state.new_chat_cwd.as_ref() != Some(&path);
+                if workspace_changed {
                     clear_git_for_context_change(state);
                 }
                 remember_local_project(state, &path);
                 let mut effects = clear_fuzzy_file_search(state);
                 state.route = MainRoute::Tasks;
                 state.new_chat_cwd = Some(path.clone());
+                if workspace_changed {
+                    advance_new_chat_draft_generation(state);
+                }
                 state.marketplace.skills_status = Some(LoadStatus::Loading);
                 effects.push(Effect::RefreshSkills {
                     cwds: composer_workspace_roots(state),
@@ -8738,6 +8753,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             if state.selected_task_id.is_none() && state.new_chat_cwd.as_ref() == Some(&path) {
                 effects = clear_fuzzy_file_search(state);
                 state.new_chat_cwd = None;
+                advance_new_chat_draft_generation(state);
                 state.marketplace.skills_status = Some(LoadStatus::Loading);
                 effects.push(Effect::RefreshSkills {
                     cwds: Vec::new(),
@@ -10403,6 +10419,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }
             preferences.use_memories = enabled;
             state.chat_memory.new_chat_preferences = Some(preferences);
+            advance_new_chat_draft_generation(state);
             Vec::new()
         }
         Action::SetChatGenerateMemories(enabled) => {
@@ -10417,6 +10434,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 }
                 preferences.generate_memories = enabled;
                 state.chat_memory.new_chat_preferences = Some(preferences);
+                advance_new_chat_draft_generation(state);
                 return Vec::new();
             };
             if state.connection != ConnectionStatus::Online
@@ -10906,6 +10924,13 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             }]
         }
         Action::SelectModel(model_id) => {
+            let previous_settings = (state.selected_task_id.is_none()).then(|| {
+                (
+                    state.composer_controls.selected_model.clone(),
+                    state.composer_controls.selected_effort.clone(),
+                    state.composer_controls.selected_service_tier.clone(),
+                )
+            });
             let Some(model) = state
                 .composer_controls
                 .models
@@ -10949,6 +10974,16 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 None => None,
             };
             state.composer_controls.selected_service_tier = selected_service_tier.clone();
+            if previous_settings.is_some_and(|previous| {
+                previous
+                    != (
+                        state.composer_controls.selected_model.clone(),
+                        state.composer_controls.selected_effort.clone(),
+                        state.composer_controls.selected_service_tier.clone(),
+                    )
+            }) {
+                advance_new_chat_draft_generation(state);
+            }
             if let Some(task_id) = state.selected_task_id.clone() {
                 return vec![Effect::UpdateThreadSettings {
                     task_id,
@@ -11018,7 +11053,13 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                         .any(|effort| effort.id == effort_id)
                 });
             if valid {
+                let changed = state.selected_task_id.is_none()
+                    && state.composer_controls.selected_effort.as_deref()
+                        != Some(effort_id.as_str());
                 state.composer_controls.selected_effort = Some(effort_id.clone());
+                if changed {
+                    advance_new_chat_draft_generation(state);
+                }
                 if let Some(task_id) = state.selected_task_id.clone() {
                     return vec![Effect::UpdateThreadSettings {
                         task_id,
@@ -11047,6 +11088,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::SelectServiceTier(service_tier_id) => {
+            let previous_service_tier = state.composer_controls.selected_service_tier.clone();
             let selected = if service_tier_id == STANDARD_SERVICE_TIER_ID {
                 None
             } else {
@@ -11073,6 +11115,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 Some(service_tier_id)
             };
             state.composer_controls.selected_service_tier = selected.clone();
+            if state.selected_task_id.is_none() && previous_service_tier != selected {
+                advance_new_chat_draft_generation(state);
+            }
             if let Some(task_id) = state.selected_task_id.clone() {
                 return vec![Effect::UpdateThreadSettings {
                     task_id,
@@ -11103,7 +11148,13 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             let Some(mode) = mode else {
                 return Vec::new();
             };
+            let changed = state.selected_task_id.is_none()
+                && state.composer_controls.selected_permission_mode.as_deref()
+                    != Some(mode_id.as_str());
             state.composer_controls.selected_permission_mode = Some(mode_id);
+            if changed {
+                advance_new_chat_draft_generation(state);
+            }
             state
                 .selected_task_id
                 .clone()
@@ -11126,6 +11177,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     state.composer_controls.goal_mode = false;
                 }
                 state.composer_error = None;
+                advance_new_chat_draft_generation(state);
             } else {
                 state.composer_error = Some("Choose a model before enabling Plan mode.".to_owned());
             }
@@ -11141,13 +11193,18 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     state.composer_controls.plan_mode = false;
                 }
                 state.composer_error = None;
+                advance_new_chat_draft_generation(state);
             }
             Vec::new()
         }
         Action::ComposerChanged(text) => {
             if text.len() <= MAX_COMPOSER_BYTES {
+                let changed = state.composer != text;
                 state.composer = text;
                 state.composer_error = None;
+                if changed {
+                    advance_new_chat_draft_generation(state);
+                }
             } else {
                 state.composer_error = Some("Message exceeds the 256 KiB limit.".to_owned());
             }
@@ -11191,6 +11248,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::AddComposerAttachments(paths) => {
+            let attachment_count = state.composer_attachments.len();
             for path in paths {
                 if state.composer_attachments.len() >= MAX_COMPOSER_ATTACHMENTS {
                     state.composer_error = Some(format!(
@@ -11208,6 +11266,9 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                 {
                     state.composer_attachments.push(attachment);
                 }
+            }
+            if state.composer_attachments.len() != attachment_count {
+                advance_new_chat_draft_generation(state);
             }
             Vec::new()
         }
@@ -11235,6 +11296,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     kind: ComposerAttachmentKind::Skill,
                 });
                 state.composer_error = None;
+                advance_new_chat_draft_generation(state);
             }
             Vec::new()
         }
@@ -11264,6 +11326,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     kind: ComposerAttachmentKind::App,
                 });
                 state.composer_error = None;
+                advance_new_chat_draft_generation(state);
             }
             Vec::new()
         }
@@ -11301,6 +11364,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     kind: ComposerAttachmentKind::Plugin,
                 });
                 state.composer_error = None;
+                advance_new_chat_draft_generation(state);
             }
             if plugin.installed {
                 Vec::new()
@@ -11361,6 +11425,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     kind: ComposerAttachmentKind::Plugin,
                 });
                 state.composer_error = None;
+                advance_new_chat_draft_generation(state);
             }
             if plugin.installed {
                 Vec::new()
@@ -11379,6 +11444,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             if index < state.composer_attachments.len() {
                 state.composer_attachments.remove(index);
                 state.composer_error = None;
+                advance_new_chat_draft_generation(state);
             }
             Vec::new()
         }
@@ -11595,6 +11661,7 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     plan_mode: false,
                     goal_objective: Some(text),
                     memory_preferences: state.chat_memory.new_chat_preferences,
+                    new_chat_draft_generation: state.new_chat_draft_generation,
                 }];
             }
             if text.is_empty() && state.composer_attachments.is_empty() {
@@ -11676,16 +11743,24 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
                     plan_mode,
                     goal_objective: None,
                     memory_preferences: state.chat_memory.new_chat_preferences,
+                    new_chat_draft_generation: state.new_chat_draft_generation,
                 }]
             }
         }
         Action::ComposerSubmissionFailed {
             task_id,
+            new_chat_draft_generation,
             mut prompt,
             message,
         } => {
             state.status_message = Some(bounded_string(message, 16 * 1024));
-            if state.selected_task_id == task_id {
+            let owns_task = task_id
+                .as_deref()
+                .is_some_and(|task_id| state.selected_task_id.as_deref() == Some(task_id));
+            let owns_new_chat_draft = task_id.is_none()
+                && state.selected_task_id.is_none()
+                && new_chat_draft_generation == Some(state.new_chat_draft_generation);
+            if owns_task || owns_new_chat_draft {
                 normalize_retryable_user_message(&mut prompt);
                 restore_retry_prompt(state, &prompt);
             }
@@ -20583,6 +20658,7 @@ mod tests {
             &mut state,
             Action::ComposerChanged("start the implementation".to_owned()),
         );
+        let new_chat_draft_generation = state.new_chat_draft_generation;
         assert_eq!(
             reduce(&mut state, Action::SubmitComposer),
             [Effect::CreateTask {
@@ -20609,6 +20685,7 @@ mod tests {
                 plan_mode: true,
                 goal_objective: None,
                 memory_preferences: None,
+                new_chat_draft_generation,
             }]
         );
         assert!(state.composer.is_empty());
@@ -21110,6 +21187,7 @@ mod tests {
             &mut state,
             Action::ComposerChanged("Reach native parity".to_owned()),
         );
+        let new_chat_draft_generation = state.new_chat_draft_generation;
 
         assert_eq!(
             reduce(&mut state, Action::SubmitComposer),
@@ -21137,6 +21215,7 @@ mod tests {
                 plan_mode: false,
                 goal_objective: Some("Reach native parity".to_owned()),
                 memory_preferences: None,
+                new_chat_draft_generation,
             }]
         );
         assert!(!state.composer_controls.goal_mode);
@@ -22033,6 +22112,7 @@ mod tests {
             &mut state,
             Action::ComposerSubmissionFailed {
                 task_id: Some("t1".to_owned()),
+                new_chat_draft_generation: None,
                 prompt: prompt.clone(),
                 message: "Could not run the shell command.".to_owned(),
             },
@@ -22045,6 +22125,7 @@ mod tests {
             &mut state,
             Action::ComposerSubmissionFailed {
                 task_id: Some("t1".to_owned()),
+                new_chat_draft_generation: None,
                 prompt,
                 message: "late failure".to_owned(),
             },
@@ -22141,6 +22222,7 @@ mod tests {
             &mut state,
             Action::ComposerSubmissionFailed {
                 task_id: Some("t1".to_owned()),
+                new_chat_draft_generation: None,
                 prompt: prompt.clone(),
                 message: "failed to start turn".to_owned(),
             },
@@ -22159,6 +22241,7 @@ mod tests {
             &mut state,
             Action::ComposerSubmissionFailed {
                 task_id: Some("t1".to_owned()),
+                new_chat_draft_generation: None,
                 prompt,
                 message: "late failure".to_owned(),
             },
@@ -22166,6 +22249,108 @@ mod tests {
         assert!(state.composer.is_empty());
         assert!(state.composer_attachments.is_empty());
         assert_eq!(state.status_message.as_deref(), Some("late failure"));
+    }
+
+    #[test]
+    fn late_new_chat_creation_failure_restores_only_the_matching_draft_generation() {
+        let workspace_a = repository_path();
+        let workspace_b = workspace_a.with_file_name("other-workspace");
+        let attachment_a = ComposerAttachment {
+            path: workspace_a.join("request-a.md"),
+            name: "request-a.md".to_owned(),
+            kind: ComposerAttachmentKind::Mention,
+        };
+        let attachment_b = ComposerAttachment {
+            path: workspace_b.join("draft-b.md"),
+            name: "draft-b.md".to_owned(),
+            kind: ComposerAttachmentKind::Mention,
+        };
+
+        let mut state = AppState::default();
+        state.composer_controls.selected_model = Some("gpt-fast".to_owned());
+        state.new_chat_cwd = Some(workspace_a.clone());
+        reduce(
+            &mut state,
+            Action::AddComposerAttachments(vec![attachment_a.path.clone()]),
+        );
+        reduce(&mut state, Action::ComposerChanged("request A".to_owned()));
+        let submission_generation = match reduce(&mut state, Action::SubmitComposer).as_slice() {
+            [
+                Effect::CreateTask {
+                    new_chat_draft_generation,
+                    ..
+                },
+            ] => *new_chat_draft_generation,
+            _ => panic!("new-chat submission should create a task"),
+        };
+
+        reduce(&mut state, Action::TogglePlanMode);
+        reduce(
+            &mut state,
+            Action::SelectComposerWorkspace(workspace_b.clone()),
+        );
+        reduce(
+            &mut state,
+            Action::AddComposerAttachments(vec![attachment_b.path.clone()]),
+        );
+        reduce(&mut state, Action::ComposerChanged("draft B".to_owned()));
+        let newer_generation = state.new_chat_draft_generation;
+        assert_ne!(newer_generation, submission_generation);
+
+        reduce(
+            &mut state,
+            Action::ComposerSubmissionFailed {
+                task_id: None,
+                new_chat_draft_generation: Some(submission_generation),
+                prompt: RetryableUserMessage {
+                    text: "request A".to_owned(),
+                    attachments: vec![attachment_a],
+                },
+                message: "create failed".to_owned(),
+            },
+        );
+        assert_eq!(state.composer, "draft B");
+        assert_eq!(state.composer_attachments, [attachment_b]);
+        assert_eq!(state.new_chat_cwd.as_ref(), Some(&workspace_b));
+        assert!(state.composer_controls.plan_mode);
+
+        let mut untouched = AppState::default();
+        let attachment = ComposerAttachment {
+            path: workspace_a.join("retry.md"),
+            name: "retry.md".to_owned(),
+            kind: ComposerAttachmentKind::Mention,
+        };
+        reduce(
+            &mut untouched,
+            Action::AddComposerAttachments(vec![attachment.path.clone()]),
+        );
+        reduce(
+            &mut untouched,
+            Action::ComposerChanged("retry A".to_owned()),
+        );
+        let matching_generation = match reduce(&mut untouched, Action::SubmitComposer).as_slice() {
+            [
+                Effect::CreateTask {
+                    new_chat_draft_generation,
+                    ..
+                },
+            ] => *new_chat_draft_generation,
+            _ => panic!("new-chat submission should create a task"),
+        };
+        reduce(
+            &mut untouched,
+            Action::ComposerSubmissionFailed {
+                task_id: None,
+                new_chat_draft_generation: Some(matching_generation),
+                prompt: RetryableUserMessage {
+                    text: "retry A".to_owned(),
+                    attachments: vec![attachment.clone()],
+                },
+                message: "create failed".to_owned(),
+            },
+        );
+        assert_eq!(untouched.composer, "retry A");
+        assert_eq!(untouched.composer_attachments, [attachment]);
     }
 
     #[test]
