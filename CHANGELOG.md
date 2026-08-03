@@ -5,6 +5,27 @@ All notable changes to codexRS are documented here. The project follows
 
 ## [Unreleased]
 
+## [0.1.0-rc.9] - 2026-08-03
+
+### Fixed
+
+- Git diffs, commits, and pull requests ignore late results from a previous
+  repository or operation.
+- Failed model-catalog loads can be retried without discarding cached models.
+- Task-only panel commands and Find shortcuts are unavailable on routes where
+  they cannot run.
+- App-server disconnects release Marketplace mutation locks while preserving
+  catalogs, local install confirmation, and OAuth correlation.
+- Runtime snapshots for the same active turn preserve safety retry and Stop
+  state; reconnect releases in-flight controls whose terminal reply was lost.
+- Unix Browser descendants and platform children are terminated through their
+  owned process group when the root process or output-reader startup fails.
+
+### Security
+
+- Computer Use revalidates the live application identity immediately before
+  accessibility capture or a screenshot.
+
 ## [0.1.0-rc.8] - 2026-08-03
 
 ### Added
