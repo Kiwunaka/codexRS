@@ -21,6 +21,7 @@ mod artifacts;
 mod browser;
 mod browser_agent;
 mod byte_budget;
+mod clipboard_images;
 #[cfg(windows)]
 mod computer_apps;
 mod computer_interruption;
@@ -54,6 +55,7 @@ pub use browser::{
     default_browser_download_dir, normalize_browser_origin, resolve_browser_binary,
 };
 pub use byte_budget::{ByteBudget, ByteLease};
+pub use clipboard_images::read_clipboard_bitmap_png;
 pub use computer_interruption::{ComputerUseInterruptionMonitor, ComputerUseTurnKey};
 pub use computer_overlay::{
     ComputerUseOverlayTarget, ComputerUseSystemOverlay, run_computer_use_overlay_helper,
@@ -275,11 +277,28 @@ pub fn resolve_codex_binary(explicit: Option<PathBuf>) -> PathBuf {
     #[cfg(windows)]
     if let Some(app_data) = env::var_os("APPDATA") {
         let candidate = windows_npm_codex_candidate(PathBuf::from(app_data));
-        if candidate.is_file() {
+        if let Some(candidate) = windows_existing_native_candidate(candidate) {
             return candidate;
         }
     }
+    #[cfg(windows)]
+    if let Some(path) = env::var_os("PATH") {
+        for directory in env::split_paths(&path).take(128) {
+            if (directory.join("codex.cmd").is_file() || directory.join("codex.ps1").is_file())
+                && let Some(candidate) =
+                    windows_existing_native_candidate(windows_launcher_codex_candidate(directory))
+            {
+                return candidate;
+            }
+        }
+    }
     PathBuf::from(if cfg!(windows) { "codex.exe" } else { "codex" })
+}
+
+#[cfg(windows)]
+fn windows_existing_native_candidate(legacy: PathBuf) -> Option<PathBuf> {
+    let current = legacy.parent()?.parent()?.join("bin").join("codex.exe");
+    [legacy, current].into_iter().find(|path| path.is_file())
 }
 
 #[cfg(windows)]
@@ -348,13 +367,17 @@ fn sha256_matches(path: &std::path::Path, expected: &str) -> io::Result<bool> {
 
 #[cfg(windows)]
 fn windows_npm_codex_candidate(app_data: PathBuf) -> PathBuf {
+    windows_launcher_codex_candidate(app_data.join("npm"))
+}
+
+#[cfg(windows)]
+fn windows_launcher_codex_candidate(directory: PathBuf) -> PathBuf {
     let (package, target) = if cfg!(target_arch = "aarch64") {
         ("codex-win32-arm64", "aarch64-pc-windows-msvc")
     } else {
         ("codex-win32-x64", "x86_64-pc-windows-msvc")
     };
-    app_data
-        .join("npm")
+    directory
         .join("node_modules")
         .join("@openai")
         .join("codex")
@@ -445,6 +468,34 @@ mod tests {
                 r"C:\Users\dev\AppData\Roaming\npm\node_modules\@openai\codex\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\codex\codex.exe"
             )
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn launcher_directory_finds_native_bin_layout_without_running_launcher() -> std::io::Result<()>
+    {
+        let directory =
+            std::env::temp_dir().join(format!("codexrs-native-layout-{}", std::process::id()));
+        let legacy = super::windows_launcher_codex_candidate(directory);
+        let current = legacy
+            .parent()
+            .and_then(Path::parent)
+            .unwrap_or(Path::new(""))
+            .join("bin/codex.exe");
+        if let Some(parent) = current.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&current, b"fixture, never executed")?;
+        assert_eq!(
+            super::windows_existing_native_candidate(legacy),
+            Some(current)
+        );
+        let explicit = PathBuf::from("explicit-native.exe");
+        assert_eq!(
+            super::resolve_codex_binary(Some(explicit.clone())),
+            explicit
+        );
+        Ok(())
     }
 
     #[cfg(windows)]

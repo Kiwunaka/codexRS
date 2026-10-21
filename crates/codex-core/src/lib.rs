@@ -8042,6 +8042,10 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             effects
         }
         Action::ConnectionLost => {
+            if state.account.status == LoadStatus::Loading {
+                state.account.status = LoadStatus::Failed;
+                state.account.error = Some("Reconnect to Codex to load your account.".to_owned());
+            }
             state.review_start.pending = None;
             state.review_start.terminal_events.clear();
             let bedrock_transient = matches!(
@@ -8142,6 +8146,10 @@ pub fn reduce(state: &mut AppState, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::ConnectionFailed(message) => {
+            if state.account.status == LoadStatus::Loading {
+                state.account.status = LoadStatus::Failed;
+                state.account.error = Some("Reconnect to Codex to load your account.".to_owned());
+            }
             state.connection = ConnectionStatus::Failed(message);
             Vec::new()
         }
@@ -19890,6 +19898,27 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    #[test]
+    fn account_loading_ends_on_connection_failure_and_can_retry() {
+        for action in [
+            Action::ConnectionLost,
+            Action::ConnectionFailed("offline".to_owned()),
+        ] {
+            let mut state = AppState::default();
+            state.account.status = LoadStatus::Loading;
+            reduce(&mut state, action);
+            assert_eq!(state.account.status, LoadStatus::Failed);
+            assert!(state.account.error.is_some());
+            assert_eq!(
+                reduce(&mut state, Action::RetryConnection),
+                vec![Effect::ConnectAppServer]
+            );
+            assert_eq!(state.connection, ConnectionStatus::Connecting);
+            reduce(&mut state, Action::Connected);
+            assert_eq!(state.account.status, LoadStatus::Loading);
+        }
     }
 
     #[test]

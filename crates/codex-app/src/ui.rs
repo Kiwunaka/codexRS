@@ -32,14 +32,14 @@ use codex_core::{
     HookSource, HookTrustStatus, ImportHistory, ImportItemFailure, ImportItemSuccess,
     ImportItemType, ImportMigrationItem, ImportProvider, InspectorPane, InstalledAppRuntime,
     IntegratedTerminalShell, KeyboardShortcutPreferences, KeyboardShortcutUpdateTarget, LoadStatus,
-    LocalProjectSummary, MAX_COMPOSER_OPTIONS, MAX_FEEDBACK_DETAILS_BYTES,
-    MAX_FUZZY_FILE_QUERY_BYTES, MAX_GIT_COMMIT_MESSAGE_CHARS, MAX_GIT_PULL_REQUEST_BODY_CHARS,
-    MAX_GIT_PULL_REQUEST_TITLE_CHARS, MAX_KEYBOARD_SHORTCUT_ACCELERATOR_BYTES,
-    MAX_KEYBOARD_SHORTCUTS_PER_COMMAND, MAX_LOCAL_PROJECT_NAME_BYTES,
-    MAX_MCP_FORM_IMAGE_DATA_URL_BYTES, MAX_MCP_FORM_VALUE_BYTES, MAX_PENDING_WORKTREE_FORKS,
-    MAX_SEEN_MODEL_UPGRADE_ID_BYTES, MAX_TASK_SEARCH_RESULTS, MAX_TIMELINE_ITEMS,
-    MAX_USER_INPUT_VALUE_BYTES, MAX_VISIBLE_THREADS, MAX_WORKTREE_ROOT_BYTES, MainRoute,
-    MarketplaceManageTab, MarketplaceSectionFilter, MarketplaceTab, McpAuthStatus,
+    LocalProjectSummary, MAX_COMPOSER_ATTACHMENTS, MAX_COMPOSER_OPTIONS,
+    MAX_FEEDBACK_DETAILS_BYTES, MAX_FUZZY_FILE_QUERY_BYTES, MAX_GIT_COMMIT_MESSAGE_CHARS,
+    MAX_GIT_PULL_REQUEST_BODY_CHARS, MAX_GIT_PULL_REQUEST_TITLE_CHARS,
+    MAX_KEYBOARD_SHORTCUT_ACCELERATOR_BYTES, MAX_KEYBOARD_SHORTCUTS_PER_COMMAND,
+    MAX_LOCAL_PROJECT_NAME_BYTES, MAX_MCP_FORM_IMAGE_DATA_URL_BYTES, MAX_MCP_FORM_VALUE_BYTES,
+    MAX_PENDING_WORKTREE_FORKS, MAX_SEEN_MODEL_UPGRADE_ID_BYTES, MAX_TASK_SEARCH_RESULTS,
+    MAX_TIMELINE_ITEMS, MAX_USER_INPUT_VALUE_BYTES, MAX_VISIBLE_THREADS, MAX_WORKTREE_ROOT_BYTES,
+    MainRoute, MarketplaceManageTab, MarketplaceSectionFilter, MarketplaceTab, McpAuthStatus,
     McpBrowserOriginElicitation, McpBrowserResourceElicitation, McpElicitation,
     McpElicitationContent, McpElicitationDecision, McpElicitationValue, McpFormElicitation,
     McpFormField, McpFormFieldKind, McpFormImagePickerItem, McpResourceCard,
@@ -69,13 +69,13 @@ use codex_platform::{
 use codex_protocol::SecretString;
 use gpui::{
     AnyElement, AnyWindowHandle, App, Application, Asset, Bounds, ClipboardItem, Context,
-    DragMoveEvent, Entity, FocusHandle, Focusable, Global, HighlightStyle, Hsla, Image,
-    ImageCacheError, ImageFormat, IntoElement, KeyBinding, KeyContext, KeyDownEvent, Keystroke,
-    ListAlignment, ListState, MouseButton, MouseDownEvent, MouseUpEvent, NavigationDirection,
-    ObjectFit, PathPromptOptions, Render, RenderImage, ScrollHandle, ScrollWheelEvent,
-    SharedString, StyledText, Subscription, Task, Timer, WeakEntity, Window, WindowBounds,
-    WindowControlArea, WindowKind, WindowOptions, canvas, div, hsla, img, list, point, prelude::*,
-    px, relative, rgb, size, uniform_list,
+    DragMoveEvent, Entity, ExternalPaths, FocusHandle, Focusable, Global, HighlightStyle, Hsla,
+    Image, ImageCacheError, ImageFormat, IntoElement, KeyBinding, KeyContext, KeyDownEvent,
+    Keystroke, ListAlignment, ListState, MouseButton, MouseDownEvent, MouseUpEvent,
+    NavigationDirection, ObjectFit, PathPromptOptions, Render, RenderImage, ScrollHandle,
+    ScrollWheelEvent, SharedString, StyledText, Subscription, Task, Timer, WeakEntity, Window,
+    WindowBounds, WindowControlArea, WindowKind, WindowOptions, canvas, div, hsla, img, list,
+    point, prelude::*, px, relative, rgb, size, uniform_list,
 };
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName, IndexPath, InteractiveElementExt, Root, Selectable,
@@ -103,11 +103,16 @@ use gpui_component::{
 use markdown::{ParseOptions, mdast::Node};
 
 use crate::backend::{Backend, QueuedAction};
+use crate::composer_images::{
+    clipboard_image, dropped_images, is_stable_composer_photo, store_clipboard_image,
+};
 
 const WINDOW_WIDTH: f32 = 1_278.0;
 const WINDOW_HEIGHT: f32 = 818.0;
 const WINDOW_MIN_WIDTH: f32 = 480.0;
 const WINDOW_MIN_HEIGHT: f32 = 600.0;
+const COMPOSER_MIN_ROWS: usize = 3;
+const COMPOSER_MAX_ROWS: usize = 8;
 const PRIMARY_WINDOW_TITLE: &str = "codexRS";
 const ABOUT_WINDOW_WIDTH: f32 = 380.0;
 const ABOUT_WINDOW_HEIGHT: f32 = 360.0;
@@ -5182,7 +5187,7 @@ impl WorkspaceView {
         let initial_git_preferences = GitPreferences::default();
         let composer = cx.new(|cx| {
             InputState::new(window, cx)
-                .auto_grow(3, 10)
+                .auto_grow(COMPOSER_MIN_ROWS, COMPOSER_MAX_ROWS)
                 .placeholder("Ask Codex to change, inspect, or explain…")
         });
         let api_key_login =
@@ -9049,6 +9054,71 @@ impl WorkspaceView {
         .detach();
     }
 
+    fn paste_composer_image(&mut self, _: &InputPaste, _: &mut Window, cx: &mut Context<Self>) {
+        let item = cx.read_from_clipboard();
+        let native_image = if item.as_ref().and_then(clipboard_image).is_none() {
+            match codex_platform::read_clipboard_bitmap_png() {
+                Ok(image) => image.map(|bytes| Image::from_bytes(ImageFormat::Png, bytes)),
+                Err(error) => {
+                    cx.stop_propagation();
+                    self.dispatch(Action::SetStatus(error), cx);
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+        let Some(image) = item
+            .as_ref()
+            .and_then(clipboard_image)
+            .or(native_image.as_ref())
+        else {
+            cx.propagate();
+            return;
+        };
+        // Consume image paste before Input can replace selected text with an empty string.
+        cx.stop_propagation();
+        if self.state.composer_attachments.len() >= MAX_COMPOSER_ATTACHMENTS {
+            self.dispatch(
+                Action::SetStatus("Attachment limit reached.".to_owned()),
+                cx,
+            );
+            return;
+        }
+        let result = codex_platform::codexrs_data_dir()
+            .map_err(|error| format!("Could not find the image attachment directory: {error}"))
+            .and_then(|directory| {
+                store_clipboard_image(&directory.join("attachments").join("pasted-images"), image)
+            });
+        match result {
+            Ok(path) => self.dispatch(Action::AddComposerAttachments(vec![path]), cx),
+            Err(error) => self.dispatch(Action::SetStatus(error), cx),
+        }
+    }
+
+    fn drop_composer_images(
+        &mut self,
+        paths: &ExternalPaths,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let available =
+            MAX_COMPOSER_ATTACHMENTS.saturating_sub(self.state.composer_attachments.len());
+        let images = dropped_images(paths.paths(), available);
+        if images.is_empty() {
+            let message = if available == 0 {
+                "Attachment limit reached."
+            } else {
+                "Drop PNG, JPG, GIF, or WEBP image files here."
+            };
+            self.dispatch(Action::SetStatus(message.to_owned()), cx);
+            return;
+        }
+        self.dispatch(Action::AddComposerAttachments(images), cx);
+        self.composer
+            .update(cx, |input, cx| input.focus(window, cx));
+    }
+
     fn prompt_for_composer_photos(&mut self, cx: &mut Context<Self>) {
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: true,
@@ -10283,6 +10353,7 @@ impl WorkspaceView {
         &mut self,
         id: &'static str,
         compact: bool,
+        icon_only: bool,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let branch = self.state.git.branch.as_deref()?;
@@ -10319,8 +10390,13 @@ impl WorkspaceView {
             provider_reason.unwrap_or("Create a pull request")
         };
         let button = Button::new(id)
-            .label(label)
-            .tooltip(tooltip)
+            .when(icon_only, |button| button.icon(IconName::GitHub))
+            .when(!icon_only, |button| button.label(label))
+            .tooltip(if icon_only {
+                format!("{label}: {tooltip}")
+            } else {
+                tooltip.to_owned()
+            })
             .loading(pending.is_some())
             .disabled(disabled)
             .on_click(cx.listener(|this, _, window, cx| {
@@ -11049,7 +11125,7 @@ impl WorkspaceView {
         }
     }
 
-    fn compact_task_actions_menu(
+    fn task_header_actions_menu(
         menu: PopupMenu,
         view: WeakEntity<Self>,
         target: TaskActionMenuTarget,
@@ -11057,6 +11133,12 @@ impl WorkspaceView {
         window: &mut Window,
         cx: &mut Context<PopupMenu>,
     ) -> PopupMenu {
+        let Some(entity) = view.upgrade() else {
+            return menu;
+        };
+        let state = &entity.read(cx).state;
+        let inspector = state.inspector;
+        let terminal_open = state.terminal_dock_open;
         let pull_request_view = view.clone();
         let commit_view = view.clone();
         let fork_view = view.clone();
@@ -11094,31 +11176,61 @@ impl WorkspaceView {
                 });
             }))
             .separator()
-            .item(PopupMenuItem::new("Changes").on_click(move |_, _, cx| {
-                let _ = changes_view.update(cx, |this, cx| {
-                    this.dispatch(Action::ShowInspector(InspectorPane::Changes), cx);
-                });
-            }))
-            .item(PopupMenuItem::new("Outputs").on_click(move |_, _, cx| {
-                let _ = outputs_view.update(cx, |this, cx| {
-                    this.dispatch(Action::ShowInspector(InspectorPane::Outputs), cx);
-                });
-            }))
-            .item(PopupMenuItem::new("Browser").on_click(move |_, _, cx| {
-                let _ = browser_view.update(cx, |this, cx| {
-                    this.dispatch(Action::ShowInspector(InspectorPane::Browser), cx);
-                });
-            }))
-            .item(PopupMenuItem::new("Terminal").on_click(move |_, _, cx| {
-                let _ = terminal_view.update(cx, |this, cx| {
-                    this.dispatch(Action::ToggleTerminalDock, cx);
-                });
-            }))
-            .item(PopupMenuItem::new("Computer").on_click(move |_, _, cx| {
-                let _ = computer_view.update(cx, |this, cx| {
-                    this.dispatch(Action::ShowInspector(InspectorPane::ComputerUse), cx);
-                });
-            }))
+            .item(
+                PopupMenuItem::new("Changes")
+                    .checked(inspector == InspectorPane::Changes)
+                    .on_click(move |_, _, cx| {
+                        let _ = changes_view.update(cx, |this, cx| {
+                            this.dispatch(Action::ShowInspector(InspectorPane::Changes), cx);
+                        });
+                    }),
+            )
+            .item(
+                PopupMenuItem::new("Outputs")
+                    .checked(inspector == InspectorPane::Outputs)
+                    .on_click(move |_, _, cx| {
+                        let _ = outputs_view.update(cx, |this, cx| {
+                            let target = if this.state.inspector == InspectorPane::Outputs {
+                                InspectorPane::Hidden
+                            } else {
+                                InspectorPane::Outputs
+                            };
+                            this.dispatch(Action::ShowInspector(target), cx);
+                        });
+                    }),
+            )
+            .item(
+                PopupMenuItem::new("Browser")
+                    .checked(inspector == InspectorPane::Browser)
+                    .on_click(move |_, _, cx| {
+                        let _ = browser_view.update(cx, |this, cx| {
+                            let target = if this.state.inspector == InspectorPane::Browser {
+                                InspectorPane::Hidden
+                            } else {
+                                InspectorPane::Browser
+                            };
+                            this.dispatch(Action::ShowInspector(target), cx);
+                        });
+                    }),
+            )
+            .item(
+                PopupMenuItem::new("Terminal")
+                    .checked(terminal_open)
+                    .on_click(move |_, _, cx| {
+                        let _ = terminal_view.update(cx, |this, cx| {
+                            this.dispatch(Action::ToggleTerminalDock, cx);
+                        });
+                    }),
+            )
+            .item(
+                PopupMenuItem::new("Computer Use")
+                    .checked(inspector == InspectorPane::ComputerUse)
+                    .on_click(move |_, _, cx| {
+                        let _ = computer_view.update(cx, |this, cx| {
+                            this.dispatch(Action::ShowInspector(InspectorPane::ComputerUse), cx);
+                        });
+                    }),
+            )
             .separator();
         Self::task_actions_menu(menu, view, target, true, window, cx)
     }
@@ -13552,6 +13664,7 @@ impl WorkspaceView {
             .child(
                 h_flex()
                     .w_full()
+                    .max_w(px(SIDEBAR_WIDTH - 32.0))
                     .gap_2()
                     .items_center()
                     .child(Icon::new(status_icon).xsmall().text_color(status_color))
@@ -15328,7 +15441,7 @@ impl WorkspaceView {
         let diff_lines_for_list = Rc::clone(&diff_lines);
         let split_diff_rows_for_list = Rc::clone(&split_diff_rows);
         let pull_request_button =
-            self.render_pull_request_button("repository-pull-request", false, cx);
+            self.render_pull_request_button("repository-pull-request", false, false, cx);
 
         v_flex()
             .flex_1()
@@ -16690,6 +16803,7 @@ impl WorkspaceView {
             .map(|task| task.cwd.clone())
             .unwrap_or_default();
         let cwd = display_path(&task_cwd);
+        let cwd_tooltip = task_cwd.display().to_string();
         let timeline_items = self
             .state
             .timelines
@@ -16715,7 +16829,6 @@ impl WorkspaceView {
             .is_some_and(|timeline| timeline.status == LoadStatus::Loading);
         let task_id_for_list = task_id.clone();
         let task_actions_view = cx.entity().downgrade();
-        let compact_task_actions_view = task_actions_view.clone();
         let task_actions_is_pinned = self
             .state
             .pinned_task_ids
@@ -16728,23 +16841,11 @@ impl WorkspaceView {
             is_pinned: task_actions_is_pinned,
             worktree_fork_queue_full: worktree_fork_queue_full(&self.state),
         };
-        let compact_task_actions_target = task_actions_target.clone();
-        let compact_task_header = self.shell_width_class != Some(ShellWidthClass::Wide);
-        let compact_pull_request_label = if self.state.git.pull_request.is_some() {
+        let pull_request_label = if self.state.git.pull_request.is_some() {
             "View PR"
         } else {
             "Create PR"
         };
-        let output_viewer_open = self.state.inspector == InspectorPane::Outputs
-            && self.state.artifacts.selected_path.is_some();
-        let file_viewer_open = self.state.inspector == InspectorPane::Files
-            && self.state.artifacts.selected_path.is_some();
-        let wide_inspector_open = output_viewer_open
-            || file_viewer_open
-            || matches!(
-                self.state.inspector,
-                InspectorPane::Changes | InspectorPane::Browser
-            );
         let side_panel_full_width = self.state.side_panel_full_width
             && !matches!(
                 self.state.inspector,
@@ -16778,25 +16879,45 @@ impl WorkspaceView {
                 )
                 .into_any_element()
         } else {
+            // A one-line clamp lets GPUI remeasure text after flex width changes.
             v_flex()
+                .flex_1()
                 .min_w_0()
+                .overflow_hidden()
                 .gap_0p5()
                 .child(
                     div()
-                        .truncate()
+                        .w_full()
+                        .min_w_0()
+                        .line_clamp(1)
+                        .text_ellipsis()
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(title),
                 )
                 .child(
                     div()
-                        .truncate()
+                        .id("task-header-cwd")
+                        .w_full()
+                        .min_w_0()
+                        .line_clamp(1)
+                        .text_ellipsis()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
+                        .tooltip(move |window, cx| {
+                            let path = cwd_tooltip.clone();
+                            Tooltip::element(move |window, _| {
+                                div()
+                                    .w((window.bounds().size.width - px(64.0)).min(px(560.0)))
+                                    .child(path.clone())
+                            })
+                            .build(window, cx)
+                        })
                         .child(cwd),
                 )
                 .into_any_element()
         };
-        let pull_request_button = self.render_pull_request_button("task-pull-request", false, cx);
+        let pull_request_button =
+            self.render_pull_request_button("task-pull-request", true, true, cx);
 
         v_flex()
             .flex_1()
@@ -16826,131 +16947,31 @@ impl WorkspaceView {
                                     .border_b_1()
                                     .border_color(cx.theme().border)
                                     .child(header_details)
-                                    .when(compact_task_header, |header| {
-                                        header.child(
-                                            Button::new("compact-task-actions")
-                                                .icon(IconName::Ellipsis)
-                                                .tooltip("Task actions")
-                                                .small()
-                                                .ghost()
-                                                .dropdown_menu(move |menu, window, cx| {
-                                                    Self::compact_task_actions_menu(
-                                                        menu,
-                                                        compact_task_actions_view.clone(),
-                                                        compact_task_actions_target.clone(),
-                                                        compact_pull_request_label,
-                                                        window,
-                                                        cx,
-                                                    )
-                                                }),
-                                        )
-                                    })
-                                    .when(!compact_task_header && !wide_inspector_open, |header| {
-                                        header.child(
-                                            h_flex()
-                                                .gap_1()
-                                                .when_some(
-                                                    pull_request_button,
-                                                    |actions, button| actions.child(button),
-                                                )
-                                                .child(
-                                                    Button::new("commit-task")
-                                                        .label(git_action_label(
-                                                            self.state.git.pending_commit,
-                                                        ))
-                                                        .small()
-                                                        .primary()
-                                                        .loading(
-                                                            self.state.git.pending_commit.is_some(),
+                                    .child(
+                                        h_flex()
+                                            .flex_shrink_0()
+                                            .gap_1()
+                                            .when_some(pull_request_button, |actions, button| {
+                                                actions.child(button)
+                                            })
+                                            .child(
+                                                Button::new("task-actions")
+                                                    .icon(IconName::ChevronDown)
+                                                    .tooltip("More actions")
+                                                    .small()
+                                                    .ghost()
+                                                    .dropdown_menu(move |menu, window, cx| {
+                                                        Self::task_header_actions_menu(
+                                                            menu,
+                                                            task_actions_view.clone(),
+                                                            task_actions_target.clone(),
+                                                            pull_request_label,
+                                                            window,
+                                                            cx,
                                                         )
-                                                        .disabled(
-                                                            self.state
-                                                                .git
-                                                                .repository_root
-                                                                .is_none()
-                                                                || (self.state.git.changed_files
-                                                                    == 0
-                                                                    && self.state.git.ahead == 0)
-                                                                || self
-                                                                    .state
-                                                                    .git
-                                                                    .pending_commit
-                                                                    .is_some()
-                                                                || self
-                                                                    .state
-                                                                    .git
-                                                                    .pending_pull_request
-                                                                    .is_some(),
-                                                        )
-                                                        .on_click(cx.listener(
-                                                            |this, _, window, cx| {
-                                                                this.open_commit_modal(window, cx);
-                                                            },
-                                                        )),
-                                                )
-                                                .child(
-                                                    Button::new("fork-task")
-                                                        .label("Fork")
-                                                        .small()
-                                                        .on_click(cx.listener(|this, _, _, cx| {
-                                                            this.dispatch(
-                                                                Action::ForkSelectedTask,
-                                                                cx,
-                                                            );
-                                                        })),
-                                                )
-                                                .child(
-                                                    Button::new("refresh-git")
-                                                        .label("Refresh Git")
-                                                        .small()
-                                                        .ghost()
-                                                        .on_click(cx.listener(|this, _, _, cx| {
-                                                            this.dispatch(Action::RefreshGit, cx);
-                                                        })),
-                                                )
-                                                .child(self.inspector_button(
-                                                    "toggle-changes",
-                                                    "Changes",
-                                                    InspectorPane::Changes,
-                                                    cx,
-                                                ))
-                                                .child(self.inspector_button(
-                                                    "toggle-outputs",
-                                                    "Outputs",
-                                                    InspectorPane::Outputs,
-                                                    cx,
-                                                ))
-                                                .child(self.inspector_button(
-                                                    "toggle-browser",
-                                                    "Browser",
-                                                    InspectorPane::Browser,
-                                                    cx,
-                                                ))
-                                                .child(self.terminal_button(cx))
-                                                .child(self.inspector_button(
-                                                    "toggle-computer",
-                                                    "Computer",
-                                                    InspectorPane::ComputerUse,
-                                                    cx,
-                                                ))
-                                                .child(
-                                                    Button::new("task-actions")
-                                                        .icon(IconName::Ellipsis)
-                                                        .small()
-                                                        .ghost()
-                                                        .dropdown_menu(move |menu, window, cx| {
-                                                            Self::task_actions_menu(
-                                                                menu,
-                                                                task_actions_view.clone(),
-                                                                task_actions_target.clone(),
-                                                                true,
-                                                                window,
-                                                                cx,
-                                                            )
-                                                        }),
-                                                ),
-                                        )
-                                    }),
+                                                    }),
+                                            ),
+                                    ),
                             )
                             .when_some(bedrock_workspace_notice, |workspace, notice| {
                                 workspace.child(notice)
@@ -17215,9 +17236,22 @@ impl WorkspaceView {
             };
             return v_flex()
                 .w_full()
+                .max_w(px(880.0))
+                .mx_auto()
                 .px_6()
-                .py_3()
+                .py_4()
                 .gap_2()
+                .border_l_2()
+                .border_color(cx.theme().primary.opacity(0.24))
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .items_center()
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(cx.theme().primary)
+                        .child("CODEX"),
+                )
                 .child(
                     div()
                         .w_full()
@@ -17426,7 +17460,16 @@ impl WorkspaceView {
                 .py_2()
                 .gap_1()
                 .rounded_lg()
-                .bg(cx.theme().muted.opacity(0.55))
+                .border_1()
+                .border_color(accent.opacity(0.2))
+                .bg(background)
+                .child(
+                    div()
+                        .text_xs()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(accent)
+                        .child("YOU"),
+                )
                 .when(!item.completed, |bubble| {
                     bubble.child(
                         div()
@@ -19356,6 +19399,7 @@ impl WorkspaceView {
         let view = cx.entity().downgrade();
         let options = Button::new("browser-origin-approval-options")
             .icon(IconName::ChevronDown)
+            .tooltip("More approval options")
             .small()
             .primary()
             .dropdown_menu(move |menu, _, _| {
@@ -20933,7 +20977,10 @@ impl WorkspaceView {
     fn render_centered_composer(&mut self, cx: &mut Context<Self>) -> AnyElement {
         h_flex()
             .w_full()
+            .flex_none()
+            .pt_2()
             .justify_center()
+            .bg(cx.theme().background)
             .child(self.render_composer(cx))
             .into_any_element()
     }
@@ -21490,19 +21537,7 @@ impl WorkspaceView {
             .as_deref()
             .and_then(|task_id| self.state.timelines.get(task_id))
             .and_then(|timeline| timeline.context_window_usage);
-        let mut usage_limits = self
-            .state
-            .account
-            .usage_limits
-            .iter()
-            .filter(|window| {
-                window
-                    .window_duration_mins
-                    .is_some_and(|minutes| minutes > 0)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        usage_limits.sort_by_key(|window| window.window_duration_mins);
+        let (five_hour_limit, weekly_limit) = quota_windows(&self.state.account.usage_limits);
         let copied = self.composer_status_session_copied;
         let mut rows = Vec::with_capacity(4);
 
@@ -21562,9 +21597,22 @@ impl WorkspaceView {
             );
         }
 
-        if usage_limits.is_empty() {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_secs() as i64);
+        for (index, (label, window)) in [("5h quota:", five_hour_limit), ("Weekly:", weekly_limit)]
+            .into_iter()
+            .enumerate()
+        {
+            let remaining =
+                window.map(|window| 100_u8.saturating_sub(window.used_percent.min(100)));
+            let value = quota_status_copy_at(window, now);
+            let tooltip = value.clone();
             rows.push(
                 h_flex()
+                    .id(SharedString::from(format!(
+                        "composer-status-rate-limit-{index}"
+                    )))
                     .w_full()
                     .min_w_0()
                     .gap_4()
@@ -21574,64 +21622,40 @@ impl WorkspaceView {
                             .w(px(80.0))
                             .flex_shrink_0()
                             .text_color(cx.theme().muted_foreground)
-                            .child("Rate limit:"),
+                            .child(label),
                     )
-                    .child(div().flex_1().min_w_0().child("Unavailable"))
+                    .when_some(remaining.filter(|_| !narrow_composer), |row, remaining| {
+                        row.child(
+                            div()
+                                .flex_1()
+                                .min_w(px(72.0))
+                                .h(px(8.0))
+                                .overflow_hidden()
+                                .rounded_full()
+                                .bg(cx.theme().muted)
+                                .child(
+                                    div()
+                                        .h_full()
+                                        .w(relative(f32::from(remaining) / 100.0))
+                                        .rounded_full()
+                                        .bg(cx.theme().progress_bar),
+                                ),
+                        )
+                    })
+                    .child(
+                        div()
+                            .id(("composer-status-rate-limit-value", index))
+                            .when(!narrow_composer, |value| value.w(px(220.0)))
+                            .when(narrow_composer, |value| value.flex_1().min_w_0())
+                            .line_clamp(2)
+                            .text_color(cx.theme().foreground)
+                            .tooltip(move |window, cx| {
+                                Tooltip::new(tooltip.clone()).build(window, cx)
+                            })
+                            .child(value),
+                    )
                     .into_any_element(),
             );
-        } else {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_or(0, |duration| duration.as_secs() as i64);
-            for (index, window) in usage_limits.into_iter().enumerate() {
-                let remaining = 100_u8.saturating_sub(window.used_percent.min(100));
-                let label = status_rate_limit_label(window.window_duration_mins);
-                let reset = status_rate_limit_reset_metadata_at(window.resets_at, now);
-                let value = format!("{remaining}% left {reset}");
-                rows.push(
-                    h_flex()
-                        .id(SharedString::from(format!(
-                            "composer-status-rate-limit-{index}"
-                        )))
-                        .w_full()
-                        .min_w_0()
-                        .gap_4()
-                        .items_center()
-                        .child(
-                            div()
-                                .w(px(80.0))
-                                .flex_shrink_0()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(label),
-                        )
-                        .when(!narrow_composer, |row| {
-                            row.child(
-                                div()
-                                    .flex_1()
-                                    .min_w(px(72.0))
-                                    .h(px(8.0))
-                                    .overflow_hidden()
-                                    .rounded_full()
-                                    .bg(cx.theme().muted)
-                                    .child(
-                                        div()
-                                            .h_full()
-                                            .w(relative(f32::from(remaining) / 100.0))
-                                            .rounded_full()
-                                            .bg(cx.theme().progress_bar),
-                                    ),
-                            )
-                        })
-                        .child(
-                            div()
-                                .when(!narrow_composer, |value| value.w(px(220.0)))
-                                .when(narrow_composer, |value| value.flex_1().min_w_0())
-                                .text_color(cx.theme().foreground)
-                                .child(value),
-                        )
-                        .into_any_element(),
-                );
-            }
         }
 
         v_flex()
@@ -22997,6 +23021,7 @@ impl WorkspaceView {
             .children(safety_buffering)
             .child(
                 v_flex()
+                    .on_drop(cx.listener(Self::drop_composer_images))
                     .w_full()
                     .rounded(px(18.0))
                     .border_1()
@@ -23047,12 +23072,15 @@ impl WorkspaceView {
                         )
                     })
                     .child(
-                        div().id("composer-input-shell").w_full().child(
-                            Input::new(&self.composer)
-                                .h(px(112.0))
-                                .appearance(false)
-                                .bordered(false),
-                        ),
+                        div()
+                            .id("composer-input-shell")
+                            .w_full()
+                            .capture_action(cx.listener(Self::paste_composer_image))
+                            .child(
+                                Input::new(&self.composer)
+                                    .appearance(false)
+                                    .bordered(false),
+                            ),
                     )
                     .child(
                         h_flex()
@@ -23521,39 +23549,6 @@ impl WorkspaceView {
                 InspectorPane::Browser => self.render_browser(cx),
             });
         panel.into_any_element()
-    }
-
-    fn inspector_button(
-        &self,
-        id: &'static str,
-        label: &'static str,
-        pane: InspectorPane,
-        cx: &mut Context<Self>,
-    ) -> Button {
-        let target = if self.state.inspector == pane {
-            InspectorPane::Hidden
-        } else {
-            pane
-        };
-        Button::new(id)
-            .label(label)
-            .small()
-            .ghost()
-            .selected(self.state.inspector == pane)
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.dispatch(Action::ShowInspector(target), cx);
-            }))
-    }
-
-    fn terminal_button(&self, cx: &mut Context<Self>) -> Button {
-        Button::new("toggle-terminal")
-            .label("Terminal")
-            .small()
-            .ghost()
-            .selected(self.state.terminal_dock_open)
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.dispatch(Action::ToggleTerminalDock, cx);
-            }))
     }
 
     fn output_create_menu(mut menu: PopupMenu, view: WeakEntity<Self>) -> PopupMenu {
@@ -24276,7 +24271,7 @@ impl WorkspaceView {
             .unwrap_or_else(|| "HEAD".to_owned());
         let show_review_base_picker = scope == GitDiffScope::Branch && repository_available;
         let pull_request_button = (!review_disabled)
-            .then(|| self.render_pull_request_button("changes-pull-request", true, cx))
+            .then(|| self.render_pull_request_button("changes-pull-request", true, false, cx))
             .flatten();
 
         v_flex()
@@ -29656,6 +29651,7 @@ impl WorkspaceView {
                         .child(
                             Button::new("close-missing-mcp-inspector")
                                 .icon(IconName::Close)
+                                .tooltip("Close")
                                 .small()
                                 .ghost()
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -29749,6 +29745,7 @@ impl WorkspaceView {
                     .child(
                         Button::new("close-mcp-inspector")
                             .icon(IconName::Close)
+                            .tooltip("Close MCP server inspector")
                             .small()
                             .ghost()
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -36068,12 +36065,13 @@ impl WorkspaceView {
 
     fn render_profile_settings(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let account = self.state.account.clone();
+        let online = self.state.connection == ConnectionStatus::Online;
         let loading = account.status == LoadStatus::Loading;
         let refresh_disabled = account_refresh_disabled(&account);
         let device_code = account_device_code(&account);
         let mut cards = Vec::new();
 
-        if account.status == LoadStatus::Failed {
+        if !online || account.status == LoadStatus::Failed {
             cards.push(
                 v_flex()
                     .max_w(px(760.0))
@@ -36095,23 +36093,40 @@ impl WorkspaceView {
                             .child(
                                 account
                                     .error
+                                    .clone()
                                     .unwrap_or_else(|| "Please try again.".to_owned()),
                             ),
                     )
                     .child(
                         Button::new("retry-account-profile")
-                            .label("Retry")
+                            .label(if online {
+                                "Reload account"
+                            } else {
+                                "Reconnect to Codex"
+                            })
                             .small()
-                            .disabled(refresh_disabled)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.dispatch(Action::RefreshAccount, cx);
+                            .disabled(online && refresh_disabled)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.dispatch(
+                                    if online {
+                                        Action::RefreshAccount
+                                    } else {
+                                        Action::RetryConnection
+                                    },
+                                    cx,
+                                );
                             })),
                     )
                     .into_any_element(),
             );
-        } else if account.profile.is_none() && loading {
+        }
+        if online && account.profile.is_none() && loading {
             cards.push(settings_card("Your plan", "Loading profile settings…", cx));
-        } else {
+        } else if online
+            && (account.status != LoadStatus::Failed
+                || account.profile.is_some()
+                || account.requires_openai_auth)
+        {
             let profile_connected = account.profile.is_some();
             let plan_summary = account.profile.as_ref().map_or_else(
                 || {
@@ -36377,11 +36392,24 @@ impl WorkspaceView {
                     )
                     .child(
                         Button::new("refresh-account-profile")
-                            .label(if loading { "Refreshing…" } else { "Refresh" })
+                            .label(if !online {
+                                "Reconnect to Codex"
+                            } else if loading {
+                                "Loading…"
+                            } else {
+                                "Reload account"
+                            })
                             .small()
-                            .disabled(refresh_disabled)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.dispatch(Action::RefreshAccount, cx);
+                            .disabled(online && refresh_disabled)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.dispatch(
+                                    if online {
+                                        Action::RefreshAccount
+                                    } else {
+                                        Action::RetryConnection
+                                    },
+                                    cx,
+                                );
                             })),
                     ),
             )
@@ -36802,6 +36830,7 @@ impl WorkspaceView {
                     .child(
                         Button::new(("remove-computer-use-allowed-app", index))
                             .icon(IconName::Delete)
+                            .tooltip("Remove app")
                             .danger()
                             .small()
                             .disabled(saving)
@@ -37734,6 +37763,7 @@ impl WorkspaceView {
             .child(
                 Button::new("close-process-manager")
                     .icon(IconName::Close)
+                    .tooltip("Close process manager")
                     .ghost()
                     .small()
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -38084,6 +38114,7 @@ impl WorkspaceView {
                     .child(
                         Button::new("close-keyboard-shortcuts")
                             .icon(IconName::Close)
+                            .tooltip("Close keyboard shortcuts")
                             .ghost()
                             .small()
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -38201,6 +38232,7 @@ impl WorkspaceView {
                     .child(
                         Button::new("close-create-branch-modal")
                             .icon(IconName::Close)
+                            .tooltip("Close")
                             .ghost()
                             .small()
                             .disabled(branch_pending)
@@ -38294,6 +38326,7 @@ impl WorkspaceView {
                     .child(
                         Button::new("close-branch-conflict-modal")
                             .icon(IconName::Close)
+                            .tooltip("Close")
                             .ghost()
                             .small()
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -38911,6 +38944,7 @@ impl WorkspaceView {
                     .child(
                         Button::new("close-pull-request-action")
                             .icon(IconName::Close)
+                            .tooltip("Close")
                             .small()
                             .ghost()
                             .disabled(pending)
@@ -39071,6 +39105,7 @@ impl WorkspaceView {
                     .child(
                         Button::new("close-pull-request-action")
                             .icon(IconName::Close)
+                            .tooltip("Close")
                             .small()
                             .ghost()
                             .disabled(pending)
@@ -39181,6 +39216,7 @@ impl WorkspaceView {
                     .child(
                         Button::new("close-pull-request-edit")
                             .icon(IconName::Close)
+                            .tooltip("Close")
                             .small()
                             .ghost()
                             .disabled(pending)
@@ -40440,6 +40476,7 @@ impl WorkspaceView {
                             .child(
                                 Button::new("close-appearance-import")
                                     .icon(IconName::Close)
+                                    .tooltip("Close")
                                     .ghost()
                                     .small()
                                     .on_click(cx.listener(|this, _, _, cx| {
@@ -40546,6 +40583,7 @@ impl WorkspaceView {
                             .child(
                                 Button::new("close-feedback-modal")
                                     .icon(IconName::Close)
+                                    .tooltip("Close")
                                     .ghost()
                                     .small()
                                     .disabled(feedback_pending)
@@ -40625,6 +40663,7 @@ impl WorkspaceView {
                             .child(
                                 Button::new("close-goal-modal")
                                     .icon(IconName::Close)
+                                    .tooltip("Close")
                                     .ghost()
                                     .small()
                                     .on_click(cx.listener(|this, _, _, cx| {
@@ -40682,6 +40721,7 @@ impl WorkspaceView {
                         .child(
                             Button::new("close-add-marketplace-modal")
                                 .icon(IconName::Close)
+                                .tooltip("Close")
                                 .ghost()
                                 .small()
                                 .disabled(marketplace_add_pending)
@@ -41118,6 +41158,7 @@ impl WorkspaceView {
                             .child(
                                 Button::new("close-remove-marketplace-modal")
                                     .icon(IconName::Close)
+                                    .tooltip("Close")
                                     .ghost()
                                     .small()
                                     .disabled(pending)
@@ -41752,15 +41793,6 @@ impl Render for WorkspaceView {
         } else {
             sidebar_layout_width(self.sidebar_visible)
         };
-        let status_left_offset = if settings_route {
-            if shell_width_class == ShellWidthClass::Narrow {
-                NARROW_SETTINGS_NAV_WIDTH
-            } else {
-                SETTINGS_NAV_WIDTH
-            }
-        } else {
-            sidebar_width
-        };
         let right_maximum = (viewport_width - sidebar_width - TERMINAL_MAIN_MIN_WIDTH)
             .max(TERMINAL_RIGHT_MIN_WIDTH);
         self.terminal_right_width = self
@@ -41854,18 +41886,125 @@ impl Render for WorkspaceView {
             .thread_find_open
             .then(|| self.render_thread_find_bar(window, cx));
         let main_content = self.render_main(window, cx);
-        let main = h_flex().flex_1().min_w_0().h_full().child(main_content);
         let title_bar = self.render_title_bar(window, cx);
         let background_completion_task_id =
             self.state.background_completion_task_ids.back().cloned();
         let background_completion_task_exists = background_completion_task_id
             .as_deref()
             .is_some_and(|task_id| self.state.tasks.iter().any(|task| task.id == task_id));
-        let background_completion_bottom = if self.state.status_message.is_some() {
-            px(80.0)
-        } else {
-            px(16.0)
-        };
+        let show_background_completion = background_completion_task_id.is_some();
+        let status_message = self.state.status_message.clone();
+        let workspace_notifications = (show_background_completion || status_message.is_some())
+            .then(|| {
+                v_flex()
+                    .id("workspace-notifications")
+                    .w_full()
+                    .flex_none()
+                    .px_6()
+                    .pb_4()
+                    .gap_2()
+                    .when(shell_width_class == ShellWidthClass::Narrow, |stack| {
+                        stack.px_3()
+                    })
+                    .when(show_background_completion, |stack| {
+                        stack.child(
+                            h_flex()
+                                .w_full()
+                                .min_w_0()
+                                .p_3()
+                                .gap_3()
+                                .justify_between()
+                                .rounded_lg()
+                                .border_1()
+                                .border_color(cx.theme().border)
+                                .bg(cx.theme().popover)
+                                .shadow_lg()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_sm()
+                                        .line_clamp(2)
+                                        .text_color(cx.theme().popover_foreground)
+                                        .child("A background chat completed."),
+                                )
+                                .child(
+                                    h_flex()
+                                        .flex_shrink_0()
+                                        .gap_2()
+                                        .when(background_completion_task_exists, |actions| {
+                                            actions.child(
+                                                Button::new("open-background-completion")
+                                                    .label("Open")
+                                                    .xsmall()
+                                                    .ghost()
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.dispatch(
+                                                            Action::OpenBackgroundCompletion,
+                                                            cx,
+                                                        );
+                                                    })),
+                                            )
+                                        })
+                                        .child(
+                                            Button::new("dismiss-background-completion")
+                                                .label("Dismiss")
+                                                .xsmall()
+                                                .ghost()
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.dispatch(
+                                                        Action::DismissBackgroundCompletion,
+                                                        cx,
+                                                    );
+                                                })),
+                                        ),
+                                ),
+                        )
+                    })
+                    .when_some(status_message, |stack, message| {
+                        stack.child(
+                            h_flex()
+                                .w_full()
+                                .min_w_0()
+                                .p_3()
+                                .gap_3()
+                                .justify_between()
+                                .rounded_lg()
+                                .border_1()
+                                .border_color(cx.theme().border)
+                                .bg(cx.theme().popover)
+                                .shadow_lg()
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_sm()
+                                        .line_clamp(2)
+                                        .text_color(cx.theme().popover_foreground)
+                                        .child(message),
+                                )
+                                .child(
+                                    Button::new("dismiss-status")
+                                        .label("Dismiss")
+                                        .xsmall()
+                                        .ghost()
+                                        .flex_shrink_0()
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.dispatch(Action::ClearStatus, cx);
+                                        })),
+                                ),
+                        )
+                    })
+            });
+        let main = v_flex()
+            .flex_1()
+            .h_full()
+            .min_h_0()
+            .min_w_0()
+            .child(h_flex().flex_1().min_h_0().min_w_0().child(main_content))
+            .when_some(workspace_notifications, |main, notifications| {
+                main.child(notifications)
+            });
         let workspace = h_flex()
             .key_context("CodexWorkspace")
             .on_action(
@@ -41910,87 +42049,6 @@ impl Render for WorkspaceView {
                 )
             })
             .when_some(thread_find_bar, |root, find_bar| root.child(find_bar))
-            .when_some(background_completion_task_id, |root, _task_id| {
-                root.child(
-                    h_flex()
-                        .absolute()
-                        .left(px(status_left_offset + 24.0))
-                        .right(px(24.0))
-                        .bottom(background_completion_bottom)
-                        .p_3()
-                        .gap_3()
-                        .justify_between()
-                        .rounded_lg()
-                        .border_1()
-                        .border_color(cx.theme().border)
-                        .bg(cx.theme().popover)
-                        .shadow_lg()
-                        .child(
-                            div()
-                                .text_sm()
-                                .line_clamp(2)
-                                .text_color(cx.theme().popover_foreground)
-                                .child("A background chat completed."),
-                        )
-                        .child(
-                            h_flex()
-                                .gap_2()
-                                .when(background_completion_task_exists, |actions| {
-                                    actions.child(
-                                        Button::new("open-background-completion")
-                                            .label("Open")
-                                            .xsmall()
-                                            .ghost()
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.dispatch(Action::OpenBackgroundCompletion, cx);
-                                            })),
-                                    )
-                                })
-                                .child(
-                                    Button::new("dismiss-background-completion")
-                                        .label("Dismiss")
-                                        .xsmall()
-                                        .ghost()
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.dispatch(Action::DismissBackgroundCompletion, cx);
-                                        })),
-                                ),
-                        ),
-                )
-            })
-            .when_some(self.state.status_message.clone(), |root, message| {
-                root.child(
-                    h_flex()
-                        .absolute()
-                        .left(px(status_left_offset + 24.0))
-                        .right(px(24.0))
-                        .bottom(px(16.0))
-                        .p_3()
-                        .gap_3()
-                        .justify_between()
-                        .rounded_lg()
-                        .border_1()
-                        .border_color(cx.theme().border)
-                        .bg(cx.theme().popover)
-                        .shadow_lg()
-                        .child(
-                            div()
-                                .text_sm()
-                                .line_clamp(2)
-                                .text_color(cx.theme().popover_foreground)
-                                .child(message),
-                        )
-                        .child(
-                            Button::new("dismiss-status")
-                                .label("Dismiss")
-                                .xsmall()
-                                .ghost()
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.dispatch(Action::ClearStatus, cx);
-                                })),
-                        ),
-                )
-            })
             .when_some(command_palette, |root, palette| {
                 root.child(
                     div()
@@ -42384,59 +42442,31 @@ fn format_decimal_grouped(value: u64) -> String {
     grouped
 }
 
-fn status_rate_limit_label(window_duration_mins: Option<i64>) -> String {
-    let Some(minutes) = window_duration_mins.filter(|minutes| *minutes > 0) else {
-        return "Rate limit:".to_owned();
-    };
-    const HOUR_MINS: i64 = 60;
-    const DAY_MINS: i64 = 24 * HOUR_MINS;
-    const MONTH_MINS: i64 = 30 * DAY_MINS;
-    const YEAR_MINS: i64 = 365 * DAY_MINS;
-    let label = if approximately_multiple(minutes, 5 * HOUR_MINS) == Some(1) {
-        "5h limit".to_owned()
-    } else if let Some(years) = approximately_multiple(minutes, YEAR_MINS) {
-        format!("{years}y limit")
-    } else if let Some(months) = approximately_multiple(minutes, MONTH_MINS) {
-        format!("{months}mo limit")
-    } else if minutes % DAY_MINS == 0 {
-        format!("{}d limit", minutes / DAY_MINS)
-    } else if minutes % HOUR_MINS == 0 {
-        format!("{}h limit", minutes / HOUR_MINS)
-    } else {
-        format!("{minutes}m limit")
-    };
-    format!("{label}:")
+fn quota_windows(
+    windows: &[UsageLimitWindow],
+) -> (Option<&UsageLimitWindow>, Option<&UsageLimitWindow>) {
+    (
+        windows
+            .iter()
+            .find(|window| window.window_duration_mins == Some(5 * 60)),
+        windows
+            .iter()
+            .find(|window| window.window_duration_mins == Some(7 * 24 * 60)),
+    )
 }
 
-fn approximately_multiple(value: i64, unit: i64) -> Option<i64> {
-    if value <= 0 || unit <= 0 {
-        return None;
-    }
-    let count = value.saturating_add(unit / 2) / unit;
-    if count <= 0 {
-        return None;
-    }
-    let target = i128::from(count).saturating_mul(i128::from(unit));
-    let scaled = i128::from(value).saturating_mul(100);
-    (scaled >= target.saturating_mul(95) && scaled <= target.saturating_mul(105)).then_some(count)
-}
-
-fn status_rate_limit_reset_metadata_at(resets_at: Option<i64>, now: i64) -> String {
-    let Some(resets_at) = resets_at.filter(|timestamp| *timestamp > 0) else {
-        return "(reset time unavailable)".to_owned();
+fn quota_status_copy_at(window: Option<&UsageLimitWindow>, now: i64) -> String {
+    let Some(window) = window else {
+        return "Unavailable".to_owned();
     };
-    if resets_at <= now {
-        return "(resets now)".to_owned();
-    }
-    let Some(reset) = Local.timestamp_opt(resets_at, 0).single() else {
-        return "(reset time unavailable)".to_owned();
+    let used = window.used_percent.min(100);
+    let remaining = 100_u8.saturating_sub(used);
+    let reset = match window.resets_at.filter(|timestamp| *timestamp > 0) {
+        None => "reset unavailable".to_owned(),
+        Some(resets_at) if resets_at <= now => "resets now".to_owned(),
+        Some(resets_at) => format!("resets in {}", format_duration(resets_at - now)),
     };
-    let formatted = if resets_at.saturating_sub(now) < 86_400 {
-        reset.format("%H:%M").to_string()
-    } else {
-        reset.format("%b %-d").to_string()
-    };
-    format!("(resets {formatted})")
+    format!("{used}% used · {remaining}% left · {reset}")
 }
 
 fn format_duration(seconds: i64) -> String {
@@ -44323,17 +44353,6 @@ fn mcp_auth_status_label(status: McpAuthStatus) -> Option<&'static str> {
     }
 }
 
-fn is_stable_composer_photo(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            matches!(
-                extension.to_ascii_lowercase().as_str(),
-                "png" | "jpg" | "jpeg" | "gif" | "webp"
-            )
-        })
-}
-
 fn reasoning_effort_target<'a>(
     efforts: &'a [ReasoningEffortOption],
     selected: &str,
@@ -45824,26 +45843,27 @@ mod tests {
     use super::{
         ACTIVE_KEYBOARD_SHORTCUTS, APPEARANCE_THEME_SHARE_PREFIX, ArchivedChatDeleteScope,
         ArchivedChatKindFilter, ArchivedChatProjectFilter, ArchivedChatSortKey, AssistantFinding,
-        BedrockWorkspaceNotice, CONVERSATION_MARKDOWN_TRUNCATED_NOTICE, DiffLineKind,
-        DiffReviewRow, INIT_AGENTS_PROMPT, KeyboardShortcutGroup, MAX_CONVERSATION_MARKDOWN_BYTES,
-        MAX_NAVIGATION_HISTORY_ENTRIES, MAX_THREAD_FIND_HISTORY_PAGES, MAX_THREAD_FIND_MATCHES,
-        MODEL_AVAILABILITY_NUX_SOL_COPY, NavigationHistory, NavigationLocation, PaletteCommand,
-        PaletteGroup, ReasoningEffortStep, SettingsSection, ShellWidthClass, TaskCopyKind,
-        ThreadFindSurface, accelerators_conflict, account_daily_usage_rows, account_device_code,
-        account_refresh_disabled, adjacent_task_id, app_chatgpt_url, app_mention_prompt,
-        appearance_color, appearance_color_value, appearance_theme_share_string,
-        archived_chat_groups, archived_chat_projects, archived_delete_confirmation_copy,
-        background_chat_running_count, background_chat_window_title,
-        background_completion_notification_transition, background_terminal_summary,
-        bedrock_workspace_notice, bottom_terminal_panel_toggle_available,
-        bounded_keyboard_shortcut_search_query, bounded_settings_search_query,
-        bounded_thread_find_query, browser_display_url, browser_navigation_url,
-        browser_surface_coordinates, build_plugin_catalog_sections, case_insensitive_match_ranges,
-        command_task_slot, composer_app_commands, composer_at_skill_commands,
-        composer_desktop_app_commands, composer_file_query, composer_file_search_max_height,
-        composer_model_picker_items, composer_model_placeholder, composer_model_retry_visible,
-        composer_plugin_commands, composer_service_tier_command_for_query,
-        composer_service_tier_commands, composer_skill_command_for_query, composer_skill_commands,
+        BedrockWorkspaceNotice, COMPOSER_MAX_ROWS, COMPOSER_MIN_ROWS,
+        CONVERSATION_MARKDOWN_TRUNCATED_NOTICE, DiffLineKind, DiffReviewRow, INIT_AGENTS_PROMPT,
+        KeyboardShortcutGroup, MAX_CONVERSATION_MARKDOWN_BYTES, MAX_NAVIGATION_HISTORY_ENTRIES,
+        MAX_THREAD_FIND_HISTORY_PAGES, MAX_THREAD_FIND_MATCHES, MODEL_AVAILABILITY_NUX_SOL_COPY,
+        NavigationHistory, NavigationLocation, PaletteCommand, PaletteGroup, ReasoningEffortStep,
+        SettingsSection, ShellWidthClass, TaskCopyKind, ThreadFindSurface, accelerators_conflict,
+        account_daily_usage_rows, account_device_code, account_refresh_disabled, adjacent_task_id,
+        app_chatgpt_url, app_mention_prompt, appearance_color, appearance_color_value,
+        appearance_theme_share_string, archived_chat_groups, archived_chat_projects,
+        archived_delete_confirmation_copy, background_chat_running_count,
+        background_chat_window_title, background_completion_notification_transition,
+        background_terminal_summary, bedrock_workspace_notice,
+        bottom_terminal_panel_toggle_available, bounded_keyboard_shortcut_search_query,
+        bounded_settings_search_query, bounded_thread_find_query, browser_display_url,
+        browser_navigation_url, browser_surface_coordinates, build_plugin_catalog_sections,
+        case_insensitive_match_ranges, command_task_slot, composer_app_commands,
+        composer_at_skill_commands, composer_desktop_app_commands, composer_file_query,
+        composer_file_search_max_height, composer_model_picker_items, composer_model_placeholder,
+        composer_model_retry_visible, composer_plugin_commands,
+        composer_service_tier_command_for_query, composer_service_tier_commands,
+        composer_skill_command_for_query, composer_skill_commands,
         composer_slash_command_for_prefix, connection_send_failure, decode_mcp_form_image_data_url,
         default_branch_name, diff_file_review_rows, diff_file_sections,
         extract_assistant_file_citations, extract_code_comment_findings,
@@ -45861,15 +45881,15 @@ mod tests {
         normalized_accelerator, output_artifact_type_label, parse_appearance_theme_share_string,
         parse_mcp_list, parse_mcp_record, parse_unified_diff, plugin_logo_format,
         process_manager_auto_refresh_allowed, project_trigger_matches, project_workspace_options,
-        pull_request_merge_submission_enabled, reasoning_effort_target, reduced_motion_enabled,
-        remote_control_status_label, render_conversation_markdown, replace_composer_file_query,
-        repository_file_scopes, repository_uses_split_diff, reserve_thread_find_history_page,
+        pull_request_merge_submission_enabled, quota_status_copy_at, quota_windows,
+        reasoning_effort_target, reduced_motion_enabled, remote_control_status_label,
+        render_conversation_markdown, replace_composer_file_query, repository_file_scopes,
+        repository_uses_split_diff, reserve_thread_find_history_page,
         right_panels_hide_for_width_transition, right_panels_restore_for_width_class,
         sanitize_assistant_markdown, selected_approval_request, selected_model_upgrade_notice,
         selected_task_copy_value, settings_section_matches, settings_section_refreshes_account,
         shell_width_class, sidebar_layout_width, sidebar_task_list_visible, split_diff_rows,
-        startup_recovery_card, status_context_total_label, status_rate_limit_label,
-        status_rate_limit_reset_metadata_at, task_slot_id, task_workspace_active,
+        startup_recovery_card, status_context_total_label, task_slot_id, task_workspace_active,
         terminal_tab_label, thread_find_right_offset_for_shell, timeline_activity_content,
         turn_diff_update_is_accepted, usage_limit_reset_summary_copy,
         usage_settings_requires_sign_in, validate_plugin_logo_dimensions, worktree_fork_queue_full,
@@ -45888,7 +45908,7 @@ mod tests {
         PullRequestSummary, ReasoningEffortOption, ReducedMotionPreference,
         RemoteControlRuntimeStatus, ServiceTierOption, SkillCard, SkillScope, TaskRunStatus,
         TaskSummary, TerminalDockLocation, TerminalTabState, TimelineItem, TimelineKind,
-        TurnDiffState,
+        TurnDiffState, UsageLimitWindow,
     };
 
     fn task(id: &str, cwd: &str) -> TaskSummary {
@@ -47068,27 +47088,56 @@ mod tests {
     fn status_labels_match_the_stable_slash_panel() {
         assert_eq!(status_context_total_label(128_000), "128K");
         assert_eq!(format_decimal_grouped(12_345_678), "12,345,678");
-        for (minutes, expected) in [
-            (None, "Rate limit:"),
-            (Some(300), "5h limit:"),
-            (Some(600), "10h limit:"),
-            (Some(1_440), "1d limit:"),
-            (Some(10_080), "7d limit:"),
-            (Some(43_200), "1mo limit:"),
-            (Some(525_600), "1y limit:"),
-            (Some(90), "90m limit:"),
-        ] {
-            assert_eq!(status_rate_limit_label(minutes), expected);
-        }
+    }
+
+    #[test]
+    fn composer_growth_is_bounded_for_short_and_multiline_text() {
+        assert_eq!(COMPOSER_MIN_ROWS, 3);
+        assert_eq!(COMPOSER_MAX_ROWS, 8);
+    }
+
+    #[test]
+    fn quota_status_copy_reports_used_remaining_and_reset() {
+        let window = UsageLimitWindow {
+            used_percent: 37,
+            window_duration_mins: Some(300),
+            resets_at: Some(4_600),
+        };
+
         assert_eq!(
-            status_rate_limit_reset_metadata_at(None, 1_000),
-            "(reset time unavailable)"
+            quota_status_copy_at(Some(&window), 1_000),
+            "37% used · 63% left · resets in 1h 0m"
         );
-        assert_eq!(
-            status_rate_limit_reset_metadata_at(Some(999), 1_000),
-            "(resets now)"
-        );
-        assert!(status_rate_limit_reset_metadata_at(Some(1_600), 1_000).starts_with("(resets "));
+        assert_eq!(quota_status_copy_at(None, 1_000), "Unavailable");
+    }
+
+    #[test]
+    fn quota_windows_select_five_hour_and_weekly_without_inventing_missing_data() {
+        let five_hour = UsageLimitWindow {
+            used_percent: 12,
+            window_duration_mins: Some(300),
+            resets_at: None,
+        };
+        let weekly = UsageLimitWindow {
+            used_percent: 54,
+            window_duration_mins: Some(10_080),
+            resets_at: None,
+        };
+        let unrelated = UsageLimitWindow {
+            used_percent: 90,
+            window_duration_mins: Some(1_440),
+            resets_at: None,
+        };
+
+        let limits = vec![weekly.clone(), unrelated, five_hour.clone()];
+        let (selected_five_hour, selected_weekly) = quota_windows(&limits);
+        assert_eq!(selected_five_hour, Some(&five_hour));
+        assert_eq!(selected_weekly, Some(&weekly));
+
+        let partial_limits = [five_hour];
+        let (selected_five_hour, selected_weekly) = quota_windows(&partial_limits);
+        assert!(selected_five_hour.is_some());
+        assert!(selected_weekly.is_none());
     }
 
     #[test]
